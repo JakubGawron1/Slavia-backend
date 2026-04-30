@@ -45,6 +45,10 @@ pub struct Athlete {
     pub user_id: String,
     pub first_name: String,
     pub last_name: String,
+    pub birth_year: Option<i64>,
+    pub weight_category: Option<String>,
+    pub notes: Option<String>,
+    pub is_active: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

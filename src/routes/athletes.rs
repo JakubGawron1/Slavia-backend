@@ -20,12 +20,19 @@ pub struct CreateAthleteRequest {
     pub password: String,
     pub first_name: String,
     pub last_name: String,
+    pub birth_year: Option<i64>,
+    pub weight_category: Option<String>,
+    pub notes: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct UpdateAthleteRequest {
     pub first_name: Option<String>,
     pub last_name: Option<String>,
+    pub birth_year: Option<i64>,
+    pub weight_category: Option<String>,
+    pub notes: Option<String>,
+    pub is_active: Option<bool>,
 }
 
 pub async fn list_athletes(
@@ -34,7 +41,7 @@ pub async fn list_athletes(
 ) -> Result<Json<Vec<Athlete>>, (StatusCode, String)> {
     let mut rows = state
         .db
-        .query("SELECT id, user_id, first_name, last_name FROM athletes", ())
+        .query("SELECT id, user_id, first_name, last_name, birth_year, weight_category, notes, is_active FROM athletes", ())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -45,6 +52,10 @@ pub async fn list_athletes(
             user_id: row.get(1).unwrap(),
             first_name: row.get(2).unwrap(),
             last_name: row.get(3).unwrap(),
+            birth_year: row.get(4).unwrap(),
+            weight_category: row.get(5).unwrap(),
+            notes: row.get(6).unwrap(),
+            is_active: row.get::<i64>(7).unwrap() != 0,
         });
     }
 
@@ -71,8 +82,8 @@ pub async fn create_athlete(
 
     let athlete_id = Uuid::new_v4().to_string();
     state.db.execute(
-        "INSERT INTO athletes (id, user_id, first_name, last_name) VALUES (?1, ?2, ?3, ?4)",
-        (athlete_id.clone(), user_id.clone(), payload.first_name.clone(), payload.last_name.clone()),
+        "INSERT INTO athletes (id, user_id, first_name, last_name, birth_year, weight_category, notes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        (athlete_id.clone(), user_id.clone(), payload.first_name.clone(), payload.last_name.clone(), payload.birth_year, payload.weight_category.clone(), payload.notes.clone()),
     ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(Athlete {
@@ -80,6 +91,10 @@ pub async fn create_athlete(
         user_id,
         first_name: payload.first_name,
         last_name: payload.last_name,
+        birth_year: payload.birth_year,
+        weight_category: payload.weight_category,
+        notes: payload.notes,
+        is_active: true,
     }))
 }
 
@@ -89,12 +104,28 @@ pub async fn update_athlete(
     _auth: RequireAdminOrSuperAdmin,
     Json(payload): Json<UpdateAthleteRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    if let Some(first_name) = payload.first_name {
-        state.db.execute("UPDATE athletes SET first_name = ?1 WHERE id = ?2", (first_name, id.clone()))
+    if let Some(val) = payload.first_name {
+        state.db.execute("UPDATE athletes SET first_name = ?1 WHERE id = ?2", (val, id.clone()))
             .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
-    if let Some(last_name) = payload.last_name {
-        state.db.execute("UPDATE athletes SET last_name = ?1 WHERE id = ?2", (last_name, id.clone()))
+    if let Some(val) = payload.last_name {
+        state.db.execute("UPDATE athletes SET last_name = ?1 WHERE id = ?2", (val, id.clone()))
+            .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    if let Some(val) = payload.birth_year {
+        state.db.execute("UPDATE athletes SET birth_year = ?1 WHERE id = ?2", (val, id.clone()))
+            .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    if let Some(val) = payload.weight_category {
+        state.db.execute("UPDATE athletes SET weight_category = ?1 WHERE id = ?2", (val, id.clone()))
+            .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    if let Some(val) = payload.notes {
+        state.db.execute("UPDATE athletes SET notes = ?1 WHERE id = ?2", (val, id.clone()))
+            .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    if let Some(val) = payload.is_active {
+        state.db.execute("UPDATE athletes SET is_active = ?1 WHERE id = ?2", (if val { 1 } else { 0 }, id.clone()))
             .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
 

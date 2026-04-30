@@ -21,7 +21,11 @@ pub async fn init_db(
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL REFERENCES users(id),
             first_name TEXT NOT NULL,
-            last_name TEXT NOT NULL
+            last_name TEXT NOT NULL,
+            birth_year INTEGER,
+            weight_category TEXT,
+            notes TEXT,
+            is_active BOOLEAN DEFAULT 1
         )",
         "CREATE TABLE IF NOT EXISTS results (
             id TEXT PRIMARY KEY,
@@ -98,6 +102,59 @@ pub async fn init_db(
         ).await?;
 
         println!("Created default users: superadmin (superadmin123), admin1 (admin1_pass), admin2 (admin2_pass), admin3 (admin3_pass)");
+    }
+
+    // Check if Slavia superadmin exists
+    let mut rows_slavia = conn.query("SELECT COUNT(*) FROM users WHERE username = 'Slavia'", ()).await?;
+    let row_slavia = rows_slavia.next().await?.unwrap();
+    let slavia_count: i64 = row_slavia.get(0)?;
+
+    if slavia_count == 0 {
+        let argon2 = Argon2::default();
+        let salt = SaltString::generate(&mut OsRng);
+        let slavia_hash = argon2.hash_password(b"SLAVIA2026", &salt).unwrap().to_string();
+        
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, role) VALUES (?1, ?2, ?3, ?4)",
+            (Uuid::new_v4().to_string(), "Slavia", slavia_hash, "SuperAdmin"),
+        ).await?;
+        println!("Created Slavia SuperAdmin!");
+    }
+
+    // Check if athletes exist
+    let mut rows_athletes = conn.query("SELECT COUNT(*) FROM athletes", ()).await?;
+    let row_athletes = rows_athletes.next().await?.unwrap();
+    let athletes_count: i64 = row_athletes.get(0)?;
+
+    if athletes_count == 0 {
+        // Create 5 dummy users and athletes
+        let argon2 = Argon2::default();
+        let salt = SaltString::generate(&mut OsRng);
+        let default_hash = argon2.hash_password(b"zawodnik123", &salt).unwrap().to_string();
+
+        let dummy_data = [
+            ("jan.kowalski", "Jan", "Kowalski", 1995, "81kg"),
+            ("anna.nowak", "Anna", "Nowak", 1998, "64kg"),
+            ("piotr.zielinski", "Piotr", "Zieliński", 2000, "102kg"),
+            ("katarzyna.wojcik", "Katarzyna", "Wójcik", 1992, "71kg"),
+            ("michal.lewandowski", "Michał", "Lewandowski", 1997, "89kg"),
+        ];
+
+        for (username, first_name, last_name, birth_year, weight_cat) in dummy_data {
+            let user_id = Uuid::new_v4().to_string();
+            let athlete_id = Uuid::new_v4().to_string();
+
+            conn.execute(
+                "INSERT INTO users (id, username, password_hash, role) VALUES (?1, ?2, ?3, ?4)",
+                (user_id.clone(), username, default_hash.clone(), "Athlete"),
+            ).await?;
+
+            conn.execute(
+                "INSERT INTO athletes (id, user_id, first_name, last_name, birth_year, weight_category) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                (athlete_id, user_id, first_name, last_name, birth_year, weight_cat),
+            ).await?;
+        }
+        println!("Created 5 example athletes!");
     }
 
     Ok(())

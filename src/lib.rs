@@ -1,4 +1,4 @@
-//! Współdzielona logika HTTP — używana przez `main` (Shuttle) i binarkę `slavia-local`.
+//! Współdzielona logika HTTP — używana przez `main` (Axum/Tokio) i testy.
 
 use axum::{
     routing::{delete, get, patch, post, put},
