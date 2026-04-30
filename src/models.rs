@@ -42,11 +42,13 @@ pub struct User {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Athlete {
     pub id: String,
-    pub user_id: String,
-    pub first_name: String,
-    pub last_name: String,
+    pub user_id: Option<String>,
+    pub full_name: String,
     pub birth_year: Option<i64>,
     pub weight_category: Option<String>,
+    pub best_snatch_kg: Option<f64>,
+    pub best_clean_jerk_kg: Option<f64>,
+    pub total_kg: Option<f64>,
     pub notes: Option<String>,
     pub is_active: bool,
 }

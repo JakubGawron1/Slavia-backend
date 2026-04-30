@@ -39,30 +39,23 @@ pub async fn create_app(
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let auth_routes = Router::new().route("/login", post(routes::auth::login_handler));
+    let auth_routes = Router::new()
+        .route("/login", post(routes::auth::login_handler))
+        .route("/me", get(routes::auth::me_handler));
 
     let athletes_routes = Router::new()
-        .route(
-            "/",
-            get(routes::athletes::list_athletes).post(routes::athletes::create_athlete),
-        )
-        .route(
-            "/{id}",
-            put(routes::athletes::update_athlete).delete(routes::athletes::delete_athlete),
-        );
+        .route("/", get(routes::athletes::list_athletes_public).post(routes::athletes::create_athlete))
+        .route("/me", get(routes::athletes::me_athlete_handler))
+        .route("/admin", get(routes::athletes::list_athletes))
+        .route("/{id}", patch(routes::athletes::update_athlete).delete(routes::athletes::delete_athlete));
 
     let admins_routes = Router::new()
-        .route(
-            "/",
-            get(routes::admins::list_admins).post(routes::admins::create_admin),
-        )
+        .route("/", get(routes::admins::list_admins).post(routes::admins::create_admin))
         .route("/{id}", delete(routes::admins::delete_admin));
 
     let results_routes = Router::new()
-        .route(
-            "/",
-            get(routes::results::list_approved_results).post(routes::results::create_result),
-        )
+        .route("/", get(routes::results::list_approved_results).post(routes::results::create_result))
+        .route("/athlete/{id}", get(routes::results::list_athlete_results))
         .route("/pending", get(routes::results::list_pending_results))
         .route("/{id}/approve", patch(routes::results::approve_result));
 
@@ -72,7 +65,7 @@ pub async fn create_app(
             get(routes::competitions::list_competitions)
                 .post(routes::competitions::create_competition),
         )
-        .route("/{id}", delete(routes::competitions::delete_competition).put(routes::competitions::update_competition));
+        .route("/{id}", delete(routes::competitions::delete_competition).patch(routes::competitions::update_competition));
 
     let posts_routes = Router::new()
         .route(
