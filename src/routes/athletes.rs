@@ -5,32 +5,30 @@ use axum::{
 };
 use serde::Deserialize;
 use uuid::Uuid;
-use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
-    Argon2,
-};
-
 use crate::state::AppState;
 use crate::models::Athlete;
-use crate::middleware::auth::RequireAdminOrSuperAdmin;
+use crate::middleware::auth::{RequireAdminOrSuperAdmin, Claims};
 
 #[derive(Deserialize)]
 pub struct CreateAthleteRequest {
-    pub username: String,
-    pub password: String,
-    pub first_name: String,
-    pub last_name: String,
+    pub full_name: String,
     pub birth_year: Option<i64>,
     pub weight_category: Option<String>,
+    pub best_snatch_kg: Option<f64>,
+    pub best_clean_jerk_kg: Option<f64>,
+    pub total_kg: Option<f64>,
     pub notes: Option<String>,
+    pub username: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct UpdateAthleteRequest {
-    pub first_name: Option<String>,
-    pub last_name: Option<String>,
+    pub full_name: Option<String>,
     pub birth_year: Option<i64>,
     pub weight_category: Option<String>,
+    pub best_snatch_kg: Option<f64>,
+    pub best_clean_jerk_kg: Option<f64>,
+    pub total_kg: Option<f64>,
     pub notes: Option<String>,
     pub is_active: Option<bool>,
 }
@@ -41,21 +39,51 @@ pub async fn list_athletes(
 ) -> Result<Json<Vec<Athlete>>, (StatusCode, String)> {
     let mut rows = state
         .db
-        .query("SELECT id, user_id, first_name, last_name, birth_year, weight_category, notes, is_active FROM athletes", ())
+        .query("SELECT id, user_id, full_name, birth_year, weight_category, best_snatch_kg, best_clean_jerk_kg, total_kg, notes, is_active FROM athletes", ())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut athletes = Vec::new();
     while let Some(row) = rows.next().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
         athletes.push(Athlete {
-            id: row.get(0).unwrap(),
-            user_id: row.get(1).unwrap(),
-            first_name: row.get(2).unwrap(),
-            last_name: row.get(3).unwrap(),
-            birth_year: row.get(4).unwrap(),
-            weight_category: row.get(5).unwrap(),
-            notes: row.get(6).unwrap(),
-            is_active: row.get::<i64>(7).unwrap() != 0,
+            id: row.get(0).unwrap_or_default(),
+            user_id: row.get(1).ok(),
+            full_name: row.get(2).unwrap_or_default(),
+            birth_year: row.get(3).ok(),
+            weight_category: row.get(4).ok(),
+            best_snatch_kg: row.get(5).ok(),
+            best_clean_jerk_kg: row.get(6).ok(),
+            total_kg: row.get(7).ok(),
+            notes: row.get(8).ok(),
+            is_active: row.get::<i64>(9).unwrap_or(1) != 0,
+        });
+    }
+
+    Ok(Json(athletes))
+}
+
+pub async fn list_athletes_public(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<Athlete>>, (StatusCode, String)> {
+    let mut rows = state
+        .db
+        .query("SELECT id, user_id, full_name, birth_year, weight_category, best_snatch_kg, best_clean_jerk_kg, total_kg, is_active FROM athletes WHERE is_active = 1", ())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut athletes = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+        athletes.push(Athlete {
+            id: row.get(0).unwrap_or_default(),
+            user_id: row.get(1).ok(),
+            full_name: row.get(2).unwrap_or_default(),
+            birth_year: row.get(3).ok(),
+            weight_category: row.get(4).ok(),
+            best_snatch_kg: row.get(5).ok(),
+            best_clean_jerk_kg: row.get(6).ok(),
+            total_kg: row.get(7).ok(),
+            notes: None,
+            is_active: row.get::<i64>(8).unwrap_or(1) != 0,
         });
     }
 
@@ -67,32 +95,21 @@ pub async fn create_athlete(
     _auth: RequireAdminOrSuperAdmin,
     Json(payload): Json<CreateAthleteRequest>,
 ) -> Result<Json<Athlete>, (StatusCode, String)> {
-    let argon2 = Argon2::default();
-    let salt = SaltString::generate(&mut OsRng);
-    let hash = argon2.hash_password(payload.password.as_bytes(), &salt)
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Error hashing password".to_string()))?
-        .to_string();
-
-    let user_id = Uuid::new_v4().to_string();
-    
-    state.db.execute(
-        "INSERT INTO users (id, username, password_hash, role) VALUES (?1, ?2, ?3, ?4)",
-        (user_id.clone(), payload.username, hash, "Athlete"),
-    ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
     let athlete_id = Uuid::new_v4().to_string();
     state.db.execute(
-        "INSERT INTO athletes (id, user_id, first_name, last_name, birth_year, weight_category, notes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        (athlete_id.clone(), user_id.clone(), payload.first_name.clone(), payload.last_name.clone(), payload.birth_year, payload.weight_category.clone(), payload.notes.clone()),
+        "INSERT INTO athletes (id, user_id, full_name, birth_year, weight_category, best_snatch_kg, best_clean_jerk_kg, total_kg, notes) VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        (athlete_id.clone(), payload.full_name.clone(), payload.birth_year, payload.weight_category.clone(), payload.best_snatch_kg, payload.best_clean_jerk_kg, payload.total_kg, payload.notes.clone()),
     ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(Athlete {
         id: athlete_id,
-        user_id,
-        first_name: payload.first_name,
-        last_name: payload.last_name,
+        user_id: None,
+        full_name: payload.full_name,
         birth_year: payload.birth_year,
         weight_category: payload.weight_category,
+        best_snatch_kg: payload.best_snatch_kg,
+        best_clean_jerk_kg: payload.best_clean_jerk_kg,
+        total_kg: payload.total_kg,
         notes: payload.notes,
         is_active: true,
     }))
@@ -104,30 +121,29 @@ pub async fn update_athlete(
     _auth: RequireAdminOrSuperAdmin,
     Json(payload): Json<UpdateAthleteRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    if let Some(val) = payload.first_name {
-        state.db.execute("UPDATE athletes SET first_name = ?1 WHERE id = ?2", (val, id.clone()))
-            .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    }
-    if let Some(val) = payload.last_name {
-        state.db.execute("UPDATE athletes SET last_name = ?1 WHERE id = ?2", (val, id.clone()))
-            .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    }
-    if let Some(val) = payload.birth_year {
-        state.db.execute("UPDATE athletes SET birth_year = ?1 WHERE id = ?2", (val, id.clone()))
-            .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    }
-    if let Some(val) = payload.weight_category {
-        state.db.execute("UPDATE athletes SET weight_category = ?1 WHERE id = ?2", (val, id.clone()))
-            .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    }
-    if let Some(val) = payload.notes {
-        state.db.execute("UPDATE athletes SET notes = ?1 WHERE id = ?2", (val, id.clone()))
-            .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    }
-    if let Some(val) = payload.is_active {
-        state.db.execute("UPDATE athletes SET is_active = ?1 WHERE id = ?2", (if val { 1 } else { 0 }, id.clone()))
-            .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    }
+    state.db.execute(
+        "UPDATE athletes SET 
+            full_name = COALESCE(?1, full_name),
+            birth_year = ?2,
+            weight_category = ?3,
+            best_snatch_kg = ?4,
+            best_clean_jerk_kg = ?5,
+            total_kg = ?6,
+            notes = ?7,
+            is_active = COALESCE(?8, is_active)
+         WHERE id = ?9",
+        (
+            payload.full_name,
+            payload.birth_year,
+            payload.weight_category,
+            payload.best_snatch_kg,
+            payload.best_clean_jerk_kg,
+            payload.total_kg,
+            payload.notes,
+            payload.is_active.map(|v| if v { 1 } else { 0 }),
+            id
+        ),
+    ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(StatusCode::OK)
 }
@@ -141,13 +157,45 @@ pub async fn delete_athlete(
         .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     
     if let Some(row) = rows.next().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
-        let user_id: String = row.get(0).unwrap();
+        let user_id: Option<String> = row.get(0).ok();
+        
         state.db.execute("DELETE FROM athletes WHERE id = ?1", [id])
             .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        state.db.execute("DELETE FROM users WHERE id = ?1", [user_id])
-            .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            
+        if let Some(uid) = user_id {
+            state.db.execute("DELETE FROM users WHERE id = ?1", [uid])
+                .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+        
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err((StatusCode::NOT_FOUND, "Athlete not found".to_string()))
     }
+}
+
+pub async fn me_athlete_handler(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> Result<Json<Athlete>, (StatusCode, String)> {
+    let mut rows = state
+        .db
+        .query("SELECT id, user_id, full_name, birth_year, weight_category, best_snatch_kg, best_clean_jerk_kg, total_kg, notes, is_active FROM athletes WHERE user_id = ?1", [claims.sub])
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let row = rows.next().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = row.ok_or((StatusCode::NOT_FOUND, "Athlete profile not found for this user".to_string()))?;
+
+    Ok(Json(Athlete {
+        id: row.get(0).unwrap_or_default(),
+        user_id: row.get(1).ok(),
+        full_name: row.get(2).unwrap_or_default(),
+        birth_year: row.get(3).ok(),
+        weight_category: row.get(4).ok(),
+        best_snatch_kg: row.get(5).ok(),
+        best_clean_jerk_kg: row.get(6).ok(),
+        total_kg: row.get(7).ok(),
+        notes: row.get(8).ok(),
+        is_active: row.get::<i64>(9).unwrap_or(1) != 0,
+    }))
 }

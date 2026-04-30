@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Port z env (np. dla Render/Railways) lub domyślnie 8080
     let port = env::var("PORT")
-        .unwrap_or_else(|_| "8000".to_string())
+        .unwrap_or_else(|_| "8080".to_string())
         .parse::<u16>()
         .expect("PORT must be a number");
 

@@ -10,6 +10,7 @@ use chrono::{Utc, Duration};
 
 use crate::state::AppState;
 use crate::models::Role;
+use crate::middleware::auth::Claims;
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -76,5 +77,34 @@ pub async fn login_handler(
         token,
         role,
         user_id,
+    }))
+}
+
+#[derive(Serialize)]
+pub struct UserInfo {
+    pub id: String,
+    pub username: String,
+    pub role: Role,
+}
+
+pub async fn me_handler(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> Result<Json<UserInfo>, (StatusCode, String)> {
+    let mut rows = state
+        .db
+        .query("SELECT username FROM users WHERE id = ?1", [claims.sub.clone()])
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let row = rows.next().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = row.ok_or((StatusCode::UNAUTHORIZED, "User not found".to_string()))?;
+    
+    let username: String = row.get(0).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(UserInfo {
+        id: claims.sub,
+        username,
+        role: claims.role,
     }))
 }

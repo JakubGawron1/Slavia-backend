@@ -72,6 +72,33 @@ pub async fn list_pending_results(
     Ok(Json(results))
 }
 
+pub async fn list_athlete_results(
+    State(state): State<AppState>,
+    Path(athlete_id): Path<String>,
+) -> Result<Json<Vec<CompetitionResult>>, (StatusCode, String)> {
+    let mut rows = state
+        .db
+        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date FROM results WHERE athlete_id = ?1", [athlete_id])
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+        let status_str: String = row.get(5).unwrap();
+        results.push(CompetitionResult {
+            id: row.get(0).unwrap(),
+            athlete_id: row.get(1).unwrap(),
+            snatch: row.get(2).unwrap(),
+            clean_and_jerk: row.get(3).unwrap(),
+            total: row.get(4).unwrap(),
+            status: status_str.parse().unwrap(),
+            date: row.get(6).unwrap(),
+        });
+    }
+
+    Ok(Json(results))
+}
+
 pub async fn create_result(
     State(state): State<AppState>,
     claims: Claims, // Must be authenticated
