@@ -6,7 +6,14 @@ use argon2::{
 use uuid::Uuid;
 
 pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    println!("🧹 Resetowanie i inicjalizacja bazy danych...");
+    // Sprawdzamy, czy baza już istnieje (czy jest tabela users)
+    let mut rows = conn.query("SELECT name FROM sqlite_master WHERE type='table' AND name='users'", ()).await?;
+    if rows.next().await?.is_some() {
+        println!("📊 Baza danych już istnieje, pomijam reset.");
+        return Ok(());
+    }
+
+    println!("🧹 Pierwsze uruchomienie - inicjalizacja bazy danych...");
 
     // Usuwamy stare tabele w poprawnej kolejności (klucze obce)
     let drop_tables = [
