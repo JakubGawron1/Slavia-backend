@@ -7,6 +7,12 @@ pub enum Role {
     Athlete,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum Gender {
+    Male,
+    Female,
+}
+
 impl std::fmt::Display for Role {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
@@ -34,6 +40,7 @@ impl std::str::FromStr for Role {
 pub struct User {
     pub id: String,
     pub username: String,
+    pub email: Option<String>,
     #[serde(skip_serializing)]
     pub password_hash: String,
     pub role: Role,
@@ -45,10 +52,13 @@ pub struct Athlete {
     pub user_id: Option<String>,
     pub full_name: String,
     pub birth_year: Option<i64>,
+    pub gender: Option<String>, // "male" or "female"
     pub weight_category: Option<String>,
+    pub bodyweight: Option<f64>,
     pub best_snatch_kg: Option<f64>,
     pub best_clean_jerk_kg: Option<f64>,
     pub total_kg: Option<f64>,
+    pub image_url: Option<String>,
     pub notes: Option<String>,
     pub is_active: bool,
 }
@@ -97,6 +107,7 @@ pub struct Competition {
     pub date: String,
     pub location: String,
     pub description: Option<String>,
+    pub category: Option<String>, // "championship", "league", "club_event"
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -105,5 +116,6 @@ pub struct Post {
     pub title: String,
     pub content: String,
     pub author_id: String,
+    pub image_url: Option<String>,
     pub created_at: String,
 }

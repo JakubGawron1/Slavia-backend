@@ -9,7 +9,7 @@ path = "src/lib.rs"
 
 [dependencies]
 argon2 = "0.5.3"
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["macros", "multipart"] }
 chrono = { version = "0.4.44", features = ["serde"] }
 jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 libsql = "0.9.30"
@@ -20,3 +20,4 @@ toml = "0.8.22"
 tokio = { version = "1.52.1", features = ["full"] }
 tower-http = { version = "0.6.8", features = ["cors"] }
 uuid = { version = "1.23.1", features = ["v4", "serde"] }
+reqwest = { version = "0.12", features = ["json", "multipart"] }

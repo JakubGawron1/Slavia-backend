@@ -1,1 +1,6 @@
 /target
+.env
+.env.*
+!.env.example
+Secrets.toml
+*.local.toml

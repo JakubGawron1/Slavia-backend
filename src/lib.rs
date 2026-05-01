@@ -1,7 +1,7 @@
 //! Współdzielona logika HTTP — używana przez `main` (Axum/Tokio) i testy.
 
 use axum::{
-    routing::{delete, get, patch, post, put},
+    routing::{delete, get, patch, post},
     Router,
 };
 use std::sync::Arc;
@@ -20,6 +20,9 @@ pub async fn create_app(
     db_url: &str,
     db_token: &str,
     jwt_secret: String,
+    cloudinary_cloud_name: String,
+    cloudinary_api_key: String,
+    cloudinary_api_secret: String,
 ) -> Result<Router, Box<dyn std::error::Error + Send + Sync>> {
     let client = libsql::Builder::new_remote(db_url.to_string(), db_token.to_string())
         .build()
@@ -32,6 +35,9 @@ pub async fn create_app(
     let state = AppState {
         db: Arc::new(conn),
         jwt_secret,
+        cloudinary_cloud_name,
+        cloudinary_api_key,
+        cloudinary_api_secret,
     };
 
     let cors = CorsLayer::new()
@@ -43,11 +49,15 @@ pub async fn create_app(
         .route("/login", post(routes::auth::login_handler))
         .route("/me", get(routes::auth::me_handler));
 
+    let upload_routes = Router::new()
+        .route("/", post(routes::upload::upload_handler));
+
     let athletes_routes = Router::new()
         .route("/", get(routes::athletes::list_athletes_public).post(routes::athletes::create_athlete))
         .route("/me", get(routes::athletes::me_athlete_handler))
         .route("/admin", get(routes::athletes::list_athletes))
-        .route("/{id}", patch(routes::athletes::update_athlete).delete(routes::athletes::delete_athlete));
+        .route("/{id}", patch(routes::athletes::update_athlete).delete(routes::athletes::delete_athlete))
+        .route("/{id}/link", post(routes::athletes::link_athlete_to_user));
 
     let admins_routes = Router::new()
         .route("/", get(routes::admins::list_admins).post(routes::admins::create_admin))
@@ -100,6 +110,7 @@ pub async fn create_app(
             }),
         )
         .nest("/api/auth", auth_routes)
+        .nest("/api/upload", upload_routes)
         .nest("/api/athletes", athletes_routes)
         .nest("/api/admins", admins_routes)
         .nest("/api/results", results_routes)

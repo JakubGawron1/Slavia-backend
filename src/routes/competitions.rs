@@ -16,6 +16,7 @@ pub struct CreateCompetitionRequest {
     pub date: String,
     pub location: String,
     pub description: Option<String>,
+    pub category: Option<String>, // "championship", "league", "club_event"
 }
 
 pub async fn list_competitions(
@@ -23,21 +24,19 @@ pub async fn list_competitions(
 ) -> Result<Json<Vec<Competition>>, (StatusCode, String)> {
     let mut rows = state
         .db
-        .query("SELECT id, title, date, location, description FROM competitions", ())
+        .query("SELECT id, title, date, location, description, category FROM competitions ORDER BY date ASC", ())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut competitions = Vec::new();
     while let Some(row) = rows.next().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
-        // Handle Option correctly from query
-        let description_val = row.get::<String>(4).ok();
-        
         competitions.push(Competition {
             id: row.get(0).unwrap(),
             title: row.get(1).unwrap(),
             date: row.get(2).unwrap(),
             location: row.get(3).unwrap(),
-            description: description_val,
+            description: row.get(4).ok(),
+            category: row.get(5).ok(),
         });
     }
 
@@ -50,10 +49,11 @@ pub async fn create_competition(
     Json(payload): Json<CreateCompetitionRequest>,
 ) -> Result<Json<Competition>, (StatusCode, String)> {
     let id = Uuid::new_v4().to_string();
+    let category = payload.category.clone().unwrap_or_else(|| "club_event".to_string());
     
     state.db.execute(
-        "INSERT INTO competitions (id, title, date, location, description) VALUES (?1, ?2, ?3, ?4, ?5)",
-        (id.clone(), payload.title.clone(), payload.date.clone(), payload.location.clone(), payload.description.clone()),
+        "INSERT INTO competitions (id, title, date, location, description, category) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        (id.clone(), payload.title.clone(), payload.date.clone(), payload.location.clone(), payload.description.clone(), category.clone()),
     ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(Competition {
@@ -62,6 +62,7 @@ pub async fn create_competition(
         date: payload.date,
         location: payload.location,
         description: payload.description,
+        category: Some(category),
     }))
 }
 
@@ -82,9 +83,11 @@ pub async fn update_competition(
     _auth: RequireAdminOrSuperAdmin,
     Json(payload): Json<CreateCompetitionRequest>,
 ) -> Result<Json<Competition>, (StatusCode, String)> {
+    let category = payload.category.clone().unwrap_or_else(|| "club_event".to_string());
+    
     state.db.execute(
-        "UPDATE competitions SET title = ?1, date = ?2, location = ?3, description = ?4 WHERE id = ?5",
-        (payload.title.clone(), payload.date.clone(), payload.location.clone(), payload.description.clone(), id.clone()),
+        "UPDATE competitions SET title = ?1, date = ?2, location = ?3, description = ?4, category = ?5 WHERE id = ?6",
+        (payload.title.clone(), payload.date.clone(), payload.location.clone(), payload.description.clone(), category.clone(), id.clone()),
     ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(Competition {
@@ -93,5 +96,6 @@ pub async fn update_competition(
         date: payload.date,
         location: payload.location,
         description: payload.description,
+        category: Some(category),
     }))
 }

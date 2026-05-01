@@ -15,6 +15,7 @@ use crate::middleware::auth::{Claims, RequireAdminOrSuperAdmin};
 pub struct CreatePostRequest {
     pub title: String,
     pub content: String,
+    pub image_url: Option<String>,
 }
 
 pub async fn list_posts(
@@ -22,7 +23,7 @@ pub async fn list_posts(
 ) -> Result<Json<Vec<Post>>, (StatusCode, String)> {
     let mut rows = state
         .db
-        .query("SELECT id, title, content, author_id, created_at FROM posts ORDER BY created_at DESC", ())
+        .query("SELECT id, title, content, author_id, image_url, created_at FROM posts ORDER BY created_at DESC", ())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -33,7 +34,8 @@ pub async fn list_posts(
             title: row.get(1).unwrap(),
             content: row.get(2).unwrap(),
             author_id: row.get(3).unwrap(),
-            created_at: row.get(4).unwrap(),
+            image_url: row.get(4).ok(),
+            created_at: row.get(5).unwrap(),
         });
     }
 
@@ -50,8 +52,8 @@ pub async fn create_post(
     let created_at = Utc::now().to_rfc3339();
     
     state.db.execute(
-        "INSERT INTO posts (id, title, content, author_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        (id.clone(), payload.title.clone(), payload.content.clone(), claims.sub.clone(), created_at.clone()),
+        "INSERT INTO posts (id, title, content, author_id, image_url, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        (id.clone(), payload.title.clone(), payload.content.clone(), claims.sub.clone(), payload.image_url.clone(), created_at.clone()),
     ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(Post {
@@ -59,6 +61,7 @@ pub async fn create_post(
         title: payload.title,
         content: payload.content,
         author_id: claims.sub,
+        image_url: payload.image_url,
         created_at,
     }))
 }
@@ -78,7 +81,7 @@ pub async fn get_post(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Post>, (StatusCode, String)> {
-    let mut rows = state.db.query("SELECT id, title, content, author_id, created_at FROM posts WHERE id = ?1", [id])
+    let mut rows = state.db.query("SELECT id, title, content, author_id, image_url, created_at FROM posts WHERE id = ?1", [id])
         .await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if let Some(row) = rows.next().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
@@ -87,7 +90,8 @@ pub async fn get_post(
             title: row.get(1).unwrap(),
             content: row.get(2).unwrap(),
             author_id: row.get(3).unwrap(),
-            created_at: row.get(4).unwrap(),
+            image_url: row.get(4).ok(),
+            created_at: row.get(5).unwrap(),
         }))
     } else {
         Err((StatusCode::NOT_FOUND, "Post not found".to_string()))

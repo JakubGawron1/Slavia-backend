@@ -26,16 +26,17 @@ pub async fn list_admins(
 ) -> Result<Json<Vec<User>>, (StatusCode, String)> {
     let mut rows = state
         .db
-        .query("SELECT id, username, role FROM users WHERE role = 'Admin' OR role = 'SuperAdmin'", ())
+        .query("SELECT id, username, email, role FROM users WHERE role = 'Admin' OR role = 'SuperAdmin'", ())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut admins = Vec::new();
     while let Some(row) = rows.next().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
-        let role_str: String = row.get(2).unwrap();
+        let role_str: String = row.get(3).unwrap();
         admins.push(User {
             id: row.get(0).unwrap(),
             username: row.get(1).unwrap(),
+            email: row.get(2).ok(),
             password_hash: "".to_string(), // hidden
             role: role_str.parse().unwrap(),
         });
@@ -65,6 +66,7 @@ pub async fn create_admin(
     Ok(Json(User {
         id: user_id,
         username: payload.username,
+        email: None,
         password_hash: "".to_string(),
         role: Role::Admin,
     }))

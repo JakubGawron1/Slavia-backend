@@ -10,9 +10,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _ = dotenv();
 
     // Ładujemy konfigurację (Env > Secrets.toml)
-    let (db_url, db_token, jwt_secret) = load_config()?;
+    let (db_url, db_token, jwt_secret, c_name, c_key, c_secret) = load_config()?;
 
-    let app = slavia_backend::create_app(&db_url, &db_token, jwt_secret)
+    let app = slavia_backend::create_app(&db_url, &db_token, jwt_secret, c_name, c_key, c_secret)
         .await
         .expect("Failed to create application");
 
@@ -31,20 +31,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-fn load_config() -> Result<(String, String, String), Box<dyn std::error::Error + Send + Sync>> {
+fn load_config() -> Result<(String, String, String, String, String, String), Box<dyn std::error::Error + Send + Sync>> {
     // 1. Próbujemy z zmiennych środowiskowych
     let from_env = (
         env::var("TURSO_DATABASE_URL").ok(),
         env::var("TURSO_AUTH_TOKEN").ok(),
         env::var("JWT_SECRET").ok(),
+        env::var("CLOUDINARY_CLOUD_NAME").ok(),
+        env::var("CLOUDINARY_API_KEY").ok(),
+        env::var("CLOUDINARY_API_SECRET").ok(),
     );
 
-    if let (Some(url), token, jwt) = from_env {
+    if let (Some(url), token, jwt, Some(cn), Some(ck), Some(cs)) = from_env {
         if !url.is_empty() {
             return Ok((
                 url,
                 token.unwrap_or_default(),
                 jwt.unwrap_or_else(|| "default_secret_for_dev_only".to_string()),
+                cn,
+                ck,
+                cs,
             ));
         }
     }
@@ -69,8 +75,21 @@ fn load_config() -> Result<(String, String, String), Box<dyn std::error::Error +
             .unwrap_or("default_secret_for_dev_only")
             .to_string();
 
+        let cn = table.get("CLOUDINARY_CLOUD_NAME")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let ck = table.get("CLOUDINARY_API_KEY")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let cs = table.get("CLOUDINARY_API_SECRET")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
         if let Some(url) = url {
-            return Ok((url, token, jwt));
+            return Ok((url, token, jwt, cn, ck, cs));
         }
     }
 
