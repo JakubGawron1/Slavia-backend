@@ -13,6 +13,9 @@ pub mod models;
 pub mod routes;
 pub mod state;
 
+pub(crate) mod api_error;
+mod sql_row;
+
 use state::AppState;
 
 /// Buduje router Axum (Turso/libsql + JWT). Bez `Box::pin` — mniejsze ryzyko problemów ze stosem na Windows.

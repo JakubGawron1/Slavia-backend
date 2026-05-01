@@ -8,6 +8,7 @@ use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use chrono::{Utc, Duration};
 
+use crate::api_error::{api_error, ApiError};
 use crate::state::AppState;
 use crate::models::Role;
 use crate::middleware::auth::Claims;
@@ -28,31 +29,31 @@ pub struct LoginResponse {
 pub async fn login_handler(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,
-) -> Result<Json<LoginResponse>, (StatusCode, String)> {
+) -> Result<Json<LoginResponse>, ApiError> {
     let mut rows = state
         .db
         .query("SELECT id, username, password_hash, role FROM users WHERE username = ?1", [payload.username])
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let row = rows.next().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let row = match row {
         Some(r) => r,
-        None => return Err((StatusCode::UNAUTHORIZED, "Invalid username or password".to_string())),
+        None => return Err(api_error(StatusCode::UNAUTHORIZED, "Invalid username or password")),
     };
 
-    let user_id: String = row.get(0).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("id error: {}", e)))?;
-    let _username: String = row.get(1).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("username error: {}", e)))?;
-    let password_hash: String = row.get(2).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("hash error: {}", e)))?;
-    let role_str: String = row.get(3).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("role error: {}", e)))?;
-    let role: Role = role_str.parse().map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Invalid role in db".to_string()))?;
+    let user_id: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("id error: {}", e)))?;
+    let _username: String = row.get(1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("username error: {}", e)))?;
+    let password_hash: String = row.get(2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("hash error: {}", e)))?;
+    let role_str: String = row.get(3).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("role error: {}", e)))?;
+    let role: Role = role_str.parse().map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Invalid role in db"))?;
 
     let parsed_hash = PasswordHash::new(&password_hash)
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Error parsing hash".to_string()))?;
+        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error parsing hash"))?;
 
     if Argon2::default().verify_password(payload.password.as_bytes(), &parsed_hash).is_err() {
-        return Err((StatusCode::UNAUTHORIZED, "Invalid username or password".to_string()));
+        return Err(api_error(StatusCode::UNAUTHORIZED, "Invalid username or password"));
     }
 
     let exp = Utc::now()
@@ -71,7 +72,7 @@ pub async fn login_handler(
         &claims,
         &EncodingKey::from_secret(state.jwt_secret.as_ref()),
     )
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Error creating token".to_string()))?;
+    .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error creating token"))?;
 
     Ok(Json(LoginResponse {
         token,
@@ -90,17 +91,17 @@ pub struct UserInfo {
 pub async fn me_handler(
     State(state): State<AppState>,
     claims: Claims,
-) -> Result<Json<UserInfo>, (StatusCode, String)> {
+) -> Result<Json<UserInfo>, ApiError> {
     let mut rows = state
         .db
         .query("SELECT username FROM users WHERE id = ?1", [claims.sub.clone()])
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let row = rows.next().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let row = row.ok_or((StatusCode::UNAUTHORIZED, "User not found".to_string()))?;
+    let row = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = row.ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "User not found"))?;
     
-    let username: String = row.get(0).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let username: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(UserInfo {
         id: claims.sub,

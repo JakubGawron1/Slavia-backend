@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .await
         .expect("Failed to create application");
 
-    // Port z env (np. dla Render/Railways) lub domyślnie 8080
+    // Port z env (np. dla Render/Railways) lub domyślnie 8000 — zgodnie z NUXT_PUBLIC_API_BASE_URL w frontendzie
     let port = env::var("PORT")
         .unwrap_or_else(|_| "8080".to_string())
         .parse::<u16>()

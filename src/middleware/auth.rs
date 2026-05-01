@@ -5,6 +5,7 @@ use axum::{
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 
+use crate::api_error::{api_error, ApiError};
 use crate::models::Role;
 use crate::state::AppState;
 
@@ -16,7 +17,7 @@ pub struct Claims {
 }
 
 impl FromRequestParts<AppState> for Claims {
-    type Rejection = (StatusCode, String);
+    type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
         let auth_header = parts
@@ -26,11 +27,11 @@ impl FromRequestParts<AppState> for Claims {
 
         let auth_header = match auth_header {
             Some(header) => header,
-            None => return Err((StatusCode::UNAUTHORIZED, "Missing Authorization header".to_string())),
+            None => return Err(api_error(StatusCode::UNAUTHORIZED, "Missing Authorization header")),
         };
 
         if !auth_header.starts_with("Bearer ") {
-            return Err((StatusCode::UNAUTHORIZED, "Invalid Authorization header".to_string()));
+            return Err(api_error(StatusCode::UNAUTHORIZED, "Invalid Authorization header"));
         }
 
         let token = &auth_header["Bearer ".len()..];
@@ -40,7 +41,7 @@ impl FromRequestParts<AppState> for Claims {
             &DecodingKey::from_secret(state.jwt_secret.as_ref()),
             &Validation::default(),
         )
-        .map_err(|_| (StatusCode::UNAUTHORIZED, "Invalid Token".to_string()))?;
+        .map_err(|_| api_error(StatusCode::UNAUTHORIZED, "Invalid Token"))?;
 
         Ok(token_data.claims)
     }
@@ -49,12 +50,12 @@ impl FromRequestParts<AppState> for Claims {
 pub struct RequireSuperAdmin(pub Claims);
 
 impl FromRequestParts<AppState> for RequireSuperAdmin {
-    type Rejection = (StatusCode, String);
+    type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
         let claims = Claims::from_request_parts(parts, state).await?;
         if claims.role != Role::SuperAdmin {
-            return Err((StatusCode::FORBIDDEN, "Requires SuperAdmin role".to_string()));
+            return Err(api_error(StatusCode::FORBIDDEN, "Requires SuperAdmin role"));
         }
         Ok(RequireSuperAdmin(claims))
     }
@@ -63,13 +64,59 @@ impl FromRequestParts<AppState> for RequireSuperAdmin {
 pub struct RequireAdminOrSuperAdmin(pub Claims);
 
 impl FromRequestParts<AppState> for RequireAdminOrSuperAdmin {
-    type Rejection = (StatusCode, String);
+    type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
         let claims = Claims::from_request_parts(parts, state).await?;
         if claims.role != Role::Admin && claims.role != Role::SuperAdmin {
-            return Err((StatusCode::FORBIDDEN, "Requires Admin or SuperAdmin role".to_string()));
+            return Err(api_error(StatusCode::FORBIDDEN, "Requires Admin or SuperAdmin role"));
         }
         Ok(RequireAdminOrSuperAdmin(claims))
+    }
+}
+
+#[cfg(test)]
+mod jwt_claims_tests {
+    use super::*;
+    use crate::models::Role;
+    use chrono::{Duration, Utc};
+    use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+
+    #[test]
+    fn claims_serde_json_roundtrip() {
+        let c = Claims {
+            sub: "user-1".into(),
+            role: Role::SuperAdmin,
+            exp: 2_147_483_647,
+        };
+        let json = serde_json::to_string(&c).expect("serialize claims");
+        let c2: Claims = serde_json::from_str(&json).expect("deserialize claims");
+        assert_eq!(c.sub, c2.sub);
+        assert_eq!(c.role, c2.role);
+        assert_eq!(c.exp, c2.exp);
+    }
+
+    #[test]
+    fn jwt_encode_decode_roundtrip() {
+        let secret = b"test-secret-at-least-32-bytes-long!!";
+        let exp = (Utc::now() + Duration::hours(24)).timestamp() as usize;
+        let claims = Claims {
+            sub: "uid".into(),
+            role: Role::Admin,
+            exp,
+        };
+        let token = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(secret.as_slice()),
+        )
+        .expect("encode jwt");
+        let decoded = decode::<Claims>(
+            &token,
+            &DecodingKey::from_secret(secret.as_slice()),
+            &Validation::default(),
+        )
+        .expect("decode jwt");
+        assert_eq!(decoded.claims.role, Role::Admin);
     }
 }

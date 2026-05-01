@@ -6,6 +6,7 @@ use argon2::{
 use uuid::Uuid;
 
 pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Ustaw w `.env`: REBUILD_DB=true (jednorazowo), potem false — patrz `.env.example`
     let rebuild = std::env::var("REBUILD_DB").unwrap_or_default() == "true";
     
     if rebuild {
@@ -80,6 +81,25 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
 
     // Migrate: add category column if missing (safe for existing DBs)
     let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category TEXT DEFAULT 'club_event'", ()).await;
+
+    // Migrate: kolumna is_active przy starszych instancjach Turso (bez niej SELECT na liście publicznej się wywali)
+    let _ = conn
+        .execute(
+            "ALTER TABLE athletes ADD COLUMN is_active BOOLEAN DEFAULT 1",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
+            "UPDATE athletes SET is_active = 1 WHERE is_active IS NULL",
+            (),
+        )
+        .await;
+
+    // Migrate: gender — starsze tabele athletes bez tej kolumny (CREATE TABLE IF NOT EXISTS jej nie doda)
+    let _ = conn
+        .execute("ALTER TABLE athletes ADD COLUMN gender TEXT", ())
+        .await;
 
     if rebuild {
         seed_data(conn).await?;
