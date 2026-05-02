@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -50,7 +52,8 @@ pub async fn list_competitions_for_athlete(
     let mut rows = state
         .db
         .query(
-            "SELECT c.id, c.title, c.date, c.location, c.description, c.category, c.status \
+            "SELECT c.id, c.title, c.date, c.location, c.description, c.category, c.status, \
+                    c.external_source, c.external_ref, c.external_url \
              FROM competitions c \
              INNER JOIN competition_participants p ON p.competition_id = c.id AND p.athlete_id = ?1 \
              ORDER BY c.date ASC",
@@ -73,6 +76,9 @@ pub async fn list_competitions_for_athlete(
             description: row.get(4).ok(),
             category: row.get(5).ok(),
             status: row.get(6).ok(),
+            external_source: row.get(7).ok(),
+            external_ref: row.get(8).ok(),
+            external_url: row.get(9).ok(),
         });
     }
 
@@ -102,6 +108,25 @@ pub async fn sync_competitions_for_athlete(
         return Err(api_error(StatusCode::NOT_FOUND, "Athlete not found"));
     }
 
+    let mut prev_rows = state
+        .db
+        .query(
+            "SELECT competition_id FROM competition_participants WHERE athlete_id = ?1",
+            [athlete_id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut old_ids = HashSet::<String>::new();
+    while let Some(row) = prev_rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let cid: String = row.get(0).unwrap();
+        old_ids.insert(cid);
+    }
+
     state
         .db
         .execute(
@@ -114,6 +139,7 @@ pub async fn sync_competitions_for_athlete(
     let assigned_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
 
     let mut seen = std::collections::HashSet::new();
+    let mut new_ids = HashSet::<String>::new();
     for cid in payload.competition_ids {
         if !seen.insert(cid.clone()) {
             continue;
@@ -134,6 +160,8 @@ pub async fn sync_competitions_for_athlete(
             continue;
         }
 
+        new_ids.insert(cid.clone());
+
         state
             .db
             .execute(
@@ -148,6 +176,8 @@ pub async fn sync_competitions_for_athlete(
             .await
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
+
+    crate::notifications::diff_notify_athlete_competition_assignments(&state, &athlete_id, old_ids, new_ids).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -208,6 +238,30 @@ pub async fn set_participants(
         return Err(api_error(StatusCode::NOT_FOUND, "Competition not found"));
     }
 
+    let comp_title = crate::notifications::competition_title(state.db.as_ref(), &competition_id)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "Zawody".to_string());
+
+    let mut old_pa_rows = state
+        .db
+        .query(
+            "SELECT athlete_id FROM competition_participants WHERE competition_id = ?1",
+            [competition_id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut old_athlete_ids = HashSet::<String>::new();
+    while let Some(row) = old_pa_rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        old_athlete_ids.insert(row.get(0).unwrap());
+    }
+
     state
         .db
         .execute(
@@ -219,6 +273,7 @@ pub async fn set_participants(
 
     let assigned_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
 
+    let mut new_athlete_ids = HashSet::<String>::new();
     for aid in payload.athlete_ids {
         let mut ok = state
             .db
@@ -236,6 +291,7 @@ pub async fn set_participants(
         {
             continue;
         }
+        new_athlete_ids.insert(aid.clone());
         state
             .db
             .execute(
@@ -250,6 +306,14 @@ pub async fn set_participants(
             .await
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
+
+    for added in new_athlete_ids.difference(&old_athlete_ids) {
+        crate::notifications::notify_competition_assigned_to_athlete(&state, added, &competition_id, &comp_title);
+    }
+    for removed in old_athlete_ids.difference(&new_athlete_ids) {
+        crate::notifications::notify_competition_unassigned_from_athlete(&state, removed, &competition_id, &comp_title);
+    }
+    crate::notifications::notify_competition_roster_updated(&state, &competition_id, &comp_title);
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -301,7 +365,8 @@ pub async fn my_calendar_for_athlete(
     let mut rows = state
         .db
         .query(
-            "SELECT c.id, c.title, c.date, c.location, c.description, c.category, c.status \
+            "SELECT c.id, c.title, c.date, c.location, c.description, c.category, c.status, \
+                    c.external_source, c.external_ref, c.external_url \
              FROM competitions c \
              INNER JOIN competition_participants p ON p.competition_id = c.id \
              WHERE p.athlete_id = ?1 \
@@ -327,6 +392,9 @@ pub async fn my_calendar_for_athlete(
             description: row.get(4).ok(),
             category: row.get(5).ok(),
             status: row.get(6).ok(),
+            external_source: row.get(7).ok(),
+            external_ref: row.get(8).ok(),
+            external_url: row.get(9).ok(),
         };
 
         let mut pr = state

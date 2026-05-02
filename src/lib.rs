@@ -10,11 +10,14 @@ use tower_http::cors::{Any, CorsLayer};
 pub mod db;
 pub mod middleware;
 pub mod models;
+pub mod notifications;
 pub mod routes;
 pub mod state;
 
 pub(crate) mod api_error;
 mod sql_row;
+pub mod cloudinary;
+mod external_calendar_sync;
 
 use state::AppState;
 
@@ -86,6 +89,7 @@ pub async fn create_app(
         );
 
     let admins_routes = Router::new()
+        .route("/grouped", get(routes::admins::list_accounts_grouped))
         .route("/", get(routes::admins::list_admins).post(routes::admins::create_admin))
         .route("/{id}", delete(routes::admins::delete_admin))
         .route("/{id}/account", patch(routes::admins::update_user_account))
@@ -109,6 +113,10 @@ pub async fn create_app(
 
     let competitions_routes = Router::new()
         .route(
+            "/sync-external",
+            post(routes::competitions::sync_external_competitions),
+        )
+        .route(
             "/",
             get(routes::competitions::list_competitions)
                 .post(routes::competitions::create_competition),
@@ -127,6 +135,10 @@ pub async fn create_app(
             get(routes::posts::list_posts).post(routes::posts::create_post),
         )
         .route("/{id}", get(routes::posts::get_post).delete(routes::posts::delete_post));
+
+    let notifications_routes = Router::new()
+        .route("/", get(routes::notifications::list_my_notifications))
+        .route("/{id}", delete(routes::notifications::delete_my_notification));
 
     let app = Router::new()
         .route(
@@ -160,6 +172,7 @@ pub async fn create_app(
         .nest("/api/results", results_routes)
         .nest("/api/competitions", competitions_routes)
         .nest("/api/posts", posts_routes)
+        .nest("/api/notifications", notifications_routes)
         .layer(cors)
         .with_state(state);
 

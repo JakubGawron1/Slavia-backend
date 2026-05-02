@@ -122,7 +122,10 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             location TEXT NOT NULL,
             description TEXT,
             category TEXT DEFAULT 'club_event',
-            status TEXT DEFAULT 'scheduled'
+            status TEXT DEFAULT 'scheduled',
+            external_source TEXT,
+            external_ref TEXT,
+            external_url TEXT
         )",
         "CREATE TABLE IF NOT EXISTS competition_participants (
             competition_id TEXT NOT NULL,
@@ -160,6 +163,16 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             author_user_id TEXT REFERENCES users(id),
             created_at TEXT NOT NULL
         )",
+        "CREATE TABLE IF NOT EXISTS notifications (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            payload TEXT,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC)",
     ];
 
     for sql in create_tables {
@@ -193,6 +206,22 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         .execute("ALTER TABLE users ADD COLUMN avatar_url TEXT", ())
         .await;
 
+    let _ = conn
+        .execute("ALTER TABLE competitions ADD COLUMN external_source TEXT", ())
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE competitions ADD COLUMN external_ref TEXT", ())
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE competitions ADD COLUMN external_url TEXT", ())
+        .await;
+    let _ = conn
+        .execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_competitions_external_ref ON competitions(external_source, external_ref) WHERE external_source IS NOT NULL AND external_ref IS NOT NULL",
+            (),
+        )
+        .await;
+
     let n = sync_all_athletes_bests_from_results(conn)
         .await
         .map_err(|e| format!("sync_all_athletes_bests_from_results: {e}"))?;
@@ -206,6 +235,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
 
 pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let drop_tables = [
+        "DROP TABLE IF EXISTS notifications",
         "DROP TABLE IF EXISTS results",
         "DROP TABLE IF EXISTS competition_participants",
         "DROP TABLE IF EXISTS training_log_entries",
@@ -249,7 +279,10 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             location TEXT NOT NULL,
             description TEXT,
             category TEXT DEFAULT 'club_event',
-            status TEXT DEFAULT 'scheduled'
+            status TEXT DEFAULT 'scheduled',
+            external_source TEXT,
+            external_ref TEXT,
+            external_url TEXT
         )",
         "CREATE TABLE IF NOT EXISTS competition_participants (
             competition_id TEXT NOT NULL,
@@ -287,6 +320,16 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             author_user_id TEXT REFERENCES users(id),
             created_at TEXT NOT NULL
         )",
+        "CREATE TABLE IF NOT EXISTS notifications (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            payload TEXT,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC)",
     ];
 
     for sql in create_tables {
@@ -295,6 +338,11 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
 
     let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category TEXT DEFAULT 'club_event'", ()).await;
     let _ = conn.execute("ALTER TABLE competitions ADD COLUMN status TEXT DEFAULT 'scheduled'", ()).await;
+    let _ = conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_competitions_external_ref ON competitions(external_source, external_ref) WHERE external_source IS NOT NULL AND external_ref IS NOT NULL",
+        (),
+    )
+    .await;
     let _ = conn.execute("ALTER TABLE athletes ADD COLUMN is_active BOOLEAN DEFAULT 1", ()).await;
     let _ = conn.execute("UPDATE athletes SET is_active = 1 WHERE is_active IS NULL", ()).await;
     let _ = conn.execute("ALTER TABLE athletes ADD COLUMN gender TEXT", ()).await;

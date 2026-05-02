@@ -23,6 +23,7 @@ uuid = { version = "1.23.1", features = ["v4", "serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 sha1 = "0.10.6"
 hex = "0.4.3"
+regex = "1.11"
 
 # Szybsza kompilacja `--release` na CI (np. Leapcell): bez pełnego LTO, więcej jednostek codegen.
 # Koszt: nieco mniejsza optymalizacja runtime niż domyślny release (zwykle akceptowalne dla API).

@@ -9,8 +9,9 @@ use uuid::Uuid;
 use chrono::Utc;
 
 use crate::api_error::{api_error, ApiError};
-use crate::state::AppState;
 use crate::models::Post;
+use crate::notifications;
+use crate::state::AppState;
 use crate::middleware::auth::{Claims, RequireAdminOrSuperAdmin};
 use crate::sql_row;
 
@@ -64,6 +65,19 @@ pub async fn create_post(
         (id.clone(), payload.title.clone(), payload.content.clone(), claims.sub.clone(), payload.image_url.clone(), created_at.clone()),
     ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    let author = notifications::username_by_id(state.db.as_ref(), &claims.sub)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "?".to_string());
+    notifications::notify_admin_broadcast(
+        &state,
+        "blog_post_created",
+        "Nowy wpis na blogu",
+        &format!("{} opublikował(a): „{}”.", author, payload.title),
+        Some(serde_json::json!({ "post_id": id.clone() }).to_string()),
+    );
+
     Ok(Json(Post {
         id,
         title: payload.title,
@@ -79,8 +93,32 @@ pub async fn delete_post(
     Path(id): Path<String>,
     _auth: RequireAdminOrSuperAdmin,
 ) -> Result<StatusCode, ApiError> {
-    state.db.execute("DELETE FROM posts WHERE id = ?1", [id])
+    let mut rows = state
+        .db
+        .query("SELECT title FROM posts WHERE id = ?1", [id.clone()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let title_opt = if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        row.get::<String>(0).ok()
+    } else {
+        return Err(api_error(StatusCode::NOT_FOUND, "Post not found"));
+    };
+
+    state.db.execute("DELETE FROM posts WHERE id = ?1", [id.clone()])
         .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let t = title_opt.unwrap_or_else(|| "?".to_string());
+    notifications::notify_admin_broadcast(
+        &state,
+        "blog_post_deleted",
+        "Usunięto wpis",
+        &format!("Usunięto wpis blogowy: „{}”.", t),
+        Some(serde_json::json!({ "post_id": id }).to_string()),
+    );
 
     Ok(StatusCode::NO_CONTENT)
 }

@@ -211,8 +211,11 @@ pub async fn create_result(
     Json(payload): Json<CreateResultRequest>,
 ) -> Result<Json<CompetitionResult>, ApiError> {
     let status = match claims.role {
-        Role::Admin | Role::SuperAdmin | Role::TrainerAdmin => ResultStatus::Approved,
-        Role::Trainer | Role::Athlete => ResultStatus::Pending,
+        Role::Admin
+        | Role::SuperAdmin
+        | Role::TrainerAdmin
+        | Role::Trainer => ResultStatus::Approved,
+        Role::Athlete => ResultStatus::Pending,
     };
 
     if claims.role == Role::Athlete {
@@ -237,6 +240,21 @@ pub async fn create_result(
 
     sync_athlete_bests_from_approved(&state, &payload.athlete_id).await?;
 
+    if status == ResultStatus::Pending {
+        let name = crate::notifications::athlete_full_name(state.db.as_ref(), &payload.athlete_id)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "Zawodnik".to_string());
+        crate::notifications::notify_result_pending(
+            &state,
+            &payload.athlete_id,
+            &name,
+            payload.total,
+            &payload.date,
+        );
+    }
+
     Ok(Json(CompetitionResult {
         id,
         athlete_id: payload.athlete_id,
@@ -253,7 +271,23 @@ pub async fn approve_result(
     Path(id): Path<String>,
     _auth: RequireTrainerOrHigher,
 ) -> Result<StatusCode, ApiError> {
-    let athlete_id = result_row_athlete_id(&state, &id).await?;
+    let mut rows = state
+        .db
+        .query(
+            "SELECT athlete_id, total, date FROM results WHERE id = ?1",
+            [id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Result not found"))?;
+    let athlete_id: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let total: f64 = row.get(1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let date: String = row.get(2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
     let n = state
         .db
         .execute("UPDATE results SET status = 'Approved' WHERE id = ?1", [id.clone()])
@@ -263,6 +297,7 @@ pub async fn approve_result(
         return Err(api_error(StatusCode::NOT_FOUND, "Result not found"));
     }
     sync_athlete_bests_from_approved(&state, &athlete_id).await?;
+    crate::notifications::notify_result_approved(&state, &athlete_id, total, &date);
     Ok(StatusCode::OK)
 }
 

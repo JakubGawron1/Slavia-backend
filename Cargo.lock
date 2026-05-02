@@ -13,6 +13,7 @@ dependencies = [
  "hex",
  "jsonwebtoken",
  "libsql",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

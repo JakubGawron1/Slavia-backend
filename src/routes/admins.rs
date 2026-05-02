@@ -3,7 +3,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
@@ -11,10 +11,11 @@ use argon2::{
 };
 
 use crate::api_error::{api_error, ApiError};
-use crate::state::AppState;
 use crate::db;
-use crate::models::{User, Role};
-use crate::middleware::auth::{RequireSuperAdmin, RequireAdminOrSuperAdmin, Claims};
+use crate::middleware::auth::{Claims, RequireAdminOrSuperAdmin, RequireSuperAdmin};
+use crate::models::{Role, User};
+use crate::notifications;
+use crate::state::AppState;
 
 #[derive(Deserialize)]
 pub struct CreateAdminRequest {
@@ -41,35 +42,74 @@ pub struct UpdateUserAccountRequest {
     pub password: Option<String>,
 }
 
-pub async fn list_admins(
-    State(state): State<AppState>,
-    _auth: RequireAdminOrSuperAdmin,
-) -> Result<Json<Vec<User>>, ApiError> {
+async fn collect_users_for_sql(state: &AppState, sql: &str) -> Result<Vec<User>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id, username, email, avatar_url, role FROM users WHERE role IN ('Admin', 'SuperAdmin', 'TrainerAdmin', 'Trainer', 'Athlete')", ())
+        .query(sql, ())
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let mut admins = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
         let role_str: String = row.get(4).unwrap();
-        admins.push(User {
+        out.push(User {
             id: row.get(0).unwrap(),
             username: row.get(1).unwrap(),
             email: row.get(2).ok(),
             avatar_url: row.get(3).ok(),
-            password_hash: "".to_string(), // hidden
+            password_hash: "".to_string(),
             role: role_str.parse().unwrap(),
         });
     }
+    Ok(out)
+}
 
+pub async fn list_admins(
+    State(state): State<AppState>,
+    _auth: RequireAdminOrSuperAdmin,
+) -> Result<Json<Vec<User>>, ApiError> {
+    let sql = "SELECT id, username, email, avatar_url, role FROM users \
+               WHERE role IN ('Admin', 'SuperAdmin', 'TrainerAdmin', 'Trainer', 'Athlete') \
+               ORDER BY username ASC";
+    let admins = collect_users_for_sql(&state, sql).await?;
     Ok(Json(admins))
+}
+
+#[derive(Serialize)]
+pub struct GroupedAccounts {
+    /// Admin, SuperAdmin, TrainerAdmin (admin-trener).
+    pub staff_admins: Vec<User>,
+    /// Trenerzy bez panelu admin oraz zawodnicy.
+    pub club_members: Vec<User>,
+}
+
+pub async fn list_accounts_grouped(
+    State(state): State<AppState>,
+    _auth: RequireAdminOrSuperAdmin,
+) -> Result<Json<GroupedAccounts>, ApiError> {
+    let staff_sql = "SELECT id, username, email, avatar_url, role FROM users \
+                     WHERE role IN ('Admin', 'SuperAdmin', 'TrainerAdmin') \
+                     ORDER BY role ASC, username ASC";
+    let member_sql = "SELECT id, username, email, avatar_url, role FROM users \
+                      WHERE role IN ('Trainer', 'Athlete') \
+                      ORDER BY role ASC, username ASC";
+
+    let staff_admins = collect_users_for_sql(&state, staff_sql).await?;
+    let club_members = collect_users_for_sql(&state, member_sql).await?;
+
+    Ok(Json(GroupedAccounts {
+        staff_admins,
+        club_members,
+    }))
 }
 
 pub async fn create_admin(
     State(state): State<AppState>,
-    _auth: RequireSuperAdmin,
+    auth: RequireSuperAdmin,
     Json(payload): Json<CreateAdminRequest>,
 ) -> Result<Json<User>, ApiError> {
     let argon2 = Argon2::default();
@@ -84,6 +124,21 @@ pub async fn create_admin(
         "INSERT INTO users (id, username, password_hash, role) VALUES (?1, ?2, ?3, ?4)",
         (user_id.clone(), payload.username.clone(), hash, "Admin"),
     ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let actor = notifications::username_by_id(state.db.as_ref(), &auth.0.sub)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "?".to_string());
+    notifications::notify_admin_broadcast(
+        &state,
+        "admin_user_created",
+        "Nowe konto administracyjne",
+        &format!("{} utworzył konto „{}” (Admin).", actor, payload.username),
+        Some(
+            serde_json::json!({ "user_id": user_id.clone(), "username": payload.username.clone() }).to_string(),
+        ),
+    );
 
     Ok(Json(User {
         id: user_id,
@@ -185,6 +240,24 @@ pub async fn update_user_account(
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
 
+    let actor = notifications::username_by_id(state.db.as_ref(), &claims.sub)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "?".to_string());
+    let target = notifications::username_by_id(state.db.as_ref(), &id)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| id.clone());
+    notifications::notify_admin_broadcast(
+        &state,
+        "admin_user_updated",
+        "Zmiana konta użytkownika",
+        &format!("{} zaktualizował konto użytkownika „{}”.", actor, target),
+        Some(serde_json::json!({ "target_user_id": id }).to_string()),
+    );
+
     Ok(StatusCode::OK)
 }
 
@@ -213,6 +286,31 @@ pub async fn update_user_role(
     if result == 0 {
         return Err(api_error(StatusCode::NOT_FOUND, "User not found"));
     }
+
+    let actor = notifications::username_by_id(state.db.as_ref(), &claims.sub)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "?".to_string());
+    let target = notifications::username_by_id(state.db.as_ref(), &id)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| id.clone());
+    notifications::notify_admin_broadcast(
+        &state,
+        "admin_role_changed",
+        "Zmiana roli",
+        &format!(
+            "{} ustawił rolę użytkownika „{}” na {}.",
+            actor,
+            target,
+            payload.role
+        ),
+        Some(
+            serde_json::json!({ "target_user_id": id, "role": payload.role.clone() }).to_string(),
+        ),
+    );
 
     Ok(StatusCode::OK)
 }
@@ -250,6 +348,11 @@ pub async fn delete_admin(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
         let role: String = row.get(0).unwrap();
+        let deleted_username = notifications::username_by_id(state.db.as_ref(), &id)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| id.clone());
         if role == "SuperAdmin" {
             let mut crow = state
                 .db
@@ -295,9 +398,23 @@ pub async fn delete_admin(
 
         state
             .db
-            .execute("DELETE FROM users WHERE id = ?1", [id])
+            .execute("DELETE FROM users WHERE id = ?1", [id.clone()])
             .await
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        let actor = notifications::username_by_id(state.db.as_ref(), &claims.sub)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "?".to_string());
+        notifications::notify_admin_broadcast(
+            &state,
+            "admin_user_deleted",
+            "Usunięto konto",
+            &format!("{} usunął konto użytkownika „{}”.", actor, deleted_username),
+            None,
+        );
+
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(api_error(StatusCode::NOT_FOUND, "User not found"))
@@ -309,6 +426,33 @@ pub async fn update_profile(
     claims: Claims,
     Json(payload): Json<UpdateProfileRequest>,
 ) -> Result<StatusCode, ApiError> {
+    let mut prev_avatar: Option<String> = None;
+    if payload.avatar_url.is_some() {
+        let mut rows = state
+            .db
+            .query(
+                "SELECT avatar_url FROM users WHERE id = ?1",
+                [claims.sub.clone()],
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        {
+            prev_avatar = row.get(0).ok();
+        }
+    }
+
+    if let Some(ref new_av) = payload.avatar_url {
+        if prev_avatar.as_ref() != Some(new_av) {
+            if let Some(ref old) = prev_avatar {
+                crate::cloudinary::destroy_if_cloudinary(&state, old).await;
+            }
+        }
+    }
+
     if let Some(new_password) = payload.password {
         let argon2 = Argon2::default();
         let salt = SaltString::generate(&mut OsRng);

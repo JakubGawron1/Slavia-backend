@@ -7,8 +7,9 @@ use libsql::Row;
 use serde::Deserialize;
 use uuid::Uuid;
 use crate::api_error::{api_error, ApiError};
-use crate::state::AppState;
 use crate::models::Athlete;
+use crate::notifications;
+use crate::state::AppState;
 use crate::middleware::auth::{RequireAdminOrSuperAdmin, RequireTrainerOrHigher, Claims};
 use crate::sql_row;
 use argon2::PasswordHasher;
@@ -139,6 +140,14 @@ pub async fn create_athlete(
         (athlete_id.clone(), user_id.clone(), payload.full_name.clone(), payload.birth_year, payload.gender.clone(), payload.weight_category.clone(), payload.bodyweight, payload.best_snatch_kg, payload.best_clean_jerk_kg, total, payload.image_url.clone(), payload.notes.clone(), if is_active { 1 } else { 0 }),
     ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    notifications::notify_admin_broadcast(
+        &state,
+        "admin_athlete_created",
+        "Nowy zawodnik",
+        &format!("Dodano zawodnika: {}.", payload.full_name),
+        Some(serde_json::json!({ "athlete_id": athlete_id.clone() }).to_string()),
+    );
+
     Ok(Json(Athlete {
         id: athlete_id,
         user_id,
@@ -203,7 +212,30 @@ pub async fn update_athlete(
         payload.total_kg
     };
 
-    state.db.execute(
+    let mut prev_img_row = state
+        .db
+        .query("SELECT image_url FROM athletes WHERE id = ?1", [id.clone()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let prev_img: Option<String> = if let Some(pr) = prev_img_row
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        pr.get(0).ok()
+    } else {
+        return Err(api_error(StatusCode::NOT_FOUND, "Athlete not found"));
+    };
+
+    if payload.image_url.as_ref() != prev_img.as_ref() {
+        if let Some(ref old) = prev_img {
+            crate::cloudinary::destroy_if_cloudinary(&state, old).await;
+        }
+    }
+
+    state
+        .db
+        .execute(
         "UPDATE athletes SET 
             full_name = COALESCE(?1, full_name),
             birth_year = ?2,
@@ -231,9 +263,17 @@ pub async fn update_athlete(
             payload.notes,
             payload.is_active.map(|v| if v { 1 } else { 0 }),
             user_id_to_set,
-            id
+            id.clone()
         ),
     ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    notifications::notify_admin_broadcast(
+        &state,
+        "admin_athlete_updated",
+        "Zaktualizowano zawodnika",
+        &format!("Zmieniono dane zawodnika (profil ID: {}).", id),
+        Some(serde_json::json!({ "athlete_id": id }).to_string()),
+    );
 
     Ok(StatusCode::OK)
 }
@@ -243,19 +283,28 @@ pub async fn delete_athlete(
     Path(id): Path<String>,
     _auth: RequireAdminOrSuperAdmin,
 ) -> Result<StatusCode, ApiError> {
-    let mut rows = state.db.query("SELECT user_id FROM athletes WHERE id = ?1", [id.clone()])
+    let mut rows = state.db.query("SELECT user_id, full_name FROM athletes WHERE id = ?1", [id.clone()])
         .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     
     if let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
         let user_id: Option<String> = row.get(0).ok();
+        let full_name: String = row.get(1).unwrap_or_else(|_| "?".to_string());
         
-        state.db.execute("DELETE FROM athletes WHERE id = ?1", [id])
+        state.db.execute("DELETE FROM athletes WHERE id = ?1", [id.clone()])
             .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             
         if let Some(uid) = user_id {
             state.db.execute("DELETE FROM users WHERE id = ?1", [uid])
                 .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         }
+
+        notifications::notify_admin_broadcast(
+            &state,
+            "admin_athlete_deleted",
+            "Usunięto zawodnika",
+            &format!("Usunięto zawodnika: {}.", full_name),
+            Some(serde_json::json!({ "athlete_id": id }).to_string()),
+        );
         
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -300,7 +349,8 @@ pub async fn link_athlete_to_user(
         .to_string();
 
     let user_id = Uuid::new_v4().to_string();
-    
+    let linked_username = payload.username.clone();
+
     // 1. Create user
     state.db.execute(
         "INSERT INTO users (id, username, password_hash, role) VALUES (?1, ?2, ?3, 'Athlete')",
@@ -310,8 +360,21 @@ pub async fn link_athlete_to_user(
     // 2. Link to athlete
     state.db.execute(
         "UPDATE athletes SET user_id = ?1 WHERE id = ?2",
-        (user_id, athlete_id),
+        (user_id.clone(), athlete_id.clone()),
     ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    notifications::notify_admin_broadcast(
+        &state,
+        "admin_athlete_linked",
+        "Powiązano zawodnika z kontem",
+        &format!(
+            "Utworzono konto „{}” i powiązano z profilem zawodnika ({}).",
+            linked_username, athlete_id
+        ),
+        Some(
+            serde_json::json!({ "athlete_id": athlete_id, "user_id": user_id }).to_string(),
+        ),
+    );
 
     Ok(StatusCode::OK)
 }

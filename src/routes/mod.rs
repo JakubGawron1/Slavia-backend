@@ -7,3 +7,4 @@ pub mod competition_participants;
 pub mod posts;
 pub mod upload;
 pub mod training_log;
+pub mod notifications;

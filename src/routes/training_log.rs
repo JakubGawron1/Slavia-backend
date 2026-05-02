@@ -226,6 +226,35 @@ pub async fn create_training_log(
 
     let username = fetch_username(&state, &claims.sub).await?;
 
+    let athlete_display = crate::notifications::athlete_full_name(state.db.as_ref(), &athlete_id)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "Zawodnik".to_string());
+    let author_label = username.as_deref().unwrap_or("Użytkownik");
+
+    match claims.role {
+        Role::Athlete => {
+            crate::notifications::notify_training_log_athlete_note(
+                &state,
+                &athlete_id,
+                &athlete_display,
+                author_label,
+                session_date,
+                notes,
+            );
+        }
+        _ => {
+            crate::notifications::notify_training_log_trainer_note(
+                &state,
+                &athlete_id,
+                Some(author_label),
+                session_date,
+                notes,
+            );
+        }
+    }
+
     Ok(Json(TrainingLogEntry {
         id,
         athlete_id,
