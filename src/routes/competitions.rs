@@ -233,7 +233,9 @@ pub async fn sync_external_competitions(
         r.pzpc_imported,
         r.pc_imported,
         r.upserts,
-        r.stale_external_removed,
+        r.stale_removed,
+        r.stale_import_removed,
+        r.stale_manual_removed,
     );
     Ok(Json(r))
 }

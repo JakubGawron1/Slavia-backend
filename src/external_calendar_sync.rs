@@ -14,8 +14,12 @@ pub struct SyncExternalResponse {
     pub pzpc_imported: usize,
     pub pc_imported: usize,
     pub upserts: usize,
-    /// Usunięte rekordy importowane (`external_source`), których rok daty nie mieści się w [bieżący, następny].
-    pub stale_external_removed: u64,
+    /// Wszystkie usunięte wydarzenia z `competitions` poza oknem roku [bieżący, następny] (import + ręczne).
+    pub stale_removed: u64,
+    /// Z powyższego — wiersze z niepustym `external_source`.
+    pub stale_import_removed: u64,
+    /// Z powyższego — wpisy dodane ręcznie w klubie.
+    pub stale_manual_removed: u64,
 }
 
 struct UpsertRow {
@@ -208,21 +212,85 @@ fn parse_pc_json(body: &str) -> Result<Vec<UpsertRow>, ApiError> {
     Ok(out)
 }
 
-/// Rekordy źródeł zewnętrznych poza oknem roku [year_now, year_now + 1] (wg `SUBSTR(date,1,4)`).
-async fn delete_stale_external_competitions(
+/// Predykat SQL: data poza oknem [year_now, year_max] lub niepoprawny format `YYYY-MM-DD`.
+fn stale_competition_sql_predicate() -> &'static str {
+    "LENGTH(date) < 10 \
+       OR CAST(SUBSTR(date, 1, 4) AS INTEGER) < ?1 \
+       OR CAST(SUBSTR(date, 1, 4) AS INTEGER) > ?2"
+}
+
+async fn count_stale_competitions_import(
     conn: &Connection,
     year_now: i32,
+    year_max: i32,
 ) -> Result<u64, libsql::Error> {
+    let mut rows = conn
+        .query(
+            &format!(
+                "SELECT COUNT(*) FROM competitions WHERE ({}) \
+                   AND external_source IS NOT NULL AND TRIM(COALESCE(external_source, '')) != ''",
+                stale_competition_sql_predicate()
+            ),
+            (year_now, year_max),
+        )
+        .await?;
+    let Some(r) = rows.next().await? else {
+        return Ok(0);
+    };
+    let n: i64 = r.get(0)?;
+    Ok(n as u64)
+}
+
+async fn count_stale_competitions_manual(
+    conn: &Connection,
+    year_now: i32,
+    year_max: i32,
+) -> Result<u64, libsql::Error> {
+    let mut rows = conn
+        .query(
+            &format!(
+                "SELECT COUNT(*) FROM competitions WHERE ({}) \
+                   AND (external_source IS NULL OR TRIM(COALESCE(external_source, '')) = '')",
+                stale_competition_sql_predicate()
+            ),
+            (year_now, year_max),
+        )
+        .await?;
+    let Some(r) = rows.next().await? else {
+        return Ok(0);
+    };
+    let n: i64 = r.get(0)?;
+    Ok(n as u64)
+}
+
+/// Usuwa wyniki powiązane z przeterminowanymi zawodami, potem same wiersze `competitions`
+/// (`competition_participants` — CASCADE). Dotyczy **wszystkich** wpisów kalendarza.
+async fn purge_stale_calendar_competitions(
+    conn: &Connection,
+    year_now: i32,
+) -> Result<(u64, u64, u64), libsql::Error> {
     let year_max = year_now + 1;
+    let stale_import = count_stale_competitions_import(conn, year_now, year_max).await?;
+    let stale_manual = count_stale_competitions_manual(conn, year_now, year_max).await?;
+
+    let pred = stale_competition_sql_predicate();
     conn.execute(
-        "DELETE FROM competitions \
-         WHERE external_source IS NOT NULL AND TRIM(COALESCE(external_source, '')) != '' \
-           AND (LENGTH(date) < 10 \
-             OR CAST(SUBSTR(date, 1, 4) AS INTEGER) < ?1 \
-             OR CAST(SUBSTR(date, 1, 4) AS INTEGER) > ?2)",
+        &format!(
+            "DELETE FROM results WHERE competition_id IS NOT NULL \
+               AND competition_id IN (SELECT id FROM competitions WHERE ({pred}))"
+        ),
         (year_now, year_max),
     )
-    .await
+    .await?;
+
+    let deleted = conn
+        .execute(
+            &format!("DELETE FROM competitions WHERE ({pred})"),
+            (year_now, year_max),
+        )
+        .await?;
+
+    Ok((deleted, stale_import, stale_manual))
 }
 
 async fn upsert_external_row(conn: &Connection, row: UpsertRow) -> Result<(), libsql::Error> {
@@ -332,14 +400,17 @@ pub async fn run_sync(conn: &Connection) -> Result<SyncExternalResponse, ApiErro
         upserts += 1;
     }
 
-    let stale_external_removed = delete_stale_external_competitions(conn, year_now)
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let (stale_removed, stale_import_removed, stale_manual_removed) =
+        purge_stale_calendar_competitions(conn, year_now)
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(SyncExternalResponse {
         pzpc_imported: pzpc_n,
         pc_imported: pc_n,
         upserts,
-        stale_external_removed,
+        stale_removed,
+        stale_import_removed,
+        stale_manual_removed,
     })
 }

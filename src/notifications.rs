@@ -474,14 +474,17 @@ pub fn notify_competitions_synced(
     pc: usize,
     upserts: usize,
     stale_removed: u64,
+    stale_import: u64,
+    stale_manual: u64,
 ) {
     let st = state.clone();
     spawn_notify(async move {
         let conn = st.db.as_ref();
         let title = "Synchronizacja kalendarza";
         let body = format!(
-            "Zsynchronizowano zawody zewnętrzne (PZPC: {}, PC: {}, zmian w bazie: {}). Usunięto przeterminowane importy: {}.",
-            pzpc, pc, upserts, stale_removed
+            "Zsynchronizowano zawody zewnętrzne (PZPC: {}, PC: {}, merge w bazie: {}). \
+             Usunięto wpisy spoza bieżącego i następnego roku (łącznie: {} — importy: {}, ręczne: {}).",
+            pzpc, pc, upserts, stale_removed, stale_import, stale_manual
         );
         for uid in trainer_staff_ids(conn).await? {
             insert_notification(conn, &uid, "competitions_synced", title, &body, None).await?;
