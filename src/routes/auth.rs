@@ -85,7 +85,9 @@ pub async fn login_handler(
 pub struct UserInfo {
     pub id: String,
     pub username: String,
+    pub email: Option<String>,
     pub role: Role,
+    pub avatar_url: Option<String>,
 }
 
 pub async fn me_handler(
@@ -94,7 +96,7 @@ pub async fn me_handler(
 ) -> Result<Json<UserInfo>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT username FROM users WHERE id = ?1", [claims.sub.clone()])
+        .query("SELECT username, email, avatar_url FROM users WHERE id = ?1", [claims.sub.clone()])
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -102,10 +104,14 @@ pub async fn me_handler(
     let row = row.ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "User not found"))?;
     
     let username: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let email: Option<String> = row.get(1).ok();
+    let avatar_url: Option<String> = row.get(2).ok();
 
     Ok(Json(UserInfo {
         id: claims.sub,
         username,
+        email,
         role: claims.role,
+        avatar_url,
     }))
 }

@@ -4,3 +4,7 @@
 !.env.example
 Secrets.toml
 *.local.toml
+
+# Nie commituj haseł ani lokalnych skryptów testowych z credentialami
+passwords.txt
+**/passwords.txt

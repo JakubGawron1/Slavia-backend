@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 pub enum Role {
     SuperAdmin,
     Admin,
+    TrainerAdmin,
+    Trainer,
     Athlete,
 }
 
@@ -18,6 +20,8 @@ impl std::fmt::Display for Role {
         let s = match self {
             Role::SuperAdmin => "SuperAdmin",
             Role::Admin => "Admin",
+            Role::TrainerAdmin => "TrainerAdmin",
+            Role::Trainer => "Trainer",
             Role::Athlete => "Athlete",
         };
         write!(f, "{}", s)
@@ -30,6 +34,8 @@ impl std::str::FromStr for Role {
         match s {
             "SuperAdmin" => Ok(Role::SuperAdmin),
             "Admin" => Ok(Role::Admin),
+            "TrainerAdmin" => Ok(Role::TrainerAdmin),
+            "Trainer" => Ok(Role::Trainer),
             "Athlete" => Ok(Role::Athlete),
             _ => Err(format!("Invalid role: {}", s)),
         }
@@ -41,6 +47,7 @@ pub struct User {
     pub id: String,
     pub username: String,
     pub email: Option<String>,
+    pub avatar_url: Option<String>,
     #[serde(skip_serializing)]
     pub password_hash: String,
     pub role: Role,
@@ -107,7 +114,20 @@ pub struct Competition {
     pub date: String,
     pub location: String,
     pub description: Option<String>,
-    pub category: Option<String>, // "championship", "league", "club_event"
+    pub category: Option<String>, // "championship", "league", "club_event", "training"
+    pub status: Option<String>, // "scheduled", "cancelled", "moved"
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TrainingLogEntry {
+    pub id: String,
+    pub athlete_id: String,
+    pub session_date: String,
+    pub title: Option<String>,
+    pub notes: String,
+    pub created_at: String,
+    pub author_user_id: Option<String>,
+    pub author_username: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

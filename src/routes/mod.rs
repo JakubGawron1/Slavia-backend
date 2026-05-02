@@ -3,5 +3,7 @@ pub mod athletes;
 pub mod admins;
 pub mod results;
 pub mod competitions;
+pub mod competition_participants;
 pub mod posts;
 pub mod upload;
+pub mod training_log;

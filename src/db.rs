@@ -1,3 +1,11 @@
+//! Schemat bazy — migracje **addytywne** (bezpieczne dla istniejących danych):
+//! - `CREATE TABLE IF NOT EXISTS` — nowe tabele (np. `competition_participants`) bez kasowania wierszy.
+//! - `ALTER TABLE ... ADD COLUMN` — nowe kolumny (`avatar_url` itd.); powtórne uruchomienie
+//!   kończy się błędem „duplicate column”, który jest ignorowany (`let _ =`).
+//!
+//! **Nie ustawiaj `REBUILD_DB=true` na produkcji** — to wywołuje `reset_database`: DROP wszystkich tabel
+//! i `seed_data` od zera (trwałe skasowanie danych). Backupy Turso: eksport z panelu / `turso db shell .dump`.
+//!
 use libsql::Connection;
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
@@ -6,21 +14,13 @@ use argon2::{
 use uuid::Uuid;
 
 pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Ustaw w `.env`: REBUILD_DB=true (jednorazowo), potem false — patrz `.env.example`
+    // Ustaw w `.env`: REBUILD_DB=true (jednorazowo, tylko dev), potem false — patrz `.env.example`
     let rebuild = std::env::var("REBUILD_DB").unwrap_or_default() == "true";
     
     if rebuild {
         println!("🧹 REBUILD_DB=true: Czyszczenie bazy danych...");
-        let drop_tables = [
-            "DROP TABLE IF EXISTS results",
-            "DROP TABLE IF EXISTS posts",
-            "DROP TABLE IF EXISTS competitions",
-            "DROP TABLE IF EXISTS athletes",
-            "DROP TABLE IF EXISTS users",
-        ];
-        for sql in drop_tables {
-            let _ = conn.execute(sql, ()).await;
-        }
+        reset_database(conn).await?;
+        return Ok(());
     }
 
     // Tworzenie tabel if not exists
@@ -30,7 +30,8 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             username TEXT UNIQUE NOT NULL,
             email TEXT UNIQUE,
             password_hash TEXT NOT NULL,
-            role TEXT NOT NULL
+            role TEXT NOT NULL,
+            avatar_url TEXT
         )",
         "CREATE TABLE IF NOT EXISTS athletes (
             id TEXT PRIMARY KEY,
@@ -53,7 +54,17 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             date TEXT NOT NULL,
             location TEXT NOT NULL,
             description TEXT,
-            category TEXT DEFAULT 'club_event'
+            category TEXT DEFAULT 'club_event',
+            status TEXT DEFAULT 'scheduled'
+        )",
+        "CREATE TABLE IF NOT EXISTS competition_participants (
+            competition_id TEXT NOT NULL,
+            athlete_id TEXT NOT NULL,
+            assigned_at TEXT NOT NULL,
+            assigned_by TEXT,
+            PRIMARY KEY (competition_id, athlete_id),
+            FOREIGN KEY (competition_id) REFERENCES competitions(id) ON DELETE CASCADE,
+            FOREIGN KEY (athlete_id) REFERENCES athletes(id) ON DELETE CASCADE
         )",
         "CREATE TABLE IF NOT EXISTS results (
             id TEXT PRIMARY KEY,
@@ -73,14 +84,24 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             image_url TEXT,
             created_at TEXT NOT NULL
         )",
+        "CREATE TABLE IF NOT EXISTS training_log_entries (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            session_date TEXT NOT NULL,
+            title TEXT,
+            notes TEXT NOT NULL,
+            author_user_id TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
     ];
 
     for sql in create_tables {
         conn.execute(sql, ()).await?;
     }
 
-    // Migrate: add category column if missing (safe for existing DBs)
+    // Migrate: add category and status columns if missing (safe for existing DBs)
     let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category TEXT DEFAULT 'club_event'", ()).await;
+    let _ = conn.execute("ALTER TABLE competitions ADD COLUMN status TEXT DEFAULT 'scheduled'", ()).await;
 
     // Migrate: kolumna is_active przy starszych instancjach Turso (bez niej SELECT na liście publicznej się wywali)
     let _ = conn
@@ -101,11 +122,110 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         .execute("ALTER TABLE athletes ADD COLUMN gender TEXT", ())
         .await;
 
-    if rebuild {
-        seed_data(conn).await?;
-        println!("✅ Baza danych zrekonstruowana i zasilona danymi!");
+    let _ = conn
+        .execute("ALTER TABLE users ADD COLUMN avatar_url TEXT", ())
+        .await;
+
+    Ok(())
+}
+
+pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let drop_tables = [
+        "DROP TABLE IF EXISTS results",
+        "DROP TABLE IF EXISTS competition_participants",
+        "DROP TABLE IF EXISTS training_log_entries",
+        "DROP TABLE IF EXISTS posts",
+        "DROP TABLE IF EXISTS competitions",
+        "DROP TABLE IF EXISTS athletes",
+        "DROP TABLE IF EXISTS users",
+    ];
+    for sql in drop_tables {
+        let _ = conn.execute(sql, ()).await;
     }
 
+    let create_tables = [
+        "CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            email TEXT UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL,
+            avatar_url TEXT
+        )",
+        "CREATE TABLE IF NOT EXISTS athletes (
+            id TEXT PRIMARY KEY,
+            user_id TEXT REFERENCES users(id),
+            full_name TEXT NOT NULL,
+            birth_year INTEGER,
+            gender TEXT,
+            weight_category TEXT,
+            bodyweight REAL,
+            best_snatch_kg REAL,
+            best_clean_jerk_kg REAL,
+            total_kg REAL,
+            image_url TEXT,
+            notes TEXT,
+            is_active BOOLEAN DEFAULT 1
+        )",
+        "CREATE TABLE IF NOT EXISTS competitions (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            date TEXT NOT NULL,
+            location TEXT NOT NULL,
+            description TEXT,
+            category TEXT DEFAULT 'club_event',
+            status TEXT DEFAULT 'scheduled'
+        )",
+        "CREATE TABLE IF NOT EXISTS competition_participants (
+            competition_id TEXT NOT NULL,
+            athlete_id TEXT NOT NULL,
+            assigned_at TEXT NOT NULL,
+            assigned_by TEXT,
+            PRIMARY KEY (competition_id, athlete_id),
+            FOREIGN KEY (competition_id) REFERENCES competitions(id) ON DELETE CASCADE,
+            FOREIGN KEY (athlete_id) REFERENCES athletes(id) ON DELETE CASCADE
+        )",
+        "CREATE TABLE IF NOT EXISTS results (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id),
+            competition_id TEXT REFERENCES competitions(id),
+            snatch REAL NOT NULL,
+            clean_and_jerk REAL NOT NULL,
+            total REAL NOT NULL,
+            status TEXT NOT NULL,
+            date TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS posts (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            author_id TEXT NOT NULL REFERENCES users(id),
+            image_url TEXT,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS training_log_entries (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            session_date TEXT NOT NULL,
+            title TEXT,
+            notes TEXT NOT NULL,
+            author_user_id TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+    ];
+
+    for sql in create_tables {
+        conn.execute(sql, ()).await?;
+    }
+
+    let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category TEXT DEFAULT 'club_event'", ()).await;
+    let _ = conn.execute("ALTER TABLE competitions ADD COLUMN status TEXT DEFAULT 'scheduled'", ()).await;
+    let _ = conn.execute("ALTER TABLE athletes ADD COLUMN is_active BOOLEAN DEFAULT 1", ()).await;
+    let _ = conn.execute("UPDATE athletes SET is_active = 1 WHERE is_active IS NULL", ()).await;
+    let _ = conn.execute("ALTER TABLE athletes ADD COLUMN gender TEXT", ()).await;
+
+    seed_data(conn).await?;
+    println!("✅ Baza danych zrekonstruowana i zasilona danymi!");
     Ok(())
 }
 

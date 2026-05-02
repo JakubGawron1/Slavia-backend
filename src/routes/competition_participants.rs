@@ -1,0 +1,363 @@
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    Json,
+};
+use serde::{Deserialize, Serialize};
+use chrono::{SecondsFormat, Utc};
+
+use crate::api_error::{api_error, ApiError};
+use crate::middleware::auth::{Claims, RequireTrainerOrHigher};
+use crate::models::{Competition, Role};
+use crate::state::AppState;
+
+#[derive(Serialize)]
+pub struct ParticipantBrief {
+    pub athlete_id: String,
+    pub full_name: String,
+}
+
+#[derive(Deserialize)]
+pub struct SetParticipantsRequest {
+    pub athlete_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct SyncAthleteCompetitionAssignmentsRequest {
+    pub competition_ids: Vec<String>,
+}
+
+pub async fn list_competitions_for_athlete(
+    State(state): State<AppState>,
+    Path(athlete_id): Path<String>,
+    _auth: RequireTrainerOrHigher,
+) -> Result<Json<Vec<Competition>>, ApiError> {
+    let mut chk = state
+        .db
+        .query("SELECT id FROM athletes WHERE id = ?1", [athlete_id.clone()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if chk
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .is_none()
+    {
+        return Err(api_error(StatusCode::NOT_FOUND, "Athlete not found"));
+    }
+
+    let mut rows = state
+        .db
+        .query(
+            "SELECT c.id, c.title, c.date, c.location, c.description, c.category, c.status \
+             FROM competitions c \
+             INNER JOIN competition_participants p ON p.competition_id = c.id AND p.athlete_id = ?1 \
+             ORDER BY c.date ASC",
+            [athlete_id],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut list = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        list.push(Competition {
+            id: row.get(0).unwrap(),
+            title: row.get(1).unwrap(),
+            date: row.get(2).unwrap(),
+            location: row.get(3).unwrap(),
+            description: row.get(4).ok(),
+            category: row.get(5).ok(),
+            status: row.get(6).ok(),
+        });
+    }
+
+    Ok(Json(list))
+}
+
+pub async fn sync_competitions_for_athlete(
+    State(state): State<AppState>,
+    Path(athlete_id): Path<String>,
+    auth: RequireTrainerOrHigher,
+    Json(payload): Json<SyncAthleteCompetitionAssignmentsRequest>,
+) -> Result<StatusCode, ApiError> {
+    let claims = &auth.0;
+
+    let mut chk = state
+        .db
+        .query("SELECT id FROM athletes WHERE id = ?1", [athlete_id.clone()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if chk
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .is_none()
+    {
+        return Err(api_error(StatusCode::NOT_FOUND, "Athlete not found"));
+    }
+
+    state
+        .db
+        .execute(
+            "DELETE FROM competition_participants WHERE athlete_id = ?1",
+            [athlete_id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let assigned_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+
+    let mut seen = std::collections::HashSet::new();
+    for cid in payload.competition_ids {
+        if !seen.insert(cid.clone()) {
+            continue;
+        }
+
+        let mut ok = state
+            .db
+            .query("SELECT id FROM competitions WHERE id = ?1", [cid.clone()])
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        if ok
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .is_none()
+        {
+            continue;
+        }
+
+        state
+            .db
+            .execute(
+                "INSERT INTO competition_participants (competition_id, athlete_id, assigned_at, assigned_by) VALUES (?1, ?2, ?3, ?4)",
+                (
+                    cid,
+                    athlete_id.clone(),
+                    assigned_at.clone(),
+                    claims.sub.clone(),
+                ),
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn list_participants(
+    State(state): State<AppState>,
+    Path(competition_id): Path<String>,
+    _claims: Claims,
+) -> Result<Json<Vec<ParticipantBrief>>, ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT a.id, a.full_name FROM competition_participants cp \
+             JOIN athletes a ON a.id = cp.athlete_id \
+             WHERE cp.competition_id = ?1 \
+             ORDER BY a.full_name ASC",
+            [competition_id],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        out.push(ParticipantBrief {
+            athlete_id: row.get(0).unwrap(),
+            full_name: row.get(1).unwrap(),
+        });
+    }
+
+    Ok(Json(out))
+}
+
+pub async fn set_participants(
+    State(state): State<AppState>,
+    Path(competition_id): Path<String>,
+    auth: RequireTrainerOrHigher,
+    Json(payload): Json<SetParticipantsRequest>,
+) -> Result<StatusCode, ApiError> {
+    let claims = &auth.0;
+    let mut check = state
+        .db
+        .query(
+            "SELECT id FROM competitions WHERE id = ?1",
+            [competition_id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if check
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .is_none()
+    {
+        return Err(api_error(StatusCode::NOT_FOUND, "Competition not found"));
+    }
+
+    state
+        .db
+        .execute(
+            "DELETE FROM competition_participants WHERE competition_id = ?1",
+            [competition_id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let assigned_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+
+    for aid in payload.athlete_ids {
+        let mut ok = state
+            .db
+            .query(
+                "SELECT id FROM athletes WHERE id = ?1 AND (is_active IS NULL OR is_active = 1)",
+                [aid.clone()],
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if ok
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .is_none()
+        {
+            continue;
+        }
+        state
+            .db
+            .execute(
+                "INSERT INTO competition_participants (competition_id, athlete_id, assigned_at, assigned_by) VALUES (?1, ?2, ?3, ?4)",
+                (
+                    competition_id.clone(),
+                    aid,
+                    assigned_at.clone(),
+                    claims.sub.clone(),
+                ),
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Serialize)]
+pub struct MyCalendarEntry {
+    pub competition: Competition,
+    pub participants: Vec<ParticipantBrief>,
+}
+
+#[derive(Serialize)]
+pub struct MyCalendarResponse {
+    pub entries: Vec<MyCalendarEntry>,
+}
+
+pub async fn my_calendar_for_athlete(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> Result<Json<MyCalendarResponse>, ApiError> {
+    if claims.role != Role::Athlete {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Only athletes can use this endpoint",
+        ));
+    }
+
+    let mut rows = state
+        .db
+        .query(
+            "SELECT id FROM athletes WHERE user_id = ?1",
+            [claims.sub.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let athlete_row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let athlete_id: String = match athlete_row {
+        Some(r) => r.get(0).unwrap(),
+        None => {
+            return Ok(Json(MyCalendarResponse {
+                entries: vec![],
+            }))
+        }
+    };
+
+    let mut rows = state
+        .db
+        .query(
+            "SELECT c.id, c.title, c.date, c.location, c.description, c.category, c.status \
+             FROM competitions c \
+             INNER JOIN competition_participants p ON p.competition_id = c.id \
+             WHERE p.athlete_id = ?1 \
+             ORDER BY c.date ASC",
+            [athlete_id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut entries = Vec::new();
+
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let cid: String = row.get(0).unwrap();
+        let competition = Competition {
+            id: cid.clone(),
+            title: row.get(1).unwrap(),
+            date: row.get(2).unwrap(),
+            location: row.get(3).unwrap(),
+            description: row.get(4).ok(),
+            category: row.get(5).ok(),
+            status: row.get(6).ok(),
+        };
+
+        let mut pr = state
+            .db
+            .query(
+                "SELECT a.id, a.full_name FROM competition_participants cp \
+                 JOIN athletes a ON a.id = cp.athlete_id \
+                 WHERE cp.competition_id = ?1 \
+                 ORDER BY a.full_name ASC",
+                [cid.clone()],
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        let mut participants = Vec::new();
+        while let Some(r) = pr
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        {
+            participants.push(ParticipantBrief {
+                athlete_id: r.get(0).unwrap(),
+                full_name: r.get(1).unwrap(),
+            });
+        }
+
+        entries.push(MyCalendarEntry {
+            competition,
+            participants,
+        });
+    }
+
+    Ok(Json(MyCalendarResponse { entries }))
+}

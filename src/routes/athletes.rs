@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::api_error::{api_error, ApiError};
 use crate::state::AppState;
 use crate::models::Athlete;
-use crate::middleware::auth::{RequireAdminOrSuperAdmin, Claims};
+use crate::middleware::auth::{RequireAdminOrSuperAdmin, RequireTrainerOrHigher, Claims};
 use crate::sql_row;
 use argon2::PasswordHasher;
 
@@ -68,7 +68,7 @@ pub struct UpdateAthleteRequest {
 
 pub async fn list_athletes(
     State(state): State<AppState>,
-    _auth: RequireAdminOrSuperAdmin,
+    _auth: RequireTrainerOrHigher,
 ) -> Result<Json<Vec<Athlete>>, ApiError> {
     let mut rows = state
         .db

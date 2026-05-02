@@ -68,10 +68,24 @@ impl FromRequestParts<AppState> for RequireAdminOrSuperAdmin {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
         let claims = Claims::from_request_parts(parts, state).await?;
-        if claims.role != Role::Admin && claims.role != Role::SuperAdmin {
-            return Err(api_error(StatusCode::FORBIDDEN, "Requires Admin or SuperAdmin role"));
+        if claims.role != Role::Admin && claims.role != Role::SuperAdmin && claims.role != Role::TrainerAdmin {
+            return Err(api_error(StatusCode::FORBIDDEN, "Requires Admin, TrainerAdmin or SuperAdmin role"));
         }
         Ok(RequireAdminOrSuperAdmin(claims))
+    }
+}
+
+pub struct RequireTrainerOrHigher(pub Claims);
+
+impl FromRequestParts<AppState> for RequireTrainerOrHigher {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let claims = Claims::from_request_parts(parts, state).await?;
+        if !matches!(claims.role, Role::Trainer | Role::TrainerAdmin | Role::Admin | Role::SuperAdmin) {
+            return Err(api_error(StatusCode::FORBIDDEN, "Requires Trainer or higher role"));
+        }
+        Ok(RequireTrainerOrHigher(claims))
     }
 }
 
