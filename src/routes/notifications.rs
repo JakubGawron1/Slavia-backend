@@ -5,6 +5,7 @@ use axum::{
 };
 use libsql::Row;
 use serde::Serialize;
+use serde_json::json;
 
 use crate::api_error::{api_error, ApiError};
 use crate::middleware::auth::Claims;
@@ -63,7 +64,7 @@ pub async fn delete_my_notification(
     State(state): State<AppState>,
     Path(id): Path<String>,
     claims: Claims,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let n = state
         .db
         .execute(
@@ -77,5 +78,5 @@ pub async fn delete_my_notification(
         return Err(api_error(StatusCode::NOT_FOUND, "Powiadomienie nie znalezione"));
     }
 
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(json!({ "ok": true })))
 }

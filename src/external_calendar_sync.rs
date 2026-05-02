@@ -14,6 +14,8 @@ pub struct SyncExternalResponse {
     pub pzpc_imported: usize,
     pub pc_imported: usize,
     pub upserts: usize,
+    /// Usunięte rekordy importowane (`external_source`), których rok daty nie mieści się w [bieżący, następny].
+    pub stale_external_removed: u64,
 }
 
 struct UpsertRow {
@@ -62,6 +64,15 @@ fn first_day_from_span(inner: &str) -> Option<u32> {
 
 fn ymd(year: i32, month: u32, day: u32) -> String {
     format!("{:04}-{:02}-{:02}", year, month, day)
+}
+
+/// Import zewnętrzny: tylko bieżący rok kalendarzowy i następny (np. zawody już zapowiedziane).
+fn event_year_in_current_or_next(date_yyyy_mm_dd: &str, year_now: i32) -> bool {
+    let y: i32 = match date_yyyy_mm_dd.get(0..4).and_then(|s| s.parse().ok()) {
+        Some(v) => v,
+        None => return false,
+    };
+    y == year_now || y == year_now + 1
 }
 
 fn location_from_title(title: &str) -> String {
@@ -197,6 +208,23 @@ fn parse_pc_json(body: &str) -> Result<Vec<UpsertRow>, ApiError> {
     Ok(out)
 }
 
+/// Rekordy źródeł zewnętrznych poza oknem roku [year_now, year_now + 1] (wg `SUBSTR(date,1,4)`).
+async fn delete_stale_external_competitions(
+    conn: &Connection,
+    year_now: i32,
+) -> Result<u64, libsql::Error> {
+    let year_max = year_now + 1;
+    conn.execute(
+        "DELETE FROM competitions \
+         WHERE external_source IS NOT NULL AND TRIM(COALESCE(external_source, '')) != '' \
+           AND (LENGTH(date) < 10 \
+             OR CAST(SUBSTR(date, 1, 4) AS INTEGER) < ?1 \
+             OR CAST(SUBSTR(date, 1, 4) AS INTEGER) > ?2)",
+        (year_now, year_max),
+    )
+    .await
+}
+
 async fn upsert_external_row(conn: &Connection, row: UpsertRow) -> Result<(), libsql::Error> {
     let mut existing = conn
         .query(
@@ -259,10 +287,15 @@ pub async fn run_sync(conn: &Connection) -> Result<SyncExternalResponse, ApiErro
         .await
         .map_err(|e| api_error(StatusCode::BAD_GATEWAY, format!("PZPC body: {}", e)))?;
 
-    let pzpc_rows = parse_pzpc(&pzpc_html)?;
-
     let year_now = chrono::Utc::now().date_naive().year();
-    let years = [year_now - 1, year_now, year_now + 1];
+
+    let pzpc_rows: Vec<UpsertRow> = parse_pzpc(&pzpc_html)?
+        .into_iter()
+        .filter(|r| event_year_in_current_or_next(&r.date, year_now))
+        .collect();
+
+    // Tylko rok bieżący i następny — bez ubiegłych kalendarzy z PC JSON.
+    let years = [year_now, year_now + 1];
     let mut pc_rows = Vec::new();
     for y in years {
         let url = format!("https://podnoszenieciezarow.pl/kalendarz/events?year={}", y);
@@ -274,8 +307,12 @@ pub async fn run_sync(conn: &Connection) -> Result<SyncExternalResponse, ApiErro
             .text()
             .await
             .map_err(|e| api_error(StatusCode::BAD_GATEWAY, format!("PC body {}: {}", y, e)))?;
-        let mut chunk = parse_pc_json(&body)?;
-        pc_rows.append(&mut chunk);
+        let chunk = parse_pc_json(&body)?;
+        pc_rows.extend(
+            chunk
+                .into_iter()
+                .filter(|r| event_year_in_current_or_next(&r.date, year_now)),
+        );
     }
 
     let pzpc_n = pzpc_rows.len();
@@ -295,9 +332,14 @@ pub async fn run_sync(conn: &Connection) -> Result<SyncExternalResponse, ApiErro
         upserts += 1;
     }
 
+    let stale_external_removed = delete_stale_external_competitions(conn, year_now)
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
     Ok(SyncExternalResponse {
         pzpc_imported: pzpc_n,
         pc_imported: pc_n,
         upserts,
+        stale_external_removed,
     })
 }
