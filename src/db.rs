@@ -6,12 +6,79 @@
 //! **Nie ustawiaj `REBUILD_DB=true` na produkcji** — to wywołuje `reset_database`: DROP wszystkich tabel
 //! i `seed_data` od zera (trwałe skasowanie danych). Backupy Turso: eksport z panelu / `turso db shell .dump`.
 //!
+//! Przy zwykłym starcie (bez `REBUILD_DB`) po migracjach wywoływane jest jednorazowe
+//! `sync_all_athletes_bests_from_results`: pola `athletes.best_*` / `total_kg` ustawiane z najlepszego
+//! **zatwierdzonego** wiersza w `results` (jak przy akceptacji wyniku). Ścieżka rebuild nie uruchamia
+//! tej synchronizacji — seed może zostawiać ręczne rekordy do czasu dodania wyników.
+//!
 use libsql::Connection;
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
     Argon2,
 };
 use uuid::Uuid;
+
+/// Najlepszy zatwierdzony start (max `total`, przy remisie nowsza `date`) → rekord zawodnika.
+pub async fn sync_athlete_bests_from_approved_conn(
+    conn: &Connection,
+    athlete_id: &str,
+) -> Result<(), libsql::Error> {
+    let mut rows = conn
+        .query(
+            "SELECT snatch, clean_and_jerk, total FROM results \
+             WHERE athlete_id = ?1 AND status = 'Approved' \
+             ORDER BY total DESC, date DESC LIMIT 1",
+            [athlete_id.to_string()],
+        )
+        .await?;
+
+    let row = rows.next().await?;
+
+    match row {
+        Some(r) => {
+            let snatch: f64 = r.get(0)?;
+            let clean_and_jerk: f64 = r.get(1)?;
+            let total: f64 = r.get(2)?;
+            conn.execute(
+                "UPDATE athletes SET best_snatch_kg = ?1, best_clean_jerk_kg = ?2, total_kg = ?3 WHERE id = ?4",
+                (snatch, clean_and_jerk, total, athlete_id.to_string()),
+            )
+            .await?;
+        }
+        None => {
+            conn.execute(
+                "UPDATE athletes SET best_snatch_kg = NULL, best_clean_jerk_kg = NULL, total_kg = NULL WHERE id = ?1",
+                [athlete_id.to_string()],
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Migracja przy starcie: wszystkie wiersze `athletes` — `best_*` wyłącznie z tabeli `results` (Approved).
+pub async fn sync_all_athletes_bests_from_results(conn: &Connection) -> Result<u64, libsql::Error> {
+    conn.execute(
+        "UPDATE athletes SET \
+           best_snatch_kg = ( \
+             SELECT r.snatch FROM results r \
+             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' \
+             ORDER BY r.total DESC, r.date DESC LIMIT 1 \
+           ), \
+           best_clean_jerk_kg = ( \
+             SELECT r.clean_and_jerk FROM results r \
+             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' \
+             ORDER BY r.total DESC, r.date DESC LIMIT 1 \
+           ), \
+           total_kg = ( \
+             SELECT r.total FROM results r \
+             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' \
+             ORDER BY r.total DESC, r.date DESC LIMIT 1 \
+           )",
+        (),
+    )
+    .await
+}
 
 pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Ustaw w `.env`: REBUILD_DB=true (jednorazowo, tylko dev), potem false — patrz `.env.example`
@@ -125,6 +192,14 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
     let _ = conn
         .execute("ALTER TABLE users ADD COLUMN avatar_url TEXT", ())
         .await;
+
+    let n = sync_all_athletes_bests_from_results(conn)
+        .await
+        .map_err(|e| format!("sync_all_athletes_bests_from_results: {e}"))?;
+    println!(
+        "📊 Migracja: athletes.best_* / total_kg ← najlepszy wynik Approved z `results` (sqlite changes={}).",
+        n
+    );
 
     Ok(())
 }

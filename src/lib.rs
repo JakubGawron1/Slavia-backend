@@ -95,6 +95,10 @@ pub async fn create_app(
     let results_routes = Router::new()
         .route("/all", get(routes::results::list_all_results_staff))
         .route("/pending", get(routes::results::list_pending_results))
+        .route(
+            "/athlete/{id}/submissions",
+            get(routes::results::list_athlete_result_submissions),
+        )
         .route("/athlete/{id}", get(routes::results::list_athlete_results))
         .route("/{id}/approve", patch(routes::results::approve_result))
         .route(
