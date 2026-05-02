@@ -228,6 +228,12 @@ pub async fn sync_external_competitions(
     _auth: RequireTrainerOrHigher,
 ) -> Result<Json<external_calendar_sync::SyncExternalResponse>, ApiError> {
     let r = external_calendar_sync::run_sync(state.db.as_ref()).await?;
-    notifications::notify_competitions_synced(&state, r.pzpc_imported, r.pc_imported, r.upserts);
+    notifications::notify_competitions_synced(
+        &state,
+        r.pzpc_imported,
+        r.pc_imported,
+        r.upserts,
+        r.stale_external_removed,
+    );
     Ok(Json(r))
 }

@@ -468,14 +468,20 @@ pub fn notify_competition_roster_updated(state: &AppState, competition_id: &str,
     });
 }
 
-pub fn notify_competitions_synced(state: &AppState, pzpc: usize, pc: usize, upserts: usize) {
+pub fn notify_competitions_synced(
+    state: &AppState,
+    pzpc: usize,
+    pc: usize,
+    upserts: usize,
+    stale_removed: u64,
+) {
     let st = state.clone();
     spawn_notify(async move {
         let conn = st.db.as_ref();
         let title = "Synchronizacja kalendarza";
         let body = format!(
-            "Zsynchronizowano zawody zewnętrzne (PZPC: {}, PC: {}, zmian w bazie: {}).",
-            pzpc, pc, upserts
+            "Zsynchronizowano zawody zewnętrzne (PZPC: {}, PC: {}, zmian w bazie: {}). Usunięto przeterminowane importy: {}.",
+            pzpc, pc, upserts, stale_removed
         );
         for uid in trainer_staff_ids(conn).await? {
             insert_notification(conn, &uid, "competitions_synced", title, &body, None).await?;
