@@ -10,7 +10,7 @@ path = "src/lib.rs"
 [dependencies]
 argon2 = "0.5.3"
 axum = { version = "0.8.9", features = ["macros", "multipart"] }
-chrono = { version = "0.4.44", default-features = false, features = ["std", "serde", "clock"] }
+chrono = { version = "0.4.44", default-features = false, features = ["std", "clock"] }
 jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 libsql = "0.9.30"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -19,11 +19,15 @@ dotenvy = "0.15.7"
 toml = "0.8.22"
 tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "net"] }
 tower-http = { version = "0.6.8", features = ["cors"] }
-uuid = { version = "1.23.1", features = ["v4", "serde"] }
+uuid = { version = "1.23.1", features = ["v4"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 sha1 = "0.10.6"
 hex = "0.4.3"
 regex = "1.11"
+
+# Szybsze inkrementalne buildy dev na Windows: mniejszy PDB niż domyślny full debug — nadal sensowny stack trace.
+[profile.dev]
+debug = "line-tables-only"
 
 # Szybsza kompilacja `--release` na CI (np. Leapcell): bez pełnego LTO, więcej jednostek codegen.
 # Koszt: nieco mniejsza optymalizacja runtime niż domyślny release (zwykle akceptowalne dla API).
