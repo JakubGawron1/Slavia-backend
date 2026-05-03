@@ -88,6 +88,11 @@ pub struct UserInfo {
     pub email: Option<String>,
     pub role: Role,
     pub avatar_url: Option<String>,
+    /// Preset kolorystyczny (`slavia`, `iron`, …) — zapisany na koncie.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_theme_preset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_color_mode: Option<String>,
 }
 
 pub async fn me_handler(
@@ -96,7 +101,10 @@ pub async fn me_handler(
 ) -> Result<Json<UserInfo>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT username, email, avatar_url FROM users WHERE id = ?1", [claims.sub.clone()])
+        .query(
+            "SELECT username, email, avatar_url, ui_theme_preset, ui_color_mode FROM users WHERE id = ?1",
+            [claims.sub.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -106,6 +114,8 @@ pub async fn me_handler(
     let username: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let email: Option<String> = row.get(1).ok();
     let avatar_url: Option<String> = row.get(2).ok();
+    let ui_theme_preset: Option<String> = row.get(3).ok();
+    let ui_color_mode: Option<String> = row.get(4).ok();
 
     Ok(Json(UserInfo {
         id: claims.sub,
@@ -113,5 +123,7 @@ pub async fn me_handler(
         email,
         role: claims.role,
         avatar_url,
+        ui_theme_preset,
+        ui_color_mode,
     }))
 }

@@ -98,7 +98,9 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             email TEXT UNIQUE,
             password_hash TEXT NOT NULL,
             role TEXT NOT NULL,
-            avatar_url TEXT
+            avatar_url TEXT,
+            ui_theme_preset TEXT,
+            ui_color_mode TEXT
         )",
         "CREATE TABLE IF NOT EXISTS athletes (
             id TEXT PRIMARY KEY,
@@ -152,7 +154,8 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             content TEXT NOT NULL,
             author_id TEXT NOT NULL REFERENCES users(id),
             image_url TEXT,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            published INTEGER NOT NULL DEFAULT 1
         )",
         "CREATE TABLE IF NOT EXISTS training_log_entries (
             id TEXT PRIMARY KEY,
@@ -207,6 +210,20 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         .await;
 
     let _ = conn
+        .execute("ALTER TABLE users ADD COLUMN ui_theme_preset TEXT", ())
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE users ADD COLUMN ui_color_mode TEXT", ())
+        .await;
+
+    let _ = conn
+        .execute(
+            "ALTER TABLE posts ADD COLUMN published INTEGER NOT NULL DEFAULT 1",
+            (),
+        )
+        .await;
+
+    let _ = conn
         .execute("ALTER TABLE competitions ADD COLUMN external_source TEXT", ())
         .await;
     let _ = conn
@@ -255,7 +272,9 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             email TEXT UNIQUE,
             password_hash TEXT NOT NULL,
             role TEXT NOT NULL,
-            avatar_url TEXT
+            avatar_url TEXT,
+            ui_theme_preset TEXT,
+            ui_color_mode TEXT
         )",
         "CREATE TABLE IF NOT EXISTS athletes (
             id TEXT PRIMARY KEY,
@@ -309,7 +328,8 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             content TEXT NOT NULL,
             author_id TEXT NOT NULL REFERENCES users(id),
             image_url TEXT,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            published INTEGER NOT NULL DEFAULT 1
         )",
         "CREATE TABLE IF NOT EXISTS training_log_entries (
             id TEXT PRIMARY KEY,
@@ -415,7 +435,7 @@ async fn seed_data(conn: &Connection) -> Result<(), Box<dyn std::error::Error + 
 
     // 5. Posts
     conn.execute(
-        "INSERT INTO posts (id, title, content, author_id, image_url, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO posts (id, title, content, author_id, image_url, created_at, published) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)",
         (Uuid::new_v4().to_string(), "Nowa strona klubu!", "Witajcie w nowym systemie. Cieszcie się pięknym designem i nowymi funkcjami!", super_id, Some("https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/landscapes/nature-mountains".to_string()), "2026-05-01T09:00:00Z"),
     ).await?;
 

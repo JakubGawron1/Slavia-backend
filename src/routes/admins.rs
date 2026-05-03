@@ -28,11 +28,13 @@ pub struct UpdateUserRoleRequest {
     pub role: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct UpdateProfileRequest {
     pub email: Option<String>,
     pub password: Option<String>,
     pub avatar_url: Option<String>,
+    pub ui_theme_preset: Option<String>,
+    pub ui_color_mode: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -478,6 +480,67 @@ pub async fn update_profile(
             )
             .await
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+
+    if let Some(raw) = &payload.ui_theme_preset {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            state
+                .db
+                .execute(
+                    "UPDATE users SET ui_theme_preset = NULL WHERE id = ?1",
+                    [claims.sub.clone()],
+                )
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        } else {
+            const ALLOW_PRESET: &[&str] =
+                &["slavia", "iron", "arena", "platform", "midnight", "ruby"];
+            if !ALLOW_PRESET.contains(&trimmed) {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    "Invalid ui_theme_preset",
+                ));
+            }
+            state
+                .db
+                .execute(
+                    "UPDATE users SET ui_theme_preset = ?1 WHERE id = ?2",
+                    (trimmed.to_string(), claims.sub.clone()),
+                )
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+    }
+
+    if let Some(raw) = &payload.ui_color_mode {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            state
+                .db
+                .execute(
+                    "UPDATE users SET ui_color_mode = NULL WHERE id = ?1",
+                    [claims.sub.clone()],
+                )
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        } else {
+            const ALLOW_MODE: &[&str] = &["light", "dark", "system"];
+            if !ALLOW_MODE.contains(&trimmed) {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    "Invalid ui_color_mode",
+                ));
+            }
+            state
+                .db
+                .execute(
+                    "UPDATE users SET ui_color_mode = ?1 WHERE id = ?2",
+                    (trimmed.to_string(), claims.sub.clone()),
+                )
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
     }
     
     Ok(StatusCode::OK)

@@ -94,10 +94,23 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
 
     let posts_routes = Router::new()
         .route(
-            "/",
-            get(routes::posts::list_posts).post(routes::posts::create_post),
+            "/manage",
+            get(routes::posts::list_posts_manage),
         )
-        .route("/{id}", get(routes::posts::get_post).delete(routes::posts::delete_post));
+        .route(
+            "/manage/{id}",
+            get(routes::posts::get_post_manage),
+        )
+        .route(
+            "/",
+            get(routes::posts::list_posts_public).post(routes::posts::create_post),
+        )
+        .route(
+            "/{id}",
+            get(routes::posts::get_post_public)
+                .patch(routes::posts::update_post)
+                .delete(routes::posts::delete_post),
+        );
 
     let notifications_routes = Router::new()
         .route("/{id}", delete(routes::notifications::delete_my_notification))
