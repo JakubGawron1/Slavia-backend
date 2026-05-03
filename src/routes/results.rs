@@ -11,8 +11,8 @@ use libsql::Row;
 use crate::api_error::{api_error, ApiError};
 use crate::db;
 use crate::state::AppState;
-use crate::models::{CompetitionResult, ResultStatus, Role};
-use crate::middleware::auth::{Claims, RequireTrainerOrHigher};
+use crate::models::{CompetitionResult, PublicResultBoardRow, ResultStatus, Role};
+use crate::middleware::auth::{claims_has_staff_access, claims_is_pure_athlete, Claims, RequireTrainerOrHigher};
 use crate::sql_row;
 
 pub(crate) async fn sync_athlete_bests_from_approved(
@@ -45,47 +45,49 @@ async fn ensure_can_view_athlete_submissions(
     claims: &Claims,
     athlete_id: &str,
 ) -> Result<(), ApiError> {
-    match claims.role {
-        Role::Trainer | Role::TrainerAdmin | Role::Admin | Role::SuperAdmin => {
-            let mut rows = state
-                .db
-                .query("SELECT id FROM athletes WHERE id = ?1", [athlete_id.to_string()])
-                .await
-                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            if rows
-                .next()
-                .await
-                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-                .is_none()
-            {
-                return Err(api_error(StatusCode::NOT_FOUND, "Athlete not found"));
-            }
-            Ok(())
+    if claims_has_staff_access(claims) {
+        let mut rows = state
+            .db
+            .query("SELECT id FROM athletes WHERE id = ?1", [athlete_id.to_string()])
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if rows
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .is_none()
+        {
+            return Err(api_error(StatusCode::NOT_FOUND, "Athlete not found"));
         }
-        Role::Athlete => {
-            let mut rows = state
-                .db
-                .query(
-                    "SELECT id FROM athletes WHERE id = ?1 AND user_id = ?2",
-                    (athlete_id.to_string(), claims.sub.clone()),
-                )
-                .await
-                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-            if rows
-                .next()
-                .await
-                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-                .is_none()
-            {
-                return Err(api_error(
-                    StatusCode::FORBIDDEN,
-                    "You can only view your own submissions",
-                ));
-            }
-            Ok(())
-        }
+        return Ok(());
     }
+    if claims.roles.contains(&Role::Athlete) {
+        let mut rows = state
+            .db
+            .query(
+                "SELECT id FROM athletes WHERE id = ?1 AND user_id = ?2",
+                (athlete_id.to_string(), claims.sub.clone()),
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        if rows
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .is_none()
+        {
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "You can only view your own submissions",
+            ));
+        }
+        return Ok(());
+    }
+    Err(api_error(
+        StatusCode::FORBIDDEN,
+        "Insufficient permissions to view submissions",
+    ))
 }
 
 fn competition_result_from_row(row: &Row) -> Result<CompetitionResult, String> {
@@ -111,6 +113,44 @@ pub struct CreateResultRequest {
     pub clean_and_jerk: f64,
     pub total: f64,
     pub date: String,
+}
+
+/// Publiczna tablica wyników z imieniem zawodnika i nazwą zawodów (tylko odczyt).
+pub async fn list_public_results_board(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<PublicResultBoardRow>>, ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT r.id, r.athlete_id, a.full_name, r.competition_id, c.title, \
+             r.snatch, r.clean_and_jerk, r.total, r.date \
+             FROM results r \
+             INNER JOIN athletes a ON a.id = r.athlete_id \
+             LEFT JOIN competitions c ON c.id = r.competition_id \
+             WHERE r.status = 'Approved' \
+             ORDER BY r.date DESC, r.total DESC",
+            (),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+        let competition_title = sql_row::opt_string(&row, 4).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        out.push(PublicResultBoardRow {
+            id: sql_row::required_string(&row, 0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_id: sql_row::required_string(&row, 1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_name: sql_row::required_string(&row, 2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            competition_id: sql_row::opt_string(&row, 3).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            competition_title,
+            snatch: sql_row::required_f64(&row, 5).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            clean_and_jerk: sql_row::required_f64(&row, 6).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            total: sql_row::required_f64(&row, 7).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            date: sql_row::required_string(&row, 8).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+        });
+    }
+
+    Ok(Json(out))
 }
 
 pub async fn list_approved_results(
@@ -210,15 +250,18 @@ pub async fn create_result(
     claims: Claims, // Must be authenticated
     Json(payload): Json<CreateResultRequest>,
 ) -> Result<Json<CompetitionResult>, ApiError> {
-    let status = match claims.role {
-        Role::Admin
-        | Role::SuperAdmin
-        | Role::TrainerAdmin
-        | Role::Trainer => ResultStatus::Approved,
-        Role::Athlete => ResultStatus::Pending,
+    let status = if claims_has_staff_access(&claims) {
+        ResultStatus::Approved
+    } else if claims.roles.contains(&Role::Athlete) {
+        ResultStatus::Pending
+    } else {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Insufficient role to create results",
+        ));
     };
 
-    if claims.role == Role::Athlete {
+    if claims_is_pure_athlete(&claims) {
         let mut rows = state.db.query("SELECT id FROM athletes WHERE user_id = ?1", [claims.sub])
             .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         if let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {

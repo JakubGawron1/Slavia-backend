@@ -1,5 +1,6 @@
 //! Współdzielona logika HTTP — używana przez `main` (Axum/Tokio) i testy.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -20,20 +21,43 @@ mod external_calendar_sync;
 
 use state::AppState;
 
-/// Buduje router Axum (Turso/libsql + JWT). Bez `Box::pin` — mniejsze ryzyko problemów ze stosem na Windows.
+/// Skąd brać bazę: lokalny plik SQLite (dev) albo Turso przez HTTP (`new_remote`).
+#[derive(Debug, Clone)]
+pub enum DatabaseBackend {
+    Local(PathBuf),
+    Remote {
+        url: String,
+        auth_token: String,
+    },
+}
+
+async fn connect_database(
+    backend: DatabaseBackend,
+) -> Result<libsql::Connection, Box<dyn std::error::Error + Send + Sync>> {
+    match backend {
+        DatabaseBackend::Local(path) => {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            let db = libsql::Builder::new_local(path).build().await?;
+            Ok(db.connect()?)
+        }
+        DatabaseBackend::Remote { url, auth_token } => {
+            let db = libsql::Builder::new_remote(url, auth_token).build().await?;
+            Ok(db.connect()?)
+        }
+    }
+}
+
+/// Buduje router Axum (libsql: SQLite lokalnie lub Turso zdalnie + JWT).
 pub async fn create_app(
-    db_url: &str,
-    db_token: &str,
+    database: DatabaseBackend,
     jwt_secret: String,
     cloudinary_cloud_name: String,
     cloudinary_api_key: String,
     cloudinary_api_secret: String,
 ) -> Result<axum::Router, Box<dyn std::error::Error + Send + Sync>> {
-    let client = libsql::Builder::new_remote(db_url.to_string(), db_token.to_string())
-        .build()
-        .await?;
-
-    let conn = client.connect()?;
+    let conn = connect_database(database).await?;
 
     db::init_db(&conn).await?;
 

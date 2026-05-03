@@ -8,7 +8,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::api_error::{api_error, ApiError};
-use crate::middleware::auth::Claims;
+use crate::middleware::auth::{claims_has_staff_access, claims_is_pure_athlete, Claims};
 use crate::models::{Role, TrainingLogEntry};
 use crate::state::AppState;
 
@@ -76,20 +76,22 @@ async fn ensure_can_read_training_log(
     claims: &Claims,
     athlete_id: &str,
 ) -> Result<(), ApiError> {
-    match claims.role {
-        Role::Trainer | Role::TrainerAdmin | Role::Admin | Role::SuperAdmin => {
-            ensure_athlete_exists(state, athlete_id).await
-        }
-        Role::Athlete => {
-            ensure_self_training_log_access(
-                state,
-                claims,
-                athlete_id,
-                "You can only read your own training diary",
-            )
-            .await
-        }
+    if claims_has_staff_access(claims) {
+        return ensure_athlete_exists(state, athlete_id).await;
     }
+    if claims.roles.contains(&Role::Athlete) {
+        return ensure_self_training_log_access(
+            state,
+            claims,
+            athlete_id,
+            "You can only read your own training diary",
+        )
+        .await;
+    }
+    Err(api_error(
+        StatusCode::FORBIDDEN,
+        "Insufficient permissions to read training log",
+    ))
 }
 
 /// Tworzenie / zmiana / usuwanie wpisów: kadra (dowolny zawodnik) albo zawodnik wyłącznie we własnym dzienniku.
@@ -98,25 +100,27 @@ async fn ensure_can_write_training_log(
     claims: &Claims,
     athlete_id: &str,
 ) -> Result<(), ApiError> {
-    match claims.role {
-        Role::Trainer | Role::TrainerAdmin | Role::Admin | Role::SuperAdmin => {
-            ensure_athlete_exists(state, athlete_id).await
-        }
-        Role::Athlete => {
-            ensure_self_training_log_access(
-                state,
-                claims,
-                athlete_id,
-                "You can only edit your own training diary",
-            )
-            .await
-        }
+    if claims_has_staff_access(claims) {
+        return ensure_athlete_exists(state, athlete_id).await;
     }
+    if claims.roles.contains(&Role::Athlete) {
+        return ensure_self_training_log_access(
+            state,
+            claims,
+            athlete_id,
+            "You can only edit your own training diary",
+        )
+        .await;
+    }
+    Err(api_error(
+        StatusCode::FORBIDDEN,
+        "Insufficient permissions to edit training log",
+    ))
 }
 
 /// Zawodnik może zmieniać lub usuwać wyłącznie wpisy utworzone przez siebie (`author_user_id`).
 fn ensure_athlete_only_own_entries(claims: &Claims, entry: &TrainingLogEntry) -> Result<(), ApiError> {
-    if claims.role != Role::Athlete {
+    if !claims_is_pure_athlete(claims) {
         return Ok(());
     }
     match entry.author_user_id.as_deref() {
@@ -233,26 +237,23 @@ pub async fn create_training_log(
         .unwrap_or_else(|| "Zawodnik".to_string());
     let author_label = username.as_deref().unwrap_or("Użytkownik");
 
-    match claims.role {
-        Role::Athlete => {
-            crate::notifications::notify_training_log_athlete_note(
-                &state,
-                &athlete_id,
-                &athlete_display,
-                author_label,
-                session_date,
-                notes,
-            );
-        }
-        _ => {
-            crate::notifications::notify_training_log_trainer_note(
-                &state,
-                &athlete_id,
-                Some(author_label),
-                session_date,
-                notes,
-            );
-        }
+    if claims_is_pure_athlete(&claims) {
+        crate::notifications::notify_training_log_athlete_note(
+            &state,
+            &athlete_id,
+            &athlete_display,
+            author_label,
+            session_date,
+            notes,
+        );
+    } else {
+        crate::notifications::notify_training_log_trainer_note(
+            &state,
+            &athlete_id,
+            Some(author_label),
+            session_date,
+            notes,
+        );
     }
 
     Ok(Json(TrainingLogEntry {

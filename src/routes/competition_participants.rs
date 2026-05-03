@@ -333,7 +333,7 @@ pub async fn my_calendar_for_athlete(
     State(state): State<AppState>,
     claims: Claims,
 ) -> Result<Json<MyCalendarResponse>, ApiError> {
-    if claims.role != Role::Athlete {
+    if !claims.roles.contains(&Role::Athlete) {
         return Err(api_error(
             StatusCode::FORBIDDEN,
             "Only athletes can use this endpoint",

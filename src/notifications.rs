@@ -6,6 +6,7 @@ use chrono::Utc;
 use libsql::Connection;
 use uuid::Uuid;
 
+use crate::models::Role;
 use crate::state::AppState;
 
 pub async fn insert_notification(
@@ -46,42 +47,48 @@ where
 }
 
 pub async fn superadmin_ids(conn: &Connection) -> Result<Vec<String>, libsql::Error> {
-    let mut rows = conn
-        .query("SELECT id FROM users WHERE role = 'SuperAdmin'", ())
-        .await?;
+    let mut rows = conn.query("SELECT id, roles FROM users", ()).await?;
     let mut out = Vec::new();
     while let Some(row) = rows.next().await? {
-        out.push(row.get(0)?);
+        let id: String = row.get(0)?;
+        let roles_json: String = row.get(1)?;
+        let roles: Vec<Role> = serde_json::from_str(&roles_json).unwrap_or_default();
+        if roles.contains(&Role::SuperAdmin) {
+            out.push(id);
+        }
     }
     Ok(out)
 }
 
 /// Trenerzy i wyżej — m.in. zgłoszenia wyników, wpisy zawodników w dzienniku, zawody.
 pub async fn trainer_staff_ids(conn: &Connection) -> Result<Vec<String>, libsql::Error> {
-    let mut rows = conn
-        .query(
-            "SELECT id FROM users WHERE role IN ('Trainer', 'TrainerAdmin', 'Admin', 'SuperAdmin')",
-            (),
-        )
-        .await?;
+    let mut rows = conn.query("SELECT id, roles FROM users", ()).await?;
     let mut out = Vec::new();
     while let Some(row) = rows.next().await? {
-        out.push(row.get(0)?);
+        let id: String = row.get(0)?;
+        let roles_json: String = row.get(1)?;
+        let roles: Vec<Role> = serde_json::from_str(&roles_json).unwrap_or_default();
+        if roles
+            .iter()
+            .any(|r| matches!(r, Role::Trainer | Role::Admin | Role::SuperAdmin))
+        {
+            out.push(id);
+        }
     }
     Ok(out)
 }
 
-/// Kadra administracyjna (bez zwykłego Trenera).
+/// Kadra administracyjna (bez samego Trenera bez Admina).
 pub async fn admin_staff_ids(conn: &Connection) -> Result<Vec<String>, libsql::Error> {
-    let mut rows = conn
-        .query(
-            "SELECT id FROM users WHERE role IN ('Admin', 'TrainerAdmin', 'SuperAdmin')",
-            (),
-        )
-        .await?;
+    let mut rows = conn.query("SELECT id, roles FROM users", ()).await?;
     let mut out = Vec::new();
     while let Some(row) = rows.next().await? {
-        out.push(row.get(0)?);
+        let id: String = row.get(0)?;
+        let roles_json: String = row.get(1)?;
+        let roles: Vec<Role> = serde_json::from_str(&roles_json).unwrap_or_default();
+        if roles.iter().any(|r| matches!(r, Role::Admin | Role::SuperAdmin)) {
+            out.push(id);
+        }
     }
     Ok(out)
 }

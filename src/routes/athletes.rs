@@ -7,12 +7,99 @@ use libsql::Row;
 use serde::Deserialize;
 use uuid::Uuid;
 use crate::api_error::{api_error, ApiError};
-use crate::models::Athlete;
+use crate::models::{Athlete, Role};
 use crate::notifications;
 use crate::state::AppState;
-use crate::middleware::auth::{RequireAdminOrSuperAdmin, RequireTrainerOrHigher, Claims};
+use crate::middleware::auth::{
+    forbid_mutating_superadmin_user_record, Claims, RequireAdminOrSuperAdmin, RequireTrainerOrHigher,
+};
+use crate::routes::admins::user_roles_by_id;
 use crate::sql_row;
 use argon2::PasswordHasher;
+
+/// Utworzenie konta (`users`) dla zawodnika — wyłącznie dla Admin / SuperAdmin (wywołanie jest wcześniej chronione).
+async fn insert_athlete_user_account(
+    state: &AppState,
+    username: String,
+    password: String,
+) -> Result<String, ApiError> {
+    let argon2 = argon2::Argon2::default();
+    let salt = argon2::password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
+    let hash = argon2
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .to_string();
+    let uid = Uuid::new_v4().to_string();
+    let roles_json = serde_json::to_string(&vec![Role::Athlete]).map_err(|e| {
+        api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?;
+    state
+        .db
+        .execute(
+            "INSERT INTO users (id, username, password_hash, roles) VALUES (?1, ?2, ?3, ?4)",
+            (uid.clone(), username, hash, roles_json),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("User creation failed: {}", e)))?;
+    Ok(uid)
+}
+
+fn claims_may_create_athlete_user_account(claims: &Claims) -> bool {
+    claims
+        .roles
+        .iter()
+        .any(|r| matches!(r, Role::Admin | Role::SuperAdmin))
+}
+
+/// Jeśli podano login: Admin/SuperAdmin tworzy konto; sam trener — wysyła prośbę do administratorów (bez tworzenia `users`).
+async fn try_attach_athlete_login_or_request(
+    state: &AppState,
+    claims: &Claims,
+    athlete_id: &str,
+    athlete_display_name: &str,
+    username_opt: &Option<String>,
+    password_opt: &Option<String>,
+) -> Result<Option<String>, ApiError> {
+    let Some(u_raw) = username_opt
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(None);
+    };
+    let proposed = u_raw.to_string();
+    if claims_may_create_athlete_user_account(claims) {
+        let password = password_opt
+            .clone()
+            .unwrap_or_else(|| "Slavia2026".to_string());
+        let uid = insert_athlete_user_account(state, proposed, password).await?;
+        Ok(Some(uid))
+    } else {
+        let trainer_name = notifications::username_by_id(state.db.as_ref(), &claims.sub)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "?".to_string());
+        let body = format!(
+            "Trener „{}” poprosił o utworzenie konta logowania dla zawodnika „{}”. Proponowany login: „{}”.",
+            trainer_name, athlete_display_name, proposed
+        );
+        let payload = serde_json::json!({
+            "athlete_id": athlete_id,
+            "requested_by_user_id": claims.sub,
+            "proposed_username": proposed,
+        })
+        .to_string();
+        notifications::notify_admin_broadcast(
+            state,
+            "athlete_account_requested",
+            "Prośba o konto zawodnika",
+            &body,
+            Some(payload),
+        );
+        Ok(None)
+    }
+}
 
 fn athlete_from_row(row: &Row) -> Result<Athlete, libsql::Error> {
     Ok(Athlete {
@@ -106,33 +193,21 @@ pub async fn list_athletes_public(
 
 pub async fn create_athlete(
     State(state): State<AppState>,
-    _auth: RequireAdminOrSuperAdmin,
+    auth: RequireTrainerOrHigher,
     Json(payload): Json<CreateAthleteRequest>,
 ) -> Result<Json<Athlete>, ApiError> {
     let athlete_id = Uuid::new_v4().to_string();
     let total = payload.best_snatch_kg.unwrap_or(0.0) + payload.best_clean_jerk_kg.unwrap_or(0.0);
-    
-    let mut user_id: Option<String> = None;
 
-    // Optional user account creation
-    if let Some(username) = payload.username {
-        if !username.trim().is_empty() {
-            let password = payload.password.unwrap_or_else(|| "Slavia2026".to_string());
-            let argon2 = argon2::Argon2::default();
-            let salt = argon2::password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
-            let hash = argon2.hash_password(password.as_bytes(), &salt)
-                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-                .to_string();
-            
-            let uid = Uuid::new_v4().to_string();
-            state.db.execute(
-                "INSERT INTO users (id, username, password_hash, role) VALUES (?1, ?2, ?3, 'Athlete')",
-                (uid.clone(), username, hash),
-            ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("User creation failed: {}", e)))?;
-            
-            user_id = Some(uid);
-        }
-    }
+    let user_id = try_attach_athlete_login_or_request(
+        &state,
+        &auth.0,
+        &athlete_id,
+        &payload.full_name,
+        &payload.username,
+        &payload.password,
+    )
+    .await?;
 
     let is_active = payload.is_active.unwrap_or(true);
     state.db.execute(
@@ -168,42 +243,55 @@ pub async fn create_athlete(
 pub async fn update_athlete(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: RequireAdminOrSuperAdmin,
+    auth: RequireTrainerOrHigher,
     Json(payload): Json<UpdateAthleteRequest>,
 ) -> Result<StatusCode, ApiError> {
-    // 1. Get current athlete to check if user_id exists
-    let mut rows = state.db.query("SELECT user_id FROM athletes WHERE id = ?1", [id.clone()])
-        .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+    let mut rows = state
+        .db
+        .query(
+            "SELECT user_id, full_name FROM athletes WHERE id = ?1",
+            [id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
     let mut current_user_id: Option<String> = None;
-    if let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+    let mut existing_full_name: Option<String> = None;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
         current_user_id = row.get(0).ok();
+        existing_full_name = row.get(1).ok();
     }
 
-    // 2. Handle optional account creation
+    let display_name = payload
+        .full_name
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or(existing_full_name.clone())
+        .unwrap_or_else(|| "Zawodnik".to_string());
+
     let mut user_id_to_set = current_user_id.clone();
     if current_user_id.is_none() {
-        if let Some(username) = payload.username {
-            if !username.trim().is_empty() {
-                let password = payload.password.unwrap_or_else(|| "Slavia2026".to_string());
-                let argon2 = argon2::Argon2::default();
-                let salt = argon2::password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
-                let hash = argon2.hash_password(password.as_bytes(), &salt)
-                    .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-                    .to_string();
-                
-                let uid = Uuid::new_v4().to_string();
-                state.db.execute(
-                    "INSERT INTO users (id, username, password_hash, role) VALUES (?1, ?2, ?3, 'Athlete')",
-                    (uid.clone(), username, hash),
-                ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("User creation failed: {}", e)))?;
-                
-                user_id_to_set = Some(uid);
-            }
+        if let Some(uid) = try_attach_athlete_login_or_request(
+            &state,
+            &auth.0,
+            &id,
+            &display_name,
+            &payload.username,
+            &payload.password,
+        )
+        .await?
+        {
+            user_id_to_set = Some(uid);
         }
     }
 
-    // 3. Calculate total
+    // Calculate total
     let snatch = payload.best_snatch_kg.unwrap_or(0.0);
     let cj = payload.best_clean_jerk_kg.unwrap_or(0.0);
     let total = if payload.best_snatch_kg.is_some() || payload.best_clean_jerk_kg.is_some() {
@@ -281,14 +369,21 @@ pub async fn update_athlete(
 pub async fn delete_athlete(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: RequireAdminOrSuperAdmin,
+    auth: RequireAdminOrSuperAdmin,
 ) -> Result<StatusCode, ApiError> {
+    let claims = &auth.0;
     let mut rows = state.db.query("SELECT user_id, full_name FROM athletes WHERE id = ?1", [id.clone()])
         .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     
     if let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
         let user_id: Option<String> = row.get(0).ok();
         let full_name: String = row.get(1).unwrap_or_else(|_| "?".to_string());
+
+        if let Some(ref uid) = user_id {
+            if let Some(roles) = user_roles_by_id(&state, uid).await? {
+                forbid_mutating_superadmin_user_record(claims, &roles)?;
+            }
+        }
         
         state.db.execute("DELETE FROM athletes WHERE id = ?1", [id.clone()])
             .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -341,21 +436,9 @@ pub async fn link_athlete_to_user(
     _auth: RequireAdminOrSuperAdmin,
     Json(payload): Json<LinkUserRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let argon2 = argon2::Argon2::default();
-    let salt = argon2::password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
     let password = payload.password.unwrap_or_else(|| "Slavia2026".to_string());
-    let hash = argon2.hash_password(password.as_bytes(), &salt)
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .to_string();
-
-    let user_id = Uuid::new_v4().to_string();
     let linked_username = payload.username.clone();
-
-    // 1. Create user
-    state.db.execute(
-        "INSERT INTO users (id, username, password_hash, role) VALUES (?1, ?2, ?3, 'Athlete')",
-        (user_id.clone(), payload.username, hash),
-    ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("User creation failed: {}", e)))?;
+    let user_id = insert_athlete_user_account(&state, payload.username, password).await?;
     
     // 2. Link to athlete
     state.db.execute(
