@@ -1,10 +1,27 @@
 /target
+
+# Lokalny SQLite — preferowana ścieżka: `.local/` (patrz `.env.example`)
+.local/
+
+# Zmienne środowiskowe i sekrety (w repo zostają wyłącznie `.env.example`, `Secrets.example.toml`)
 .env
 .env.*
 !.env.example
 Secrets.toml
 *.local.toml
 
+# SQLite — baza robocza i pliki pomocnicze (nie commitujemy dumpów ani kopii z roota projektu)
+*.db
+*.db-shm
+*.db-wal
+
 # Nie commituj haseł ani lokalnych skryptów testowych z credentialami
 passwords.txt
 **/passwords.txt
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

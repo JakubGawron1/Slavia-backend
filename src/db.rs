@@ -12,6 +12,40 @@
 //! tej synchronizacji — seed może zostawiać ręczne rekordy do czasu dodania wyników.
 //!
 use libsql::Connection;
+
+async fn migrate_remove_trainer_admin_role(conn: &Connection) -> Result<u64, String> {
+    let mut rows = conn
+        .query(
+            "SELECT id, roles FROM users WHERE roles IS NOT NULL AND roles LIKE '%TrainerAdmin%'",
+            (),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut updated = 0u64;
+    while let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+        let id: String = row.get(0).map_err(|e| e.to_string())?;
+        let roles_json: String = row.get(1).map_err(|e| e.to_string())?;
+        let Ok(mut roles) = serde_json::from_str::<Vec<String>>(&roles_json) else {
+            continue;
+        };
+        if !roles.iter().any(|r| r == "TrainerAdmin") {
+            continue;
+        }
+        roles.retain(|r| r != "TrainerAdmin");
+        if !roles.iter().any(|r| r == "Admin") {
+            roles.push("Admin".into());
+        }
+        if !roles.iter().any(|r| r == "Trainer") {
+            roles.push("Trainer".into());
+        }
+        let new_json = serde_json::to_string(&roles).map_err(|e| e.to_string())?;
+        conn.execute("UPDATE users SET roles = ?1 WHERE id = ?2", (new_json, id))
+            .await
+            .map_err(|e| e.to_string())?;
+        updated += 1;
+    }
+    Ok(updated)
+}
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
     Argon2,
@@ -97,7 +131,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             username TEXT UNIQUE NOT NULL,
             email TEXT UNIQUE,
             password_hash TEXT NOT NULL,
-            role TEXT NOT NULL,
+            roles TEXT NOT NULL,
             avatar_url TEXT,
             ui_theme_preset TEXT,
             ui_color_mode TEXT
@@ -176,11 +210,58 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             created_at TEXT NOT NULL
         )",
         "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS recurring_training_cancellations (
+            session_date TEXT PRIMARY KEY,
+            cancelled_at TEXT NOT NULL,
+            cancelled_by TEXT REFERENCES users(id),
+            status TEXT NOT NULL DEFAULT 'cancelled'
+        )",
+        "CREATE TABLE IF NOT EXISTS announcements (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            pinned INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            published INTEGER NOT NULL DEFAULT 1,
+            author_id TEXT NOT NULL REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS gallery_photos (
+            id TEXT PRIMARY KEY,
+            image_url TEXT NOT NULL,
+            caption TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            published INTEGER NOT NULL DEFAULT 1,
+            author_id TEXT NOT NULL REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS contact_messages (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            phone TEXT,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0
+        )",
     ];
 
     for sql in create_tables {
         conn.execute(sql, ()).await?;
     }
+
+    let _ = conn
+        .execute(
+            "ALTER TABLE recurring_training_cancellations ADD COLUMN status TEXT DEFAULT 'cancelled'",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
+            "UPDATE recurring_training_cancellations SET status = 'cancelled' WHERE status IS NULL OR trim(status) = ''",
+            (),
+        )
+        .await;
 
     // Migrate: add category and status columns if missing (safe for existing DBs)
     let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category TEXT DEFAULT 'club_event'", ()).await;
@@ -247,6 +328,73 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         n
     );
 
+    // Migracja: role → roles (JSON array) — wyłącznie dla starych baz z kolumną `role`
+    // (świeże instalacje mają od razu `roles`; SELECT role wtedy kończy się błędem „no such column”).
+    let mut pragma = conn
+        .query(
+            "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'role'",
+            (),
+        )
+        .await
+        .map_err(|e| format!("pragma_table_info(users): {e}"))?;
+    let role_column_exists: i64 = pragma
+        .next()
+        .await
+        .map_err(|e| format!("pragma_table_info row: {e}"))?
+        .map(|row| row.get::<i64>(0))
+        .transpose()
+        .map_err(|e| format!("pragma_table_info get: {e}"))?
+        .unwrap_or(0);
+
+    let mut migrated = 0;
+    if role_column_exists > 0 {
+        let mut pragma_roles = conn
+            .query(
+                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'roles'",
+                (),
+            )
+            .await
+            .map_err(|e| format!("pragma_table_info(users) roles: {e}"))?;
+        let roles_column_exists: i64 = pragma_roles
+            .next()
+            .await
+            .map_err(|e| format!("pragma_table_info roles row: {e}"))?
+            .map(|row| row.get::<i64>(0))
+            .transpose()
+            .map_err(|e| format!("pragma_table_info roles get: {e}"))?
+            .unwrap_or(0);
+
+        // Stary schemat: jedna kolumna `role` — dopiero potem dodajemy `roles` i kopiujemy wartości.
+        if roles_column_exists == 0 {
+            conn.execute("ALTER TABLE users ADD COLUMN roles TEXT", ())
+                .await
+                .map_err(|e| format!("ALTER ADD users.roles: {e}"))?;
+        }
+
+        let mut rows = conn
+            .query("SELECT id, role FROM users WHERE role IS NOT NULL", ())
+            .await
+            .map_err(|e| format!("select users for role migration: {e}"))?;
+        while let Some(row) = rows.next().await.map_err(|e| format!("next row: {e}"))? {
+            let id: String = row.get(0).map_err(|e| format!("get id: {e}"))?;
+            let role: String = row.get(1).map_err(|e| format!("get role: {e}"))?;
+            let roles_json = format!("[\"{}\"]", role);
+            conn.execute("UPDATE users SET roles = ?1 WHERE id = ?2", (roles_json, id))
+                .await
+                .map_err(|e| format!("update roles: {e}"))?;
+            migrated += 1;
+        }
+    }
+    println!("🔄 Migracja: users.role → users.roles (JSON array) (migrated {} users).", migrated);
+
+    let trainer_admin_fix = migrate_remove_trainer_admin_role(conn)
+        .await
+        .map_err(|e| format!("migrate_remove_trainer_admin_role: {e}"))?;
+    println!(
+        "🔄 Migracja: TrainerAdmin → Admin + Trainer w JSON roles (zaktualizowano {} kont).",
+        trainer_admin_fix
+    );
+
     Ok(())
 }
 
@@ -255,7 +403,11 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
         "DROP TABLE IF EXISTS notifications",
         "DROP TABLE IF EXISTS results",
         "DROP TABLE IF EXISTS competition_participants",
+        "DROP TABLE IF EXISTS recurring_training_cancellations",
         "DROP TABLE IF EXISTS training_log_entries",
+        "DROP TABLE IF EXISTS contact_messages",
+        "DROP TABLE IF EXISTS gallery_photos",
+        "DROP TABLE IF EXISTS announcements",
         "DROP TABLE IF EXISTS posts",
         "DROP TABLE IF EXISTS competitions",
         "DROP TABLE IF EXISTS athletes",
@@ -271,7 +423,7 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             username TEXT UNIQUE NOT NULL,
             email TEXT UNIQUE,
             password_hash TEXT NOT NULL,
-            role TEXT NOT NULL,
+            roles TEXT NOT NULL,
             avatar_url TEXT,
             ui_theme_preset TEXT,
             ui_color_mode TEXT
@@ -350,6 +502,40 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             created_at TEXT NOT NULL
         )",
         "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS recurring_training_cancellations (
+            session_date TEXT PRIMARY KEY,
+            cancelled_at TEXT NOT NULL,
+            cancelled_by TEXT REFERENCES users(id),
+            status TEXT NOT NULL DEFAULT 'cancelled'
+        )",
+        "CREATE TABLE IF NOT EXISTS announcements (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            pinned INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            published INTEGER NOT NULL DEFAULT 1,
+            author_id TEXT NOT NULL REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS gallery_photos (
+            id TEXT PRIMARY KEY,
+            image_url TEXT NOT NULL,
+            caption TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            published INTEGER NOT NULL DEFAULT 1,
+            author_id TEXT NOT NULL REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS contact_messages (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            phone TEXT,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0
+        )",
     ];
 
     for sql in create_tables {
@@ -381,18 +567,32 @@ async fn seed_data(conn: &Connection) -> Result<(), Box<dyn std::error::Error + 
     let super_hash = argon2.hash_password(super_pass.as_bytes(), &salt).map_err(|e| e.to_string())?.to_string();
     let super_id = Uuid::new_v4().to_string();
     conn.execute(
-        "INSERT INTO users (id, username, email, password_hash, role) VALUES (?1, ?2, ?3, ?4, ?5)",
-        (super_id.clone(), "Slavia", Some("biuro@slavia.pl".to_string()), super_hash, "SuperAdmin"),
-    ).await?;
+        "INSERT INTO users (id, username, email, password_hash, roles) VALUES (?1, ?2, ?3, ?4, ?5)",
+        (
+            super_id.clone(),
+            "Slavia",
+            Some("biuro@slavia.pl".to_string()),
+            super_hash,
+            "[\"SuperAdmin\"]",
+        ),
+    )
+    .await?;
 
     // 2. Jakub Gawron
     let jakub_pass = "Jakubzofia2030?";
     let jakub_hash = argon2.hash_password(jakub_pass.as_bytes(), &salt).map_err(|e| e.to_string())?.to_string();
     let jakub_id = Uuid::new_v4().to_string();
     conn.execute(
-        "INSERT INTO users (id, username, email, password_hash, role) VALUES (?1, ?2, ?3, ?4, ?5)",
-        (jakub_id.clone(), "JakubGawron", Some("jakubgawron.dev.pl@gmail.com".to_string()), jakub_hash, "SuperAdmin"),
-    ).await?;
+        "INSERT INTO users (id, username, email, password_hash, roles) VALUES (?1, ?2, ?3, ?4, ?5)",
+        (
+            jakub_id.clone(),
+            "JakubGawron",
+            Some("jakubgawron.dev.pl@gmail.com".to_string()),
+            jakub_hash,
+            "[\"SuperAdmin\"]",
+        ),
+    )
+    .await?;
 
     conn.execute(
         "INSERT INTO athletes (id, user_id, full_name, birth_year, gender, weight_category, bodyweight, best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, is_active)

@@ -12,7 +12,9 @@ use argon2::{
 
 use crate::api_error::{api_error, ApiError};
 use crate::db;
-use crate::middleware::auth::{Claims, RequireAdminOrSuperAdmin, RequireSuperAdmin};
+use crate::middleware::auth::{
+    forbid_mutating_superadmin_user_record, Claims, RequireAdminOrSuperAdmin, RequireSuperAdmin,
+};
 use crate::models::{Role, User};
 use crate::notifications;
 use crate::state::AppState;
@@ -21,11 +23,40 @@ use crate::state::AppState;
 pub struct CreateAdminRequest {
     pub username: String,
     pub password: String,
+    /// Opcjonalnie — domyślnie `["Admin"]`. Bez duplikatów, co najmniej jedna rola.
+    #[serde(default)]
+    pub roles: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
 pub struct UpdateUserRoleRequest {
-    pub role: String,
+    pub roles: Vec<String>,
+}
+
+/// Parsuje nazwy ról, usuwa duplikaty (kolejność pierwszego wystąpienia), wymaga ≥1 roli.
+fn parse_roles_list(raw: &[String]) -> Result<Vec<Role>, ApiError> {
+    if raw.is_empty() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "At least one role is required",
+        ));
+    }
+    let mut out: Vec<Role> = Vec::new();
+    for s in raw {
+        let role: Role = s
+            .parse()
+            .map_err(|_| api_error(StatusCode::BAD_REQUEST, format!("Invalid role: {}", s)))?;
+        if !out.contains(&role) {
+            out.push(role);
+        }
+    }
+    if out.is_empty() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "At least one role is required",
+        ));
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,6 +75,83 @@ pub struct UpdateUserAccountRequest {
     pub password: Option<String>,
 }
 
+fn has_staff_admin_access(roles: &[Role]) -> bool {
+    roles
+        .iter()
+        .any(|r| matches!(r, Role::SuperAdmin | Role::Admin))
+}
+
+/// Priorytet sortowania w grupie administratorów (niższy = wyżej na liście).
+fn admin_panel_rank(roles: &[Role]) -> u8 {
+    if roles.contains(&Role::SuperAdmin) {
+        0
+    } else if roles.contains(&Role::Admin) {
+        1
+    } else {
+        255
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AccountListKind {
+    Admins,
+    Trainers,
+    Athletes,
+}
+
+/// Jedna z trzech list kont — **bez duplikatów**: pierwsza pasująca kategoria (np. SuperAdmin+Trener trafia tylko do `admins`).
+/// Kombinacje ról są widoczne w polu `roles` konta.
+fn classify_user_bucket(roles: &[Role]) -> Option<AccountListKind> {
+    if has_staff_admin_access(roles) {
+        return Some(AccountListKind::Admins);
+    }
+    if roles.contains(&Role::Trainer) {
+        return Some(AccountListKind::Trainers);
+    }
+    if roles.contains(&Role::Athlete) {
+        return Some(AccountListKind::Athletes);
+    }
+    None
+}
+
+pub(crate) async fn user_roles_by_id(state: &AppState, id: &str) -> Result<Option<Vec<Role>>, ApiError> {
+    let mut rows = state
+        .db
+        .query("SELECT roles FROM users WHERE id = ?1", [id.to_string()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if let Some(row) = row {
+        let roles_json: String = row.get(0).unwrap();
+        let roles: Vec<Role> = serde_json::from_str(&roles_json).map_err(|_| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Invalid roles JSON in database",
+            )
+        })?;
+        Ok(Some(roles))
+    } else {
+        Ok(None)
+    }
+}
+
+async fn count_superadmin_accounts(state: &AppState) -> Result<i64, ApiError> {
+    let all = collect_users_for_sql(
+        state,
+        "SELECT id, username, email, avatar_url, roles FROM users ORDER BY username ASC",
+    )
+    .await?;
+    Ok(all
+        .into_iter()
+        .filter(|u| u.roles.contains(&Role::SuperAdmin))
+        .count() as i64)
+}
+
 async fn collect_users_for_sql(state: &AppState, sql: &str) -> Result<Vec<User>, ApiError> {
     let mut rows = state
         .db
@@ -57,14 +165,15 @@ async fn collect_users_for_sql(state: &AppState, sql: &str) -> Result<Vec<User>,
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        let role_str: String = row.get(4).unwrap();
+        let roles_json: String = row.get(4).unwrap();
+        let roles: Vec<Role> = serde_json::from_str(&roles_json).unwrap();
         out.push(User {
             id: row.get(0).unwrap(),
             username: row.get(1).unwrap(),
             email: row.get(2).ok(),
             avatar_url: row.get(3).ok(),
             password_hash: "".to_string(),
-            role: role_str.parse().unwrap(),
+            roles,
         });
     }
     Ok(out)
@@ -72,40 +181,69 @@ async fn collect_users_for_sql(state: &AppState, sql: &str) -> Result<Vec<User>,
 
 pub async fn list_admins(
     State(state): State<AppState>,
-    _auth: RequireAdminOrSuperAdmin,
+    auth: RequireAdminOrSuperAdmin,
 ) -> Result<Json<Vec<User>>, ApiError> {
-    let sql = "SELECT id, username, email, avatar_url, role FROM users \
-               WHERE role IN ('Admin', 'SuperAdmin', 'TrainerAdmin', 'Trainer', 'Athlete') \
-               ORDER BY username ASC";
-    let admins = collect_users_for_sql(&state, sql).await?;
+    let sql = "SELECT id, username, email, avatar_url, roles FROM users ORDER BY username ASC";
+    let all_users = collect_users_for_sql(&state, sql).await?;
+    let caller_super = auth.0.roles.contains(&Role::SuperAdmin);
+    let admins = all_users
+        .into_iter()
+        .filter(|u| {
+            u.roles
+                .iter()
+                .any(|r| matches!(r, Role::Admin | Role::SuperAdmin | Role::Trainer | Role::Athlete))
+        })
+        .filter(|u| caller_super || !u.roles.contains(&Role::SuperAdmin))
+        .collect();
     Ok(Json(admins))
 }
 
 #[derive(Serialize)]
 pub struct GroupedAccounts {
-    /// Admin, SuperAdmin, TrainerAdmin (admin-trener).
-    pub staff_admins: Vec<User>,
-    /// Trenerzy bez panelu admin oraz zawodnicy.
-    pub club_members: Vec<User>,
+    /// SuperAdmin, Admin — dostęp do panelu administracyjnego (trener bez Admina nie trafia tutaj).
+    pub admins: Vec<User>,
+    /// Trenerzy bez roli kadry administracyjnej (`Trainer`).
+    pub trainers: Vec<User>,
+    /// Zawodnicy z kontem (`Athlete`), bez roli admin ani trener.
+    pub athletes: Vec<User>,
 }
 
 pub async fn list_accounts_grouped(
     State(state): State<AppState>,
-    _auth: RequireAdminOrSuperAdmin,
+    auth: RequireAdminOrSuperAdmin,
 ) -> Result<Json<GroupedAccounts>, ApiError> {
-    let staff_sql = "SELECT id, username, email, avatar_url, role FROM users \
-                     WHERE role IN ('Admin', 'SuperAdmin', 'TrainerAdmin') \
-                     ORDER BY role ASC, username ASC";
-    let member_sql = "SELECT id, username, email, avatar_url, role FROM users \
-                      WHERE role IN ('Trainer', 'Athlete') \
-                      ORDER BY role ASC, username ASC";
+    let sql = "SELECT id, username, email, avatar_url, roles FROM users ORDER BY username ASC";
+    let all_users = collect_users_for_sql(&state, sql).await?;
+    let caller_super = auth.0.roles.contains(&Role::SuperAdmin);
 
-    let staff_admins = collect_users_for_sql(&state, staff_sql).await?;
-    let club_members = collect_users_for_sql(&state, member_sql).await?;
+    let mut admins = Vec::new();
+    let mut trainers = Vec::new();
+    let mut athletes = Vec::new();
+
+    for user in all_users {
+        if !caller_super && user.roles.contains(&Role::SuperAdmin) {
+            continue;
+        }
+        match classify_user_bucket(&user.roles) {
+            Some(AccountListKind::Admins) => admins.push(user),
+            Some(AccountListKind::Trainers) => trainers.push(user),
+            Some(AccountListKind::Athletes) => athletes.push(user),
+            None => {}
+        }
+    }
+
+    admins.sort_by(|a, b| {
+        admin_panel_rank(&a.roles)
+            .cmp(&admin_panel_rank(&b.roles))
+            .then(a.username.cmp(&b.username))
+    });
+    trainers.sort_by(|a, b| a.username.cmp(&b.username));
+    athletes.sort_by(|a, b| a.username.cmp(&b.username));
 
     Ok(Json(GroupedAccounts {
-        staff_admins,
-        club_members,
+        admins,
+        trainers,
+        athletes,
     }))
 }
 
@@ -121,10 +259,17 @@ pub async fn create_admin(
         .to_string();
 
     let user_id = Uuid::new_v4().to_string();
-    
+
+    let roles_vec = match payload.roles.as_ref().filter(|r| !r.is_empty()) {
+        Some(rs) => parse_roles_list(rs)?,
+        None => vec![Role::Admin],
+    };
+    let roles_json =
+        serde_json::to_string(&roles_vec).map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error serializing roles"))?;
+
     state.db.execute(
-        "INSERT INTO users (id, username, password_hash, role) VALUES (?1, ?2, ?3, ?4)",
-        (user_id.clone(), payload.username.clone(), hash, "Admin"),
+        "INSERT INTO users (id, username, password_hash, roles) VALUES (?1, ?2, ?3, ?4)",
+        (user_id.clone(), payload.username.clone(), hash, roles_json),
     ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let actor = notifications::username_by_id(state.db.as_ref(), &auth.0.sub)
@@ -136,9 +281,12 @@ pub async fn create_admin(
         &state,
         "admin_user_created",
         "Nowe konto administracyjne",
-        &format!("{} utworzył konto „{}” (Admin).", actor, payload.username),
+        &format!(
+            "{} utworzył konto „{}” z rolami {:?}.",
+            actor, payload.username, roles_vec
+        ),
         Some(
-            serde_json::json!({ "user_id": user_id.clone(), "username": payload.username.clone() }).to_string(),
+            serde_json::json!({ "user_id": user_id.clone(), "username": payload.username.clone(), "roles": roles_vec }).to_string(),
         ),
     );
 
@@ -148,7 +296,7 @@ pub async fn create_admin(
         email: None,
         avatar_url: None,
         password_hash: "".to_string(),
-        role: Role::Admin,
+        roles: roles_vec,
     }))
 }
 
@@ -174,28 +322,11 @@ pub async fn update_user_account(
         ));
     }
 
-    let mut rows = state
-        .db
-        .query("SELECT role FROM users WHERE id = ?1", [id.clone()])
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let target_roles = user_roles_by_id(&state, &id)
+        .await?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "User not found"))?;
 
-    let target_role: String = if let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    {
-        row.get(0).unwrap()
-    } else {
-        return Err(api_error(StatusCode::NOT_FOUND, "User not found"));
-    };
-
-    if target_role == "SuperAdmin" && claims.role != Role::SuperAdmin {
-        return Err(api_error(
-            StatusCode::FORBIDDEN,
-            "Only SuperAdmin can modify SuperAdmin accounts",
-        ));
-    }
+    forbid_mutating_superadmin_user_record(claims, &target_roles)?;
 
     if let Some(new_username) = &payload.username {
         if new_username.is_empty() {
@@ -273,16 +404,24 @@ pub async fn update_user_role(
     if claims.sub == id {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
-            "Use another SuperAdmin account to change your own role",
+            "Use another SuperAdmin account to change your own roles",
         ));
     }
 
-    let role: Role = payload.role.parse().map_err(|_| api_error(StatusCode::BAD_REQUEST, "Invalid role"))?;
-    let role_value = role.to_string();
+    let roles = parse_roles_list(&payload.roles)?;
+    let roles_json = serde_json::to_string(&roles).map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error serializing roles"))?;
+
+    let mut rows = state.db.query("SELECT roles FROM users WHERE id = ?1", [id.clone()])
+        .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+        let target_roles_json: String = row.get(0).unwrap();
+        let target_roles: Vec<Role> = serde_json::from_str(&target_roles_json).unwrap();
+        forbid_mutating_superadmin_user_record(claims, &target_roles)?;
+    }
 
     let result = state.db.execute(
-        "UPDATE users SET role = ?1 WHERE id = ?2",
-        (role_value, id.clone()),
+        "UPDATE users SET roles = ?1 WHERE id = ?2",
+        (roles_json, id.clone()),
     ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if result == 0 {
@@ -302,15 +441,15 @@ pub async fn update_user_role(
     notifications::notify_admin_broadcast(
         &state,
         "admin_role_changed",
-        "Zmiana roli",
+        "Zmiana ról",
         &format!(
-            "{} ustawił rolę użytkownika „{}” na {}.",
+            "{} ustawił role użytkownika „{}” na {:?}.",
             actor,
             target,
-            payload.role
+            payload.roles
         ),
         Some(
-            serde_json::json!({ "target_user_id": id, "role": payload.role.clone() }).to_string(),
+            serde_json::json!({ "target_user_id": id, "roles": payload.roles.clone() }).to_string(),
         ),
     );
 
@@ -338,89 +477,61 @@ pub async fn delete_admin(
         ));
     }
 
-    let mut rows = state
+    let target_roles = user_roles_by_id(&state, &id)
+        .await?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "User not found"))?;
+
+    let deleted_username = notifications::username_by_id(state.db.as_ref(), &id)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| id.clone());
+
+    if target_roles.contains(&Role::SuperAdmin) {
+        let n = count_superadmin_accounts(&state).await?;
+        if n <= 1 {
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "Cannot delete the last SuperAdmin account",
+            ));
+        }
+    }
+
+    state
         .db
-        .query("SELECT role FROM users WHERE id = ?1", [id.clone()])
+        .execute(
+            "UPDATE athletes SET user_id = NULL WHERE user_id = ?1",
+            [id.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    if let Some(row) = rows
-        .next()
+    state
+        .db
+        .execute("DELETE FROM posts WHERE author_id = ?1", [id.clone()])
         .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    {
-        let role: String = row.get(0).unwrap();
-        let deleted_username = notifications::username_by_id(state.db.as_ref(), &id)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| id.clone());
-        if role == "SuperAdmin" {
-            let mut crow = state
-                .db
-                .query(
-                    "SELECT COUNT(*) FROM users WHERE role = 'SuperAdmin'",
-                    (),
-                )
-                .await
-                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            let cnt_row = crow
-                .next()
-                .await
-                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-                .ok_or_else(|| {
-                    api_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Failed to count SuperAdmin accounts",
-                    )
-                })?;
-            let n: i64 = cnt_row.get(0).unwrap();
-            if n <= 1 {
-                return Err(api_error(
-                    StatusCode::FORBIDDEN,
-                    "Cannot delete the last SuperAdmin account",
-                ));
-            }
-        }
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-        state
-            .db
-            .execute(
-                "UPDATE athletes SET user_id = NULL WHERE user_id = ?1",
-                [id.clone()],
-            )
-            .await
-            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    state
+        .db
+        .execute("DELETE FROM users WHERE id = ?1", [id.clone()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-        state
-            .db
-            .execute("DELETE FROM posts WHERE author_id = ?1", [id.clone()])
-            .await
-            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let actor = notifications::username_by_id(state.db.as_ref(), &claims.sub)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "?".to_string());
+    notifications::notify_admin_broadcast(
+        &state,
+        "admin_user_deleted",
+        "Usunięto konto",
+        &format!("{} usunął konto użytkownika „{}”.", actor, deleted_username),
+        None,
+    );
 
-        state
-            .db
-            .execute("DELETE FROM users WHERE id = ?1", [id.clone()])
-            .await
-            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-        let actor = notifications::username_by_id(state.db.as_ref(), &claims.sub)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "?".to_string());
-        notifications::notify_admin_broadcast(
-            &state,
-            "admin_user_deleted",
-            "Usunięto konto",
-            &format!("{} usunął konto użytkownika „{}”.", actor, deleted_username),
-            None,
-        );
-
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(api_error(StatusCode::NOT_FOUND, "User not found"))
-    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn update_profile(
@@ -495,7 +606,7 @@ pub async fn update_profile(
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         } else {
             const ALLOW_PRESET: &[&str] =
-                &["slavia", "iron", "arena", "platform", "midnight", "ruby"];
+                &["slavia", "iron", "arena", "platform", "midnight", "ruby", "neon"];
             if !ALLOW_PRESET.contains(&trimmed) {
                 return Err(api_error(
                     StatusCode::BAD_REQUEST,

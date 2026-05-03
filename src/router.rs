@@ -59,7 +59,14 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/{id}/role", patch(routes::admins::update_user_role))
         .route("/reset", post(routes::admins::reset_database));
 
+    // Zgłoszenia wyników (Pending): osobny `/api/submissions/*`, handlery współdzielone z `results`.
+    let submissions_routes = Router::new()
+        .route("/pending", get(routes::submissions::list_pending_results))
+        .route("/{id}/approve", patch(routes::submissions::approve_result))
+        .route("/{id}", delete(routes::submissions::delete_result));
+
     let results_routes = Router::new()
+        .route("/public-board", get(routes::results::list_public_results_board))
         .route("/all", get(routes::results::list_all_results_staff))
         .route("/pending", get(routes::results::list_pending_results))
         .route(
@@ -80,6 +87,16 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             post(routes::competitions::sync_external_competitions),
         )
         .route(
+            "/recurring-training-cancellations/{session_date}",
+            delete(routes::recurring_training_cancellations::restore_recurring_training_session),
+        )
+        .route(
+            "/recurring-training-cancellations",
+            get(routes::recurring_training_cancellations::list_recurring_training_cancellations)
+                .post(routes::recurring_training_cancellations::upsert_recurring_training_session)
+                .delete(routes::recurring_training_cancellations::clear_all_recurring_training_cancellations),
+        )
+        .route(
             "/",
             get(routes::competitions::list_competitions)
                 .post(routes::competitions::create_competition),
@@ -91,6 +108,36 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             ),
         )
         .route("/{id}", delete(routes::competitions::delete_competition).patch(routes::competitions::update_competition));
+
+    let announcements_routes = Router::new()
+        .route("/manage", get(routes::announcements::list_announcements_manage))
+        .route(
+            "/",
+            get(routes::announcements::list_announcements_public).post(routes::announcements::create_announcement),
+        )
+        .route(
+            "/{id}",
+            patch(routes::announcements::update_announcement).delete(routes::announcements::delete_announcement),
+        );
+
+    let gallery_routes = Router::new()
+        .route("/manage", get(routes::gallery::list_gallery_manage))
+        .route(
+            "/",
+            get(routes::gallery::list_gallery_public).post(routes::gallery::create_gallery_photo),
+        )
+        .route(
+            "/{id}",
+            patch(routes::gallery::update_gallery_photo).delete(routes::gallery::delete_gallery_photo),
+        );
+
+    let contact_routes = Router::new()
+        .route("/manage", get(routes::contact::list_contact_messages_manage))
+        .route("/", post(routes::contact::submit_contact_message))
+        .route(
+            "/manage/{id}",
+            patch(routes::contact::patch_contact_message).delete(routes::contact::delete_contact_message),
+        );
 
     let posts_routes = Router::new()
         .route(
@@ -122,9 +169,13 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .nest("/api/upload", upload_routes)
         .nest("/api/athletes", athletes_routes)
         .nest("/api/admins", admins_routes)
+        .nest("/api/submissions", submissions_routes)
         .nest("/api/results", results_routes)
         .nest("/api/competitions", competitions_routes)
         .nest("/api/posts", posts_routes)
+        .nest("/api/announcements", announcements_routes)
+        .nest("/api/gallery", gallery_routes)
+        .nest("/api/contact", contact_routes)
         .nest("/api/notifications", notifications_routes)
         .layer(cors)
         .with_state(state)

@@ -1,10 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub enum Role {
     SuperAdmin,
     Admin,
-    TrainerAdmin,
     Trainer,
     Athlete,
 }
@@ -20,7 +19,6 @@ impl std::fmt::Display for Role {
         let s = match self {
             Role::SuperAdmin => "SuperAdmin",
             Role::Admin => "Admin",
-            Role::TrainerAdmin => "TrainerAdmin",
             Role::Trainer => "Trainer",
             Role::Athlete => "Athlete",
         };
@@ -34,7 +32,6 @@ impl std::str::FromStr for Role {
         match s {
             "SuperAdmin" => Ok(Role::SuperAdmin),
             "Admin" => Ok(Role::Admin),
-            "TrainerAdmin" => Ok(Role::TrainerAdmin),
             "Trainer" => Ok(Role::Trainer),
             "Athlete" => Ok(Role::Athlete),
             _ => Err(format!("Invalid role: {}", s)),
@@ -50,7 +47,7 @@ pub struct User {
     pub avatar_url: Option<String>,
     #[serde(skip_serializing)]
     pub password_hash: String,
-    pub role: Role,
+    pub roles: Vec<Role>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -151,4 +148,58 @@ pub struct Post {
 
 fn default_post_published() -> bool {
     true
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Announcement {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub sort_order: i64,
+    #[serde(default = "default_post_published")]
+    pub published: bool,
+    pub author_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GalleryPhoto {
+    pub id: String,
+    pub image_url: String,
+    pub caption: Option<String>,
+    #[serde(default)]
+    pub sort_order: i64,
+    #[serde(default = "default_post_published")]
+    pub published: bool,
+    pub author_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContactMessage {
+    pub id: String,
+    pub name: String,
+    pub email: String,
+    pub phone: Option<String>,
+    pub message: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub is_read: bool,
+}
+
+/// Publiczna lista wyników z imieniem zawodnika i nazwą zawodów (bez edycji).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PublicResultBoardRow {
+    pub id: String,
+    pub athlete_id: String,
+    pub athlete_name: String,
+    pub competition_id: Option<String>,
+    pub competition_title: Option<String>,
+    pub snatch: f64,
+    pub clean_and_jerk: f64,
+    pub total: f64,
+    pub date: String,
 }
