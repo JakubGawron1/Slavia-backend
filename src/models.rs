@@ -145,4 +145,10 @@ pub struct Post {
     pub author_id: String,
     pub image_url: Option<String>,
     pub created_at: String,
+    #[serde(default = "default_post_published")]
+    pub published: bool,
+}
+
+fn default_post_published() -> bool {
+    true
 }
