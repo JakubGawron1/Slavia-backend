@@ -102,6 +102,12 @@ pub struct CompetitionResult {
     pub total: f64,
     pub status: ResultStatus,
     pub date: String,
+    #[serde(default)]
+    pub squat_kg: Option<f64>,
+    #[serde(default)]
+    pub bench_kg: Option<f64>,
+    #[serde(default)]
+    pub deadlift_kg: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -169,6 +175,8 @@ pub struct Announcement {
 pub struct GalleryPhoto {
     pub id: String,
     pub image_url: String,
+    #[serde(default)]
+    pub media_type: String,
     pub caption: Option<String>,
     #[serde(default)]
     pub sort_order: i64,
@@ -202,4 +210,10 @@ pub struct PublicResultBoardRow {
     pub clean_and_jerk: f64,
     pub total: f64,
     pub date: String,
+    #[serde(default)]
+    pub squat_kg: Option<f64>,
+    #[serde(default)]
+    pub bench_kg: Option<f64>,
+    #[serde(default)]
+    pub deadlift_kg: Option<f64>,
 }

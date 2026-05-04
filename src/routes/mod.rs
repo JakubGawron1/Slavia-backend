@@ -13,3 +13,4 @@ pub mod contact;
 pub mod upload;
 pub mod training_log;
 pub mod notifications;
+pub mod import;

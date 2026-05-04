@@ -103,6 +103,9 @@ fn competition_result_from_row(row: &Row) -> Result<CompetitionResult, String> {
         total: sql_row::required_f64(row, 4)?,
         status,
         date: sql_row::required_string(row, 6)?,
+        squat_kg: sql_row::opt_f64(row, 7).map_err(|e| e.to_string())?,
+        bench_kg: sql_row::opt_f64(row, 8).map_err(|e| e.to_string())?,
+        deadlift_kg: sql_row::opt_f64(row, 9).map_err(|e| e.to_string())?,
     })
 }
 
@@ -113,6 +116,12 @@ pub struct CreateResultRequest {
     pub clean_and_jerk: f64,
     pub total: f64,
     pub date: String,
+    #[serde(default)]
+    pub squat_kg: Option<f64>,
+    #[serde(default)]
+    pub bench_kg: Option<f64>,
+    #[serde(default)]
+    pub deadlift_kg: Option<f64>,
 }
 
 /// Publiczna tablica wyników z imieniem zawodnika i nazwą zawodów (tylko odczyt).
@@ -123,7 +132,7 @@ pub async fn list_public_results_board(
         .db
         .query(
             "SELECT r.id, r.athlete_id, a.full_name, r.competition_id, c.title, \
-             r.snatch, r.clean_and_jerk, r.total, r.date \
+             r.snatch, r.clean_and_jerk, r.total, r.date, r.squat_kg, r.bench_kg, r.deadlift_kg \
              FROM results r \
              INNER JOIN athletes a ON a.id = r.athlete_id \
              LEFT JOIN competitions c ON c.id = r.competition_id \
@@ -147,6 +156,9 @@ pub async fn list_public_results_board(
             clean_and_jerk: sql_row::required_f64(&row, 6).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
             total: sql_row::required_f64(&row, 7).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
             date: sql_row::required_string(&row, 8).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            squat_kg: sql_row::opt_f64(&row, 9).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            bench_kg: sql_row::opt_f64(&row, 10).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            deadlift_kg: sql_row::opt_f64(&row, 11).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
         });
     }
 
@@ -158,7 +170,7 @@ pub async fn list_approved_results(
 ) -> Result<Json<Vec<CompetitionResult>>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date FROM results WHERE status = 'Approved'", ())
+        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results WHERE status = 'Approved'", ())
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -178,7 +190,7 @@ pub async fn list_pending_results(
 ) -> Result<Json<Vec<CompetitionResult>>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date FROM results WHERE status = 'Pending'", ())
+        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results WHERE status = 'Pending'", ())
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -200,7 +212,7 @@ pub async fn list_athlete_results(
     let mut rows = state
         .db
         .query(
-            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date FROM results \
+            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results \
              WHERE athlete_id = ?1 AND status = 'Approved' ORDER BY date ASC",
             [athlete_id],
         )
@@ -228,7 +240,7 @@ pub async fn list_athlete_result_submissions(
     let mut rows = state
         .db
         .query(
-            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date FROM results \
+            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results \
              WHERE athlete_id = ?1 ORDER BY date DESC, id DESC",
             [athlete_id],
         )
@@ -275,10 +287,24 @@ pub async fn create_result(
     }
 
     let id = Uuid::new_v4().to_string();
-    
+    let squat_kg = payload.squat_kg.filter(|x| *x > 0.0);
+    let bench_kg = payload.bench_kg.filter(|x| *x > 0.0);
+    let deadlift_kg = payload.deadlift_kg.filter(|x| *x > 0.0);
+
     state.db.execute(
-        "INSERT INTO results (id, athlete_id, snatch, clean_and_jerk, total, status, date) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        (id.clone(), payload.athlete_id.clone(), payload.snatch, payload.clean_and_jerk, payload.total, status.to_string(), payload.date.clone()),
+        "INSERT INTO results (id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        (
+            id.clone(),
+            payload.athlete_id.clone(),
+            payload.snatch,
+            payload.clean_and_jerk,
+            payload.total,
+            status.to_string(),
+            payload.date.clone(),
+            squat_kg,
+            bench_kg,
+            deadlift_kg,
+        ),
     ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     sync_athlete_bests_from_approved(&state, &payload.athlete_id).await?;
@@ -306,6 +332,9 @@ pub async fn create_result(
         total: payload.total,
         status,
         date: payload.date,
+        squat_kg,
+        bench_kg,
+        deadlift_kg,
     }))
 }
 
@@ -351,6 +380,13 @@ pub struct UpdateResultRequest {
     pub total: Option<f64>,
     pub date: Option<String>,
     pub status: Option<String>,
+    /// Brak pola — bez zmiany; `null` — wyczyść w bazie; liczba — ustaw.
+    #[serde(default)]
+    pub squat_kg: Option<Option<f64>>,
+    #[serde(default)]
+    pub bench_kg: Option<Option<f64>>,
+    #[serde(default)]
+    pub deadlift_kg: Option<Option<f64>>,
 }
 
 pub async fn list_all_results_staff(
@@ -360,7 +396,7 @@ pub async fn list_all_results_staff(
     let mut rows = state
         .db
         .query(
-            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date FROM results ORDER BY date DESC",
+            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results ORDER BY date DESC",
             (),
         )
         .await
@@ -387,6 +423,9 @@ pub async fn update_result(
         && payload.total.is_none()
         && payload.date.is_none()
         && payload.status.is_none()
+        && payload.squat_kg.is_none()
+        && payload.bench_kg.is_none()
+        && payload.deadlift_kg.is_none()
     {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
@@ -397,7 +436,7 @@ pub async fn update_result(
     let mut rows = state
         .db
         .query(
-            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date FROM results WHERE id = ?1",
+            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results WHERE id = ?1",
             [id.clone()],
         )
         .await
@@ -431,17 +470,29 @@ pub async fn update_result(
             .parse::<ResultStatus>()
             .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?;
     }
+    if let Some(inner) = payload.squat_kg {
+        cr.squat_kg = inner;
+    }
+    if let Some(inner) = payload.bench_kg {
+        cr.bench_kg = inner;
+    }
+    if let Some(inner) = payload.deadlift_kg {
+        cr.deadlift_kg = inner;
+    }
 
     state
         .db
         .execute(
-            "UPDATE results SET snatch = ?1, clean_and_jerk = ?2, total = ?3, status = ?4, date = ?5 WHERE id = ?6",
+            "UPDATE results SET snatch = ?1, clean_and_jerk = ?2, total = ?3, status = ?4, date = ?5, squat_kg = ?6, bench_kg = ?7, deadlift_kg = ?8 WHERE id = ?9",
             (
                 cr.snatch,
                 cr.clean_and_jerk,
                 cr.total,
                 cr.status.to_string(),
                 cr.date.clone(),
+                cr.squat_kg,
+                cr.bench_kg,
+                cr.deadlift_kg,
                 id,
             ),
         )

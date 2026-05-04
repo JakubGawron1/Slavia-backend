@@ -19,6 +19,9 @@ mod sql_row;
 pub mod cloudinary;
 mod external_calendar_sync;
 
+#[cfg(test)]
+mod import_http_integration_test;
+
 use state::AppState;
 
 /// Skąd brać bazę: lokalny plik SQLite (dev) albo Turso przez HTTP (`new_remote`).

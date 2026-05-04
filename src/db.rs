@@ -180,7 +180,10 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             clean_and_jerk REAL NOT NULL,
             total REAL NOT NULL,
             status TEXT NOT NULL,
-            date TEXT NOT NULL
+            date TEXT NOT NULL,
+            squat_kg REAL,
+            bench_kg REAL,
+            deadlift_kg REAL
         )",
         "CREATE TABLE IF NOT EXISTS posts (
             id TEXT PRIMARY KEY,
@@ -229,6 +232,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         "CREATE TABLE IF NOT EXISTS gallery_photos (
             id TEXT PRIMARY KEY,
             image_url TEXT NOT NULL,
+            media_type TEXT NOT NULL DEFAULT 'image',
             caption TEXT,
             sort_order INTEGER NOT NULL DEFAULT 0,
             published INTEGER NOT NULL DEFAULT 1,
@@ -319,6 +323,23 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             (),
         )
         .await;
+
+    let _ = conn
+        .execute(
+            "ALTER TABLE gallery_photos ADD COLUMN media_type TEXT NOT NULL DEFAULT 'image'",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
+            "UPDATE gallery_photos SET media_type = 'image' WHERE media_type IS NULL",
+            (),
+        )
+        .await;
+
+    let _ = conn.execute("ALTER TABLE results ADD COLUMN squat_kg REAL", ()).await;
+    let _ = conn.execute("ALTER TABLE results ADD COLUMN bench_kg REAL", ()).await;
+    let _ = conn.execute("ALTER TABLE results ADD COLUMN deadlift_kg REAL", ()).await;
 
     let n = sync_all_athletes_bests_from_results(conn)
         .await
@@ -472,7 +493,10 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             clean_and_jerk REAL NOT NULL,
             total REAL NOT NULL,
             status TEXT NOT NULL,
-            date TEXT NOT NULL
+            date TEXT NOT NULL,
+            squat_kg REAL,
+            bench_kg REAL,
+            deadlift_kg REAL
         )",
         "CREATE TABLE IF NOT EXISTS posts (
             id TEXT PRIMARY KEY,
@@ -521,6 +545,7 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
         "CREATE TABLE IF NOT EXISTS gallery_photos (
             id TEXT PRIMARY KEY,
             image_url TEXT NOT NULL,
+            media_type TEXT NOT NULL DEFAULT 'image',
             caption TEXT,
             sort_order INTEGER NOT NULL DEFAULT 0,
             published INTEGER NOT NULL DEFAULT 1,
