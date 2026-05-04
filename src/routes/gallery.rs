@@ -18,19 +18,22 @@ fn row_to_photo(row: &Row) -> Result<GalleryPhoto, libsql::Error> {
     Ok(GalleryPhoto {
         id: sql_row::flex_string(row, 0)?,
         image_url: sql_row::flex_string(row, 1)?,
-        caption: sql_row::flex_opt_string(row, 2)?,
-        sort_order: sql_row::opt_i64(row, 3)?.unwrap_or(0),
-        published: sql_row::bool_active(row, 4)?,
-        author_id: sql_row::flex_string(row, 5)?,
-        created_at: sql_row::flex_string(row, 6)?,
+        media_type: sql_row::flex_string(row, 2).unwrap_or_else(|_| "image".to_string()),
+        caption: sql_row::opt_string(row, 3)?,
+        sort_order: sql_row::opt_i64(row, 4)?.unwrap_or(0),
+        published: sql_row::bool_active(row, 5)?,
+        author_id: sql_row::flex_string(row, 6)?,
+        created_at: sql_row::flex_string(row, 7)?,
     })
 }
 
-const COLS: &str = "id, image_url, caption, sort_order, published, author_id, created_at";
+const COLS: &str = "id, image_url, media_type, caption, sort_order, published, author_id, created_at";
 
 #[derive(Deserialize)]
 pub struct CreateGalleryPhotoRequest {
     pub image_url: String,
+    #[serde(default = "default_media_type")]
+    pub media_type: String,
     pub caption: Option<String>,
     #[serde(default)]
     pub sort_order: Option<i64>,
@@ -38,9 +41,15 @@ pub struct CreateGalleryPhotoRequest {
     pub published: Option<bool>,
 }
 
+fn default_media_type() -> String {
+    "image".to_string()
+}
+
 #[derive(Deserialize)]
 pub struct UpdateGalleryPhotoRequest {
     pub image_url: String,
+    #[serde(default)]
+    pub media_type: Option<String>,
     pub caption: Option<String>,
     #[serde(default)]
     pub sort_order: Option<i64>,
@@ -108,10 +117,11 @@ pub async fn create_gallery_photo(
     state
         .db
         .execute(
-            &format!("INSERT INTO gallery_photos ({COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"),
+            &format!("INSERT INTO gallery_photos ({COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"),
             (
                 id.clone(),
                 url.to_string(),
+                payload.media_type.clone(),
                 payload.caption.clone(),
                 sort_order,
                 pub_i,
@@ -125,6 +135,7 @@ pub async fn create_gallery_photo(
     Ok(Json(GalleryPhoto {
         id,
         image_url: url.to_string(),
+        media_type: payload.media_type,
         caption: payload.caption,
         sort_order,
         published,
@@ -155,6 +166,7 @@ pub async fn update_gallery_photo(
     if url.is_empty() {
         return Err(api_error(StatusCode::BAD_REQUEST, "image_url is required"));
     }
+    let media_type = payload.media_type.clone().unwrap_or(existing.media_type);
     let sort_order = payload.sort_order.unwrap_or(existing.sort_order);
     let published = payload.published.unwrap_or(existing.published);
     let pub_i: i64 = if published { 1 } else { 0 };
@@ -162,9 +174,10 @@ pub async fn update_gallery_photo(
     state
         .db
         .execute(
-            "UPDATE gallery_photos SET image_url = ?1, caption = ?2, sort_order = ?3, published = ?4 WHERE id = ?5",
+            "UPDATE gallery_photos SET image_url = ?1, media_type = ?2, caption = ?3, sort_order = ?4, published = ?5 WHERE id = ?6",
             (
                 url.to_string(),
+                media_type.clone(),
                 payload.caption.clone(),
                 sort_order,
                 pub_i,
@@ -177,6 +190,7 @@ pub async fn update_gallery_photo(
     Ok(Json(GalleryPhoto {
         id,
         image_url: url.to_string(),
+        media_type,
         caption: payload.caption,
         sort_order,
         published,

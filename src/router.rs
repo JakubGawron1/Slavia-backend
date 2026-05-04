@@ -163,6 +163,9 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/{id}", delete(routes::notifications::delete_my_notification))
         .route("/", get(routes::notifications::list_my_notifications));
 
+    let import_routes = Router::new()
+        .route("/data", post(routes::import::import_data_handler));
+
     Router::new()
         .route("/", get(backend_root_page))
         .nest("/api/auth", auth_routes)
@@ -177,6 +180,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .nest("/api/gallery", gallery_routes)
         .nest("/api/contact", contact_routes)
         .nest("/api/notifications", notifications_routes)
+        .nest("/api/import", import_routes)
         .layer(cors)
         .with_state(state)
 }
