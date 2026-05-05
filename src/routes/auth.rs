@@ -93,6 +93,8 @@ pub struct UserInfo {
     pub ui_theme_preset: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_color_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub athlete_gender: Option<String>,
 }
 
 pub async fn me_handler(
@@ -102,7 +104,12 @@ pub async fn me_handler(
     let mut rows = state
         .db
         .query(
-            "SELECT username, email, avatar_url, ui_theme_preset, ui_color_mode FROM users WHERE id = ?1",
+            "SELECT u.username, u.email, u.avatar_url, u.ui_theme_preset, u.ui_color_mode, a.gender
+             FROM users u
+             LEFT JOIN athletes a ON a.user_id = u.id
+             WHERE u.id = ?1
+             ORDER BY a.id ASC
+             LIMIT 1",
             [claims.sub.clone()],
         )
         .await
@@ -116,6 +123,7 @@ pub async fn me_handler(
     let avatar_url: Option<String> = row.get(2).ok();
     let ui_theme_preset: Option<String> = row.get(3).ok();
     let ui_color_mode: Option<String> = row.get(4).ok();
+    let athlete_gender: Option<String> = row.get(5).ok();
 
     Ok(Json(UserInfo {
         id: claims.sub,
@@ -125,5 +133,6 @@ pub async fn me_handler(
         avatar_url,
         ui_theme_preset,
         ui_color_mode,
+        athlete_gender,
     }))
 }
