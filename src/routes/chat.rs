@@ -19,6 +19,7 @@ pub struct ChatThreadDto {
     pub id: String,
     pub athlete_user_id: String,
     pub trainer_user_id: String,
+    pub title: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -36,6 +37,12 @@ pub struct ChatMessageDto {
 pub struct OpenThreadRequest {
     pub athlete_user_id: String,
     pub trainer_user_id: String,
+    pub title: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateThreadRequest {
+    pub title: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -63,7 +70,7 @@ pub async fn open_thread(
     let mut rows = state
         .db
         .query(
-            "SELECT id, created_at, updated_at FROM chat_threads WHERE athlete_user_id = ?1 AND trainer_user_id = ?2",
+            "SELECT id, title, created_at, updated_at FROM chat_threads WHERE athlete_user_id = ?1 AND trainer_user_id = ?2",
             (payload.athlete_user_id.clone(), payload.trainer_user_id.clone()),
         )
         .await
@@ -78,8 +85,9 @@ pub async fn open_thread(
             id: row.get(0).unwrap_or_default(),
             athlete_user_id: payload.athlete_user_id,
             trainer_user_id: payload.trainer_user_id,
-            created_at: row.get(1).unwrap_or_default(),
-            updated_at: row.get(2).unwrap_or_default(),
+            title: row.get(1).ok(),
+            created_at: row.get(2).unwrap_or_default(),
+            updated_at: row.get(3).unwrap_or_default(),
         }));
     }
 
@@ -87,11 +95,12 @@ pub async fn open_thread(
     state
         .db
         .execute(
-            "INSERT INTO chat_threads (id, athlete_user_id, trainer_user_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO chat_threads (id, athlete_user_id, trainer_user_id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             (
                 id.clone(),
                 payload.athlete_user_id.clone(),
                 payload.trainer_user_id.clone(),
+                payload.title.clone(),
                 now.clone(),
                 now.clone(),
             ),
@@ -103,6 +112,7 @@ pub async fn open_thread(
         id,
         athlete_user_id: payload.athlete_user_id,
         trainer_user_id: payload.trainer_user_id,
+        title: payload.title,
         created_at: now.clone(),
         updated_at: now,
     }))
@@ -118,7 +128,7 @@ pub async fn list_my_threads(
     let mut rows = state
         .db
         .query(
-            "SELECT id, athlete_user_id, trainer_user_id, created_at, updated_at
+            "SELECT id, athlete_user_id, trainer_user_id, title, created_at, updated_at
              FROM chat_threads
              WHERE athlete_user_id = ?1 OR trainer_user_id = ?1
              ORDER BY updated_at DESC",
@@ -136,11 +146,52 @@ pub async fn list_my_threads(
             id: row.get(0).unwrap_or_default(),
             athlete_user_id: row.get(1).unwrap_or_default(),
             trainer_user_id: row.get(2).unwrap_or_default(),
-            created_at: row.get(3).unwrap_or_default(),
-            updated_at: row.get(4).unwrap_or_default(),
+            title: row.get(3).ok(),
+            created_at: row.get(4).unwrap_or_default(),
+            updated_at: row.get(5).unwrap_or_default(),
         });
     }
     Ok(Json(out))
+}
+
+pub async fn update_thread(
+    State(state): State<AppState>,
+    claims: Claims,
+    Path(thread_id): Path<String>,
+    Json(payload): Json<UpdateThreadRequest>,
+) -> Result<Json<ChatThreadDto>, ApiError> {
+    let mut membership = state
+        .db
+        .query(
+            "SELECT id, athlete_user_id, trainer_user_id, created_at FROM chat_threads WHERE id = ?1 AND (athlete_user_id = ?2 OR trainer_user_id = ?2)",
+            (thread_id.clone(), claims.sub.clone()),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = membership
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| api_error(StatusCode::FORBIDDEN, "Brak dostępu do wątku"))?;
+
+    let now = Utc::now().to_rfc3339();
+    state
+        .db
+        .execute(
+            "UPDATE chat_threads SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            (payload.title.clone(), now.clone(), thread_id.clone()),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(ChatThreadDto {
+        id: thread_id,
+        athlete_user_id: row.get(1).unwrap_or_default(),
+        trainer_user_id: row.get(2).unwrap_or_default(),
+        title: payload.title,
+        created_at: row.get(3).unwrap_or_default(),
+        updated_at: now,
+    }))
 }
 
 pub async fn list_messages(

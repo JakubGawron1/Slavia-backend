@@ -149,6 +149,8 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             total_kg REAL,
             image_url TEXT,
             notes TEXT,
+            profile_tagline TEXT,
+            public_bio TEXT,
             is_active BOOLEAN DEFAULT 1
         )",
         "CREATE TABLE IF NOT EXISTS competitions (
@@ -244,6 +246,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             id TEXT PRIMARY KEY,
             athlete_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             trainer_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            title TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )",
@@ -341,6 +344,13 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         .await;
 
     let _ = conn
+        .execute("ALTER TABLE athletes ADD COLUMN profile_tagline TEXT", ())
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE athletes ADD COLUMN public_bio TEXT", ())
+        .await;
+
+    let _ = conn
         .execute("ALTER TABLE users ADD COLUMN avatar_url TEXT", ())
         .await;
 
@@ -390,6 +400,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
     let _ = conn.execute("ALTER TABLE results ADD COLUMN squat_kg REAL", ()).await;
     let _ = conn.execute("ALTER TABLE results ADD COLUMN bench_kg REAL", ()).await;
     let _ = conn.execute("ALTER TABLE results ADD COLUMN deadlift_kg REAL", ()).await;
+    let _ = conn.execute("ALTER TABLE chat_threads ADD COLUMN title TEXT", ()).await;
     let _ = conn
         .execute(
             "ALTER TABLE notifications ADD COLUMN is_read INTEGER NOT NULL DEFAULT 0",
@@ -523,6 +534,8 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             total_kg REAL,
             image_url TEXT,
             notes TEXT,
+            profile_tagline TEXT,
+            public_bio TEXT,
             is_active BOOLEAN DEFAULT 1
         )",
         "CREATE TABLE IF NOT EXISTS competitions (
@@ -618,6 +631,7 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             id TEXT PRIMARY KEY,
             athlete_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             trainer_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            title TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )",
@@ -688,6 +702,8 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
     let _ = conn.execute("ALTER TABLE athletes ADD COLUMN is_active BOOLEAN DEFAULT 1", ()).await;
     let _ = conn.execute("UPDATE athletes SET is_active = 1 WHERE is_active IS NULL", ()).await;
     let _ = conn.execute("ALTER TABLE athletes ADD COLUMN gender TEXT", ()).await;
+    let _ = conn.execute("ALTER TABLE athletes ADD COLUMN profile_tagline TEXT", ()).await;
+    let _ = conn.execute("ALTER TABLE athletes ADD COLUMN public_bio TEXT", ()).await;
 
     seed_data(conn).await?;
     println!("✅ Baza danych zrekonstruowana i zasilona danymi!");
@@ -731,9 +747,24 @@ async fn seed_data(conn: &Connection) -> Result<(), Box<dyn std::error::Error + 
     .await?;
 
     conn.execute(
-        "INSERT INTO athletes (id, user_id, full_name, birth_year, gender, weight_category, bodyweight, best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, is_active)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1)",
-        (Uuid::new_v4().to_string(), Some(jakub_id), "Jakub Gawron", 2000, "male", "81kg", 80.5, 110.0, 140.0, 250.0, Some("https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/people/smiling-man".to_string()), "Założyciel klubu.",),
+        "INSERT INTO athletes (id, user_id, full_name, birth_year, gender, weight_category, bodyweight, best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, profile_tagline, public_bio, is_active)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 1)",
+        (
+            Uuid::new_v4().to_string(),
+            Some(jakub_id),
+            "Jakub Gawron",
+            2000,
+            "male",
+            "81kg",
+            80.5,
+            110.0,
+            140.0,
+            250.0,
+            Some("https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/people/smiling-man".to_string()),
+            "Założyciel klubu.",
+            Some("Założyciel · trener".to_string()),
+            Some("Założyciel sekcji i jeden z filarów rozwoju CKS Slavia.".to_string()),
+        ),
     ).await?;
 
     // 3. Athletes seed with images
@@ -745,8 +776,8 @@ async fn seed_data(conn: &Connection) -> Result<(), Box<dyn std::error::Error + 
 
     for (name, year, gender, cat, bw, snatch, cj, total, img, note) in athletes {
         conn.execute(
-            "INSERT INTO athletes (id, user_id, full_name, birth_year, gender, weight_category, bodyweight, best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, is_active)
-             VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1)",
+            "INSERT INTO athletes (id, user_id, full_name, birth_year, gender, weight_category, bodyweight, best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, profile_tagline, public_bio, is_active)
+             VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, NULL, 1)",
             (Uuid::new_v4().to_string(), name, year, gender, cat, bw, snatch, cj, total, Some(img.to_string()), note),
         ).await?;
     }

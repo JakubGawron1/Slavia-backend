@@ -64,6 +64,26 @@ pub struct Athlete {
     pub total_kg: Option<f64>,
     pub image_url: Option<String>,
     pub notes: Option<String>,
+    pub profile_tagline: Option<String>,
+    pub public_bio: Option<String>,
+    pub is_active: bool,
+}
+
+/// Widok publiczny profilu — bez `user_id` i bez notatek wewnętrznych (`notes`).
+#[derive(Debug, Serialize, Clone)]
+pub struct AthletePublic {
+    pub id: String,
+    pub full_name: String,
+    pub birth_year: Option<i64>,
+    pub gender: Option<String>,
+    pub weight_category: Option<String>,
+    pub bodyweight: Option<f64>,
+    pub best_snatch_kg: Option<f64>,
+    pub best_clean_jerk_kg: Option<f64>,
+    pub total_kg: Option<f64>,
+    pub image_url: Option<String>,
+    pub profile_tagline: Option<String>,
+    pub public_bio: Option<String>,
     pub is_active: bool,
 }
 

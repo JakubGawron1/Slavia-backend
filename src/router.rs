@@ -48,7 +48,9 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/{id}/link", post(routes::athletes::link_athlete_to_user))
         .route(
             "/{id}",
-            patch(routes::athletes::update_athlete).delete(routes::athletes::delete_athlete),
+            get(routes::athletes::get_athlete_public)
+                .patch(routes::athletes::update_athlete)
+                .delete(routes::athletes::delete_athlete),
         );
 
     let admins_routes = Router::new()
@@ -173,6 +175,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/{athlete_id}", get(routes::attendance::list_attendance_for_athlete));
     let chat_routes = Router::new()
         .route("/threads", get(routes::chat::list_my_threads).post(routes::chat::open_thread))
+        .route("/threads/{thread_id}", patch(routes::chat::update_thread))
         .route("/threads/{thread_id}/messages", get(routes::chat::list_messages).post(routes::chat::send_message));
     let system_routes = Router::new().route("/audit-logs", get(routes::system_logs::list_audit_logs));
 
