@@ -14,3 +14,7 @@ pub mod upload;
 pub mod training_log;
 pub mod notifications;
 pub mod import;
+pub mod exercises;
+pub mod attendance;
+pub mod chat;
+pub mod system_logs;

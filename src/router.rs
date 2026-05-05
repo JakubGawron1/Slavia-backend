@@ -160,11 +160,21 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         );
 
     let notifications_routes = Router::new()
+        .route("/read-all", patch(routes::notifications::mark_all_my_notifications_read))
+        .route("/{id}/read", patch(routes::notifications::mark_my_notification_read))
         .route("/{id}", delete(routes::notifications::delete_my_notification))
         .route("/", get(routes::notifications::list_my_notifications));
 
     let import_routes = Router::new()
         .route("/data", post(routes::import::import_data_handler));
+    let exercises_routes = Router::new().route("/board", get(routes::exercises::list_exercises_board));
+    let attendance_routes = Router::new()
+        .route("/", post(routes::attendance::upsert_attendance))
+        .route("/{athlete_id}", get(routes::attendance::list_attendance_for_athlete));
+    let chat_routes = Router::new()
+        .route("/threads", get(routes::chat::list_my_threads).post(routes::chat::open_thread))
+        .route("/threads/{thread_id}/messages", get(routes::chat::list_messages).post(routes::chat::send_message));
+    let system_routes = Router::new().route("/audit-logs", get(routes::system_logs::list_audit_logs));
 
     Router::new()
         .route("/", get(backend_root_page))
@@ -181,6 +191,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .nest("/api/contact", contact_routes)
         .nest("/api/notifications", notifications_routes)
         .nest("/api/import", import_routes)
+        .nest("/api/exercises", exercises_routes)
+        .nest("/api/attendance", attendance_routes)
+        .nest("/api/chat", chat_routes)
+        .nest("/api/system", system_routes)
         .layer(cors)
         .with_state(state)
 }
