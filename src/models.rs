@@ -217,3 +217,17 @@ pub struct PublicResultBoardRow {
     #[serde(default)]
     pub deadlift_kg: Option<f64>,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ExerciseBoardRow {
+    pub athlete_id: String,
+    pub athlete_name: String,
+    pub squat_kg: Option<f64>,
+    pub bench_kg: Option<f64>,
+    pub deadlift_kg: Option<f64>,
+    pub source_trainer_direct: bool,
+    pub source_athlete_pending_count: i64,
+    pub source_approved_results_count: i64,
+    pub source_training_log_count: i64,
+    pub source_last_approved_date: Option<String>,
+}
