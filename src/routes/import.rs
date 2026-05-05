@@ -53,28 +53,17 @@ pub struct ImportRequest {
 }
 
 pub async fn import_data_handler(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     claims: Claims,
-    Json(payload): Json<ImportRequest>,
+    Json(_payload): Json<ImportRequest>,
 ) -> Result<Json<Vec<ImportResult>>, ApiError> {
     if !claims.roles.contains(&Role::SuperAdmin) {
         return Err(api_error(StatusCode::FORBIDDEN, "Only superadmin can import data"));
     }
-
-    let dev_mode = payload.dev_mode.unwrap_or(false);
-
-    let mut results = Vec::new();
-
-    let pzpc_result = import_from_pzpc(&state, dev_mode).await?;
-    results.push(pzpc_result);
-
-    let slaski_result = import_from_slaski(&state, dev_mode).await?;
-    results.push(slaski_result);
-
-    let podnoszenie_result = import_from_podnoszenie(&state, dev_mode).await?;
-    results.push(podnoszenie_result);
-
-    Ok(Json(results))
+    Err(api_error(
+        StatusCode::GONE,
+        "Import danych zawodników z federacji został wyłączony. Import zawodów pozostaje dostępny w kalendarzu.",
+    ))
 }
 
 #[derive(Clone)]

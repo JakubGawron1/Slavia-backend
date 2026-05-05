@@ -120,6 +120,5 @@ fn load_config(
         "CLOUDINARY_API_SECRET",
     )
     .unwrap_or_default();
-
     Ok((database, jwt_secret, cn, ck, cs))
 }

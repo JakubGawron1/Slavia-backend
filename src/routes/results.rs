@@ -212,8 +212,10 @@ pub async fn list_athlete_results(
     let mut rows = state
         .db
         .query(
-            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results \
-             WHERE athlete_id = ?1 AND status = 'Approved' ORDER BY date ASC",
+            "SELECT r.id, r.athlete_id, r.snatch, r.clean_and_jerk, r.total, r.status, r.date, r.squat_kg, r.bench_kg, r.deadlift_kg \
+             FROM results r \
+             INNER JOIN athletes a ON a.id = r.athlete_id AND (a.is_active IS NULL OR a.is_active = 1) \
+             WHERE r.athlete_id = ?1 AND r.status = 'Approved' ORDER BY r.date ASC",
             [athlete_id],
         )
         .await

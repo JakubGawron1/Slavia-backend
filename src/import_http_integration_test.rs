@@ -5,7 +5,6 @@ use std::sync::Mutex;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::{Duration, Utc};
-use http_body_util::BodyExt;
 use jsonwebtoken::{encode, EncodingKey, Header};
 use tempfile::tempdir;
 use tower::ServiceExt;
@@ -63,14 +62,5 @@ async fn post_import_data_returns_three_sources_json() {
         .expect("request build");
 
     let response = app.oneshot(req).await.expect("oneshot");
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let body = response.into_body().collect().await.expect("collect body").to_bytes();
-    let v: serde_json::Value = serde_json::from_slice(&body).expect("json body");
-    let arr = v.as_array().expect("array response");
-    assert_eq!(arr.len(), 3);
-    for row in arr {
-        assert!(row.get("source").is_some());
-        assert!(row.get("rows_parsed").is_some());
-    }
+    assert_eq!(response.status(), StatusCode::GONE);
 }

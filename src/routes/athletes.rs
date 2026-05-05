@@ -7,7 +7,7 @@ use libsql::Row;
 use serde::Deserialize;
 use uuid::Uuid;
 use crate::api_error::{api_error, ApiError};
-use crate::models::{Athlete, Role};
+use crate::models::{Athlete, AthletePublic, Role};
 use crate::notifications;
 use crate::state::AppState;
 use crate::middleware::auth::{
@@ -115,9 +115,35 @@ fn athlete_from_row(row: &Row) -> Result<Athlete, libsql::Error> {
         total_kg: sql_row::opt_f64(row, 9)?,
         image_url: sql_row::opt_string(row, 10)?,
         notes: sql_row::opt_string(row, 11)?,
-        is_active: sql_row::bool_active(row, 12)?,
+        profile_tagline: sql_row::opt_string(row, 12)?,
+        public_bio: sql_row::opt_string(row, 13)?,
+        is_active: sql_row::bool_active(row, 14)?,
     })
 }
+
+fn athlete_public_from_row(row: &Row) -> Result<AthletePublic, libsql::Error> {
+    let a = athlete_from_row(row)?;
+    Ok(AthletePublic {
+        id: a.id,
+        full_name: a.full_name,
+        birth_year: a.birth_year,
+        gender: a.gender,
+        weight_category: a.weight_category,
+        bodyweight: a.bodyweight,
+        best_snatch_kg: a.best_snatch_kg,
+        best_clean_jerk_kg: a.best_clean_jerk_kg,
+        total_kg: a.total_kg,
+        image_url: a.image_url,
+        profile_tagline: a.profile_tagline,
+        public_bio: a.public_bio,
+        is_active: a.is_active,
+    })
+}
+
+const ATHLETE_ROW_SQL: &str =
+    "SELECT id, user_id, full_name, birth_year, gender, weight_category, bodyweight, \
+     best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, profile_tagline, public_bio, is_active \
+     FROM athletes";
 
 #[derive(Deserialize)]
 pub struct CreateAthleteRequest {
@@ -131,6 +157,8 @@ pub struct CreateAthleteRequest {
     pub total_kg: Option<f64>,
     pub image_url: Option<String>,
     pub notes: Option<String>,
+    pub profile_tagline: Option<String>,
+    pub public_bio: Option<String>,
     #[serde(default)]
     pub is_active: Option<bool>,
     pub username: Option<String>,
@@ -149,9 +177,36 @@ pub struct UpdateAthleteRequest {
     pub total_kg: Option<f64>,
     pub image_url: Option<String>,
     pub notes: Option<String>,
+    pub profile_tagline: Option<String>,
+    pub public_bio: Option<String>,
     pub is_active: Option<bool>,
     pub username: Option<String>,
     pub password: Option<String>,
+}
+
+pub async fn get_athlete_public(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<AthletePublic>, ApiError> {
+    let sql = format!(
+        "{} WHERE id = ?1 AND (is_active IS NULL OR is_active = 1)",
+        ATHLETE_ROW_SQL
+    );
+    let mut rows = state
+        .db
+        .query(&sql, [id])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Athlete not found"))?;
+
+    let public = athlete_public_from_row(&row)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(public))
 }
 
 pub async fn list_athletes(
@@ -160,7 +215,7 @@ pub async fn list_athletes(
 ) -> Result<Json<Vec<Athlete>>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id, user_id, full_name, birth_year, gender, weight_category, bodyweight, best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, is_active FROM athletes", ())
+        .query(ATHLETE_ROW_SQL, ())
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -178,7 +233,13 @@ pub async fn list_athletes_public(
 ) -> Result<Json<Vec<Athlete>>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id, user_id, full_name, birth_year, gender, weight_category, bodyweight, best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, is_active FROM athletes WHERE is_active IS NULL OR is_active = 1", ())
+        .query(
+            &format!(
+                "{} WHERE is_active IS NULL OR is_active = 1",
+                ATHLETE_ROW_SQL
+            ),
+            (),
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -211,8 +272,24 @@ pub async fn create_athlete(
 
     let is_active = payload.is_active.unwrap_or(true);
     state.db.execute(
-        "INSERT INTO athletes (id, user_id, full_name, birth_year, gender, weight_category, bodyweight, best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, is_active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-        (athlete_id.clone(), user_id.clone(), payload.full_name.clone(), payload.birth_year, payload.gender.clone(), payload.weight_category.clone(), payload.bodyweight, payload.best_snatch_kg, payload.best_clean_jerk_kg, total, payload.image_url.clone(), payload.notes.clone(), if is_active { 1 } else { 0 }),
+        "INSERT INTO athletes (id, user_id, full_name, birth_year, gender, weight_category, bodyweight, best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, profile_tagline, public_bio, is_active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        (
+            athlete_id.clone(),
+            user_id.clone(),
+            payload.full_name.clone(),
+            payload.birth_year,
+            payload.gender.clone(),
+            payload.weight_category.clone(),
+            payload.bodyweight,
+            payload.best_snatch_kg,
+            payload.best_clean_jerk_kg,
+            total,
+            payload.image_url.clone(),
+            payload.notes.clone(),
+            payload.profile_tagline.clone(),
+            payload.public_bio.clone(),
+            if is_active { 1 } else { 0 },
+        ),
     ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     notifications::notify_admin_broadcast(
@@ -236,6 +313,8 @@ pub async fn create_athlete(
         total_kg: Some(total),
         image_url: payload.image_url,
         notes: payload.notes,
+        profile_tagline: payload.profile_tagline,
+        public_bio: payload.public_bio,
         is_active,
     }))
 }
@@ -335,9 +414,11 @@ pub async fn update_athlete(
             total_kg = ?8,
             image_url = ?9,
             notes = ?10,
-            is_active = COALESCE(?11, is_active),
-            user_id = COALESCE(?12, user_id)
-         WHERE id = ?13",
+            profile_tagline = ?11,
+            public_bio = ?12,
+            is_active = COALESCE(?13, is_active),
+            user_id = COALESCE(?14, user_id)
+         WHERE id = ?15",
         (
             payload.full_name,
             payload.birth_year,
@@ -349,6 +430,8 @@ pub async fn update_athlete(
             total,
             payload.image_url,
             payload.notes,
+            payload.profile_tagline,
+            payload.public_bio,
             payload.is_active.map(|v| if v { 1 } else { 0 }),
             user_id_to_set,
             id.clone()
@@ -413,7 +496,10 @@ pub async fn me_athlete_handler(
 ) -> Result<Json<Athlete>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id, user_id, full_name, birth_year, gender, weight_category, bodyweight, best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, is_active FROM athletes WHERE user_id = ?1", [claims.sub])
+        .query(
+            &format!("{} WHERE user_id = ?1", ATHLETE_ROW_SQL),
+            [claims.sub],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
