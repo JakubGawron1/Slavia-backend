@@ -8,6 +8,7 @@ use serde::Serialize;
 use sha1::{Digest, Sha1};
 
 use crate::api_error::{api_error, ApiError};
+use crate::audit::write_audit_log;
 use crate::middleware::auth::Claims;
 use crate::state::AppState;
 
@@ -33,7 +34,7 @@ fn cloudinary_signature(params: &[(String, String)], api_secret: &str) -> String
 
 pub async fn upload_handler(
     State(state): State<AppState>,
-    _claims: Claims,
+    claims: Claims,
     mut multipart: Multipart,
 ) -> Result<Json<UploadResponse>, ApiError> {
     if state.cloudinary_cloud_name.is_empty()
@@ -51,6 +52,11 @@ pub async fn upload_handler(
         .await
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, e.to_string()))?
         .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "No file provided"))?;
+
+    let content_type = field
+        .content_type()
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
 
     let filename = field
         .file_name()
@@ -82,9 +88,15 @@ pub async fn upload_handler(
         state.cloudinary_api_secret.as_str(),
     );
 
+    let resource = if content_type.starts_with("video/") {
+        "video"
+    } else {
+        "image"
+    };
+
     let url = format!(
-        "https://api.cloudinary.com/v1_1/{}/image/upload",
-        state.cloudinary_cloud_name
+        "https://api.cloudinary.com/v1_1/{}/{}/upload",
+        state.cloudinary_cloud_name, resource
     );
 
     let mut form = reqwest::multipart::Form::new().part(
@@ -115,6 +127,23 @@ pub async fn upload_handler(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if let Some(secure_url) = json.get("secure_url").and_then(|v| v.as_str()) {
+        let _ = write_audit_log(
+            state.db.as_ref(),
+            Some(&claims.sub),
+            Some("upload"),
+            "upload",
+            "cloudinary_upload",
+            Some(resource),
+            None,
+            Some(
+                &serde_json::json!({
+                    "resource_type": resource,
+                    "content_type": content_type
+                })
+                .to_string(),
+            ),
+        )
+        .await;
         return Ok(Json(UploadResponse {
             url: secure_url.to_string(),
         }));
