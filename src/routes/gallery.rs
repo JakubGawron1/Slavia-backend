@@ -9,6 +9,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::api_error::{api_error, ApiError};
+use crate::audit::write_audit_log;
 use crate::middleware::auth::{Claims, RequireAdminOrSuperAdmin};
 use crate::models::GalleryPhoto;
 use crate::sql_row;
@@ -131,6 +132,23 @@ pub async fn create_gallery_photo(
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let _ = write_audit_log(
+        state.db.as_ref(),
+        Some(&claims.sub),
+        Some("admin"),
+        "gallery",
+        "create_media",
+        Some("gallery_photo"),
+        Some(&id),
+        Some(
+            &serde_json::json!({
+                "media_type": payload.media_type,
+                "published": published
+            })
+            .to_string(),
+        ),
+    )
+    .await;
 
     Ok(Json(GalleryPhoto {
         id,
@@ -186,6 +204,23 @@ pub async fn update_gallery_photo(
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let _ = write_audit_log(
+        state.db.as_ref(),
+        None,
+        Some("admin"),
+        "gallery",
+        "update_media",
+        Some("gallery_photo"),
+        Some(&id),
+        Some(
+            &serde_json::json!({
+                "media_type": media_type,
+                "published": published
+            })
+            .to_string(),
+        ),
+    )
+    .await;
 
     Ok(Json(GalleryPhoto {
         id,
@@ -206,11 +241,22 @@ pub async fn delete_gallery_photo(
 ) -> Result<StatusCode, ApiError> {
     let n = state
         .db
-        .execute("DELETE FROM gallery_photos WHERE id = ?1", [id])
+        .execute("DELETE FROM gallery_photos WHERE id = ?1", [id.clone()])
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if n == 0 {
         return Err(api_error(StatusCode::NOT_FOUND, "Photo not found"));
     }
+    let _ = write_audit_log(
+        state.db.as_ref(),
+        None,
+        Some("admin"),
+        "gallery",
+        "delete_media",
+        Some("gallery_photo"),
+        Some(&id),
+        None,
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }

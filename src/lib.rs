@@ -9,6 +9,7 @@ pub mod dto;
 pub mod middleware;
 pub mod models;
 pub mod notifications;
+pub mod audit;
 pub mod repos;
 pub mod router;
 pub mod routes;

@@ -37,3 +37,30 @@ pub async fn delete_my_notification(
 
     Ok(StatusCode::NO_CONTENT)
 }
+
+pub async fn mark_my_notification_read(
+    State(state): State<AppState>,
+    claims: Claims,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let user_id = claims.sub.clone();
+    let n = repos::notifications::mark_one_read(state.db.as_ref(), &id, &user_id)
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if n == 0 {
+        return Err(api_error(StatusCode::NOT_FOUND, "Powiadomienie nie znalezione"));
+    }
+
+    Ok(StatusCode::OK)
+}
+
+pub async fn mark_all_my_notifications_read(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> Result<StatusCode, ApiError> {
+    repos::notifications::mark_all_read(state.db.as_ref(), &claims.sub)
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::OK)
+}

@@ -210,9 +210,59 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             title TEXT NOT NULL,
             body TEXT NOT NULL,
             payload TEXT,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0
         )",
         "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS attendance_records (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            session_date TEXT NOT NULL,
+            status TEXT NOT NULL,
+            source_role TEXT NOT NULL,
+            created_by TEXT REFERENCES users(id),
+            verified_by TEXT REFERENCES users(id),
+            verification_state TEXT NOT NULL DEFAULT 'verified',
+            note TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_attendance_athlete_date ON attendance_records(athlete_id, session_date DESC)",
+        "CREATE TABLE IF NOT EXISTS system_audit_logs (
+            id TEXT PRIMARY KEY,
+            actor_user_id TEXT,
+            actor_role TEXT,
+            category TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target_type TEXT,
+            target_id TEXT,
+            details TEXT,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON system_audit_logs(created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS chat_threads (
+            id TEXT PRIMARY KEY,
+            athlete_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            trainer_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_threads_pair ON chat_threads(athlete_user_id, trainer_user_id)",
+        "CREATE TABLE IF NOT EXISTS chat_messages (
+            id TEXT PRIMARY KEY,
+            thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+            sender_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            deleted_by_sender INTEGER NOT NULL DEFAULT 0,
+            deleted_by_receiver INTEGER NOT NULL DEFAULT 0
+        )",
+        "CREATE TABLE IF NOT EXISTS chat_reads (
+            thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            last_read_at TEXT NOT NULL,
+            PRIMARY KEY (thread_id, user_id)
+        )",
         "CREATE TABLE IF NOT EXISTS recurring_training_cancellations (
             session_date TEXT PRIMARY KEY,
             cancelled_at TEXT NOT NULL,
@@ -340,6 +390,12 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
     let _ = conn.execute("ALTER TABLE results ADD COLUMN squat_kg REAL", ()).await;
     let _ = conn.execute("ALTER TABLE results ADD COLUMN bench_kg REAL", ()).await;
     let _ = conn.execute("ALTER TABLE results ADD COLUMN deadlift_kg REAL", ()).await;
+    let _ = conn
+        .execute(
+            "ALTER TABLE notifications ADD COLUMN is_read INTEGER NOT NULL DEFAULT 0",
+            (),
+        )
+        .await;
 
     let n = sync_all_athletes_bests_from_results(conn)
         .await
@@ -422,6 +478,11 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
 pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let drop_tables = [
         "DROP TABLE IF EXISTS notifications",
+        "DROP TABLE IF EXISTS chat_reads",
+        "DROP TABLE IF EXISTS chat_messages",
+        "DROP TABLE IF EXISTS chat_threads",
+        "DROP TABLE IF EXISTS attendance_records",
+        "DROP TABLE IF EXISTS system_audit_logs",
         "DROP TABLE IF EXISTS results",
         "DROP TABLE IF EXISTS competition_participants",
         "DROP TABLE IF EXISTS recurring_training_cancellations",
@@ -523,9 +584,59 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             title TEXT NOT NULL,
             body TEXT NOT NULL,
             payload TEXT,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0
         )",
         "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS attendance_records (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            session_date TEXT NOT NULL,
+            status TEXT NOT NULL,
+            source_role TEXT NOT NULL,
+            created_by TEXT REFERENCES users(id),
+            verified_by TEXT REFERENCES users(id),
+            verification_state TEXT NOT NULL DEFAULT 'verified',
+            note TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_attendance_athlete_date ON attendance_records(athlete_id, session_date DESC)",
+        "CREATE TABLE IF NOT EXISTS system_audit_logs (
+            id TEXT PRIMARY KEY,
+            actor_user_id TEXT,
+            actor_role TEXT,
+            category TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target_type TEXT,
+            target_id TEXT,
+            details TEXT,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON system_audit_logs(created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS chat_threads (
+            id TEXT PRIMARY KEY,
+            athlete_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            trainer_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_threads_pair ON chat_threads(athlete_user_id, trainer_user_id)",
+        "CREATE TABLE IF NOT EXISTS chat_messages (
+            id TEXT PRIMARY KEY,
+            thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+            sender_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            deleted_by_sender INTEGER NOT NULL DEFAULT 0,
+            deleted_by_receiver INTEGER NOT NULL DEFAULT 0
+        )",
+        "CREATE TABLE IF NOT EXISTS chat_reads (
+            thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            last_read_at TEXT NOT NULL,
+            PRIMARY KEY (thread_id, user_id)
+        )",
         "CREATE TABLE IF NOT EXISTS recurring_training_cancellations (
             session_date TEXT PRIMARY KEY,
             cancelled_at TEXT NOT NULL,
