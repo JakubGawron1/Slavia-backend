@@ -606,7 +606,7 @@ pub async fn update_profile(
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         } else {
             const ALLOW_PRESET: &[&str] =
-                &["slavia", "iron", "arena", "platform", "midnight", "ruby", "neon"];
+                &["pink", "dark", "slavia", "iron", "arena", "platform", "midnight", "ruby", "neon"];
             if !ALLOW_PRESET.contains(&trimmed) {
                 return Err(api_error(
                     StatusCode::BAD_REQUEST,
