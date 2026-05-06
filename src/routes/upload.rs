@@ -99,10 +99,23 @@ pub async fn upload_handler(
         state.cloudinary_cloud_name, resource
     );
 
-    let mut form = reqwest::multipart::Form::new().part(
-        "file",
-        reqwest::multipart::Part::bytes(data.to_vec()).file_name(filename),
-    );
+    let mime_for_part: String = if content_type.is_empty() {
+        if resource == "video" {
+            "video/mp4".into()
+        } else {
+            "application/octet-stream".into()
+        }
+    } else {
+        content_type.clone()
+    };
+
+    let file_bytes = data.to_vec();
+    let file_part = reqwest::multipart::Part::bytes(file_bytes.clone())
+        .file_name(filename.clone())
+        .mime_str(&mime_for_part)
+        .unwrap_or_else(|_| reqwest::multipart::Part::bytes(file_bytes).file_name(filename.clone()));
+
+    let mut form = reqwest::multipart::Form::new().part("file", file_part);
     form = form.text("api_key", state.cloudinary_api_key.clone());
     form = form.text("timestamp", timestamp.to_string());
     form = form.text("signature", signature);

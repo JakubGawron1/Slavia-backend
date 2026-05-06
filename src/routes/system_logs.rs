@@ -36,6 +36,31 @@ pub struct OpsEventRow {
     pub detail: String,
 }
 
+#[derive(Serialize)]
+pub struct PingDto {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
+}
+
+/// Lekki endpoint diagnostyczny — loguje na stdout, która instancja odpowiada (np. `BACKEND_INSTANCE_LABEL`).
+pub async fn ping_backend() -> Json<PingDto> {
+    let instance = std::env::var("BACKEND_INSTANCE_LABEL")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    println!(
+        "[slavia-backend] GET /api/system/ping — ok{}",
+        instance
+            .as_ref()
+            .map(|s| format!(" · instance={s:?}"))
+            .unwrap_or_default()
+    );
+    Json(PingDto {
+        ok: true,
+        instance,
+    })
+}
+
 pub async fn list_audit_logs(
     State(state): State<AppState>,
     _auth: RequireSuperAdmin,

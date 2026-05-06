@@ -71,7 +71,10 @@ async fn try_attach_athlete_login_or_request(
     let proposed = u_raw.to_string();
     if claims_may_create_athlete_user_account(claims) {
         let password = password_opt
-            .clone()
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
             .unwrap_or_else(|| "Slavia2026".to_string());
         let uid = insert_athlete_user_account(state, proposed, password).await?;
         Ok(Some(uid))
@@ -122,8 +125,43 @@ fn athlete_from_row(row: &Row) -> Result<Athlete, libsql::Error> {
     })
 }
 
-fn athlete_public_from_row(row: &Row) -> Result<AthletePublic, libsql::Error> {
-    let a = athlete_from_row(row)?;
+const ATHLETE_ROW_SQL: &str =
+    "SELECT id, user_id, full_name, birth_year, gender, weight_category, bodyweight, \
+     best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, profile_tagline, public_bio, is_active \
+     FROM athletes";
+
+/// Jak na liście zawodników / profilu publicznym: najpierw zdjęcie konta (`users.avatar_url`), potem karta sportowa.
+const ATHLETE_ROW_JOIN_USER_AVATAR_SQL: &str =
+    "SELECT a.id, a.user_id, a.full_name, a.birth_year, a.gender, a.weight_category, a.bodyweight, \
+     a.best_snatch_kg, a.best_clean_jerk_kg, a.total_kg, a.image_url, a.notes, a.profile_tagline, a.public_bio, a.is_active, \
+     u.avatar_url \
+     FROM athletes a \
+     LEFT JOIN users u ON u.id = a.user_id";
+
+fn merge_profile_image(
+    athlete_image_url: Option<String>,
+    user_avatar_url: Option<String>,
+) -> Option<String> {
+    let user_av = user_avatar_url
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if user_av.is_some() {
+        return user_av;
+    }
+    athlete_image_url
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn athlete_from_row_merge_public_photo(row: &Row) -> Result<Athlete, libsql::Error> {
+    let mut a = athlete_from_row(row)?;
+    let linked_avatar = sql_row::opt_string(row, 15)?;
+    a.image_url = merge_profile_image(a.image_url.clone(), linked_avatar);
+    Ok(a)
+}
+
+fn athlete_public_from_merged_row(row: &Row) -> Result<AthletePublic, libsql::Error> {
+    let a = athlete_from_row_merge_public_photo(row)?;
     Ok(AthletePublic {
         id: a.id,
         full_name: a.full_name,
@@ -140,11 +178,6 @@ fn athlete_public_from_row(row: &Row) -> Result<AthletePublic, libsql::Error> {
         is_active: a.is_active,
     })
 }
-
-const ATHLETE_ROW_SQL: &str =
-    "SELECT id, user_id, full_name, birth_year, gender, weight_category, bodyweight, \
-     best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, profile_tagline, public_bio, is_active \
-     FROM athletes";
 
 #[derive(Deserialize)]
 pub struct CreateAthleteRequest {
@@ -190,8 +223,8 @@ pub async fn get_athlete_public(
     Path(id): Path<String>,
 ) -> Result<Json<AthletePublic>, ApiError> {
     let sql = format!(
-        "{} WHERE id = ?1 AND (is_active IS NULL OR is_active = 1)",
-        ATHLETE_ROW_SQL
+        "{} WHERE a.id = ?1 AND (a.is_active IS NULL OR a.is_active = 1)",
+        ATHLETE_ROW_JOIN_USER_AVATAR_SQL
     );
     let mut rows = state
         .db
@@ -205,7 +238,7 @@ pub async fn get_athlete_public(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Athlete not found"))?;
 
-    let public = athlete_public_from_row(&row)
+    let public = athlete_public_from_merged_row(&row)
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(public))
 }
@@ -236,8 +269,8 @@ pub async fn list_athletes_public(
         .db
         .query(
             &format!(
-                "{} WHERE is_active IS NULL OR is_active = 1",
-                ATHLETE_ROW_SQL
+                "{} WHERE (a.is_active IS NULL OR a.is_active = 1)",
+                ATHLETE_ROW_JOIN_USER_AVATAR_SQL
             ),
             (),
         )
@@ -246,7 +279,8 @@ pub async fn list_athletes_public(
 
     let mut athletes = Vec::new();
     while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
-        let a = athlete_from_row(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let a = athlete_from_row_merge_public_photo(&row)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         athletes.push(a);
     }
 
@@ -498,7 +532,7 @@ pub async fn me_athlete_handler(
     let mut rows = state
         .db
         .query(
-            &format!("{} WHERE user_id = ?1", ATHLETE_ROW_SQL),
+            &format!("{} WHERE a.user_id = ?1", ATHLETE_ROW_JOIN_USER_AVATAR_SQL),
             [claims.sub],
         )
         .await
@@ -507,7 +541,8 @@ pub async fn me_athlete_handler(
     let row = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let row = row.ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Athlete profile not found for this user"))?;
 
-    let athlete = athlete_from_row(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let athlete =
+        athlete_from_row_merge_public_photo(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(athlete))
 }
 
@@ -515,6 +550,11 @@ pub async fn me_athlete_handler(
 pub struct LinkUserRequest {
     pub username: String,
     pub password: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct AttachExistingUserRequest {
+    pub user_id: String,
 }
 
 #[derive(Serialize)]
@@ -655,6 +695,90 @@ fn claims_has_staff_access_like(claims: &Claims) -> bool {
         .roles
         .iter()
         .any(|r| matches!(r, Role::Trainer | Role::Admin | Role::SuperAdmin))
+}
+
+pub async fn attach_existing_user_to_athlete(
+    State(state): State<AppState>,
+    Path(athlete_id): Path<String>,
+    _auth: RequireAdminOrSuperAdmin,
+    Json(payload): Json<AttachExistingUserRequest>,
+) -> Result<StatusCode, ApiError> {
+    let user_id = payload.user_id.trim();
+    if user_id.is_empty() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "user_id is required",
+        ));
+    }
+    let user_id = user_id.to_string();
+
+    let sql = format!("{} WHERE id = ?1", ATHLETE_ROW_SQL);
+    let mut rows = state
+        .db
+        .query(&sql, [athlete_id.clone()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Athlete not found"))?;
+    let athlete = athlete_from_row(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if athlete
+        .user_id
+        .as_ref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "Athlete already linked to a user account",
+        ));
+    }
+
+    let roles = user_roles_by_id(&state, &user_id)
+        .await?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "User not found"))?;
+    if !roles.contains(&Role::Athlete) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "User must have Athlete role to attach to an athlete profile",
+        ));
+    }
+
+    state
+        .db
+        .execute(
+            "UPDATE athletes SET user_id = NULL WHERE user_id = ?1 AND id != ?2",
+            (user_id.clone(), athlete_id.clone()),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    state
+        .db
+        .execute(
+            "UPDATE athletes SET user_id = ?1 WHERE id = ?2",
+            (user_id.clone(), athlete_id.clone()),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    notifications::notify_admin_broadcast(
+        &state,
+        "admin_athlete_linked_existing",
+        "Powiązano istniejące konto ze zawodnikiem",
+        &format!(
+            "Przypisano konto użytkownika {} do profilu zawodnika {}.",
+            user_id, athlete_id
+        ),
+        Some(
+            serde_json::json!({ "athlete_id": athlete_id, "user_id": user_id }).to_string(),
+        ),
+    );
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn link_athlete_to_user(

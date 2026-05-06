@@ -566,15 +566,18 @@ pub async fn update_profile(
         }
     }
 
-    if let Some(new_password) = payload.password {
-        let argon2 = Argon2::default();
-        let salt = SaltString::generate(&mut OsRng);
-        let hash = argon2.hash_password(new_password.as_bytes(), &salt)
-            .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error hashing password"))?
-            .to_string();
-        
-        state.db.execute("UPDATE users SET password_hash = ?1 WHERE id = ?2", (hash, claims.sub.clone()))
-            .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if let Some(ref new_password) = payload.password {
+        let trimmed = new_password.trim();
+        if !trimmed.is_empty() {
+            let argon2 = Argon2::default();
+            let salt = SaltString::generate(&mut OsRng);
+            let hash = argon2.hash_password(trimmed.as_bytes(), &salt)
+                .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error hashing password"))?
+                .to_string();
+
+            state.db.execute("UPDATE users SET password_hash = ?1 WHERE id = ?2", (hash, claims.sub.clone()))
+                .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
     }
     
     if let Some(new_email) = payload.email {
@@ -605,8 +608,18 @@ pub async fn update_profile(
                 .await
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         } else {
-            const ALLOW_PRESET: &[&str] =
-                &["pink", "dark", "slavia", "iron", "arena", "platform", "midnight", "ruby", "neon"];
+            const ALLOW_PRESET: &[&str] = &[
+                "pink",
+                "dark",
+                "slavia",
+                "iron",
+                "arena",
+                "platform",
+                "midnight",
+                "ruby",
+                "neon",
+                "blackgym",
+            ];
             if !ALLOW_PRESET.contains(&trimmed) {
                 return Err(api_error(
                     StatusCode::BAD_REQUEST,

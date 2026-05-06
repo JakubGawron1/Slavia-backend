@@ -112,9 +112,13 @@ fn competition_result_from_row(row: &Row) -> Result<CompetitionResult, String> {
 #[derive(Deserialize)]
 pub struct CreateResultRequest {
     pub athlete_id: String,
-    pub snatch: f64,
-    pub clean_and_jerk: f64,
-    pub total: f64,
+    /// Brak pola — przy tworzeniu wpisu użyj aktualnych wartości z profilu zawodnika (`athletes.best_*`).
+    #[serde(default)]
+    pub snatch: Option<f64>,
+    #[serde(default)]
+    pub clean_and_jerk: Option<f64>,
+    #[serde(default)]
+    pub total: Option<f64>,
     pub date: String,
     #[serde(default)]
     pub squat_kg: Option<f64>,
@@ -122,6 +126,34 @@ pub struct CreateResultRequest {
     pub bench_kg: Option<f64>,
     #[serde(default)]
     pub deadlift_kg: Option<f64>,
+}
+
+async fn athlete_oly_baseline(
+    state: &AppState,
+    athlete_id: &str,
+) -> Result<(f64, f64, f64), ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT best_snatch_kg, best_clean_jerk_kg, total_kg FROM athletes WHERE id = ?1",
+            [athlete_id.to_string()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Athlete not found"))?;
+
+    let sn_o: Option<f64> = row.get(0).ok();
+    let cj_o: Option<f64> = row.get(1).ok();
+    let tot_o: Option<f64> = row.get(2).ok();
+    let sn = sn_o.unwrap_or(0.0);
+    let cj = cj_o.unwrap_or(0.0);
+    let tot = tot_o.unwrap_or(sn + cj);
+    Ok((sn, cj, tot))
 }
 
 /// Publiczna tablica wyników z imieniem zawodnika i nazwą zawodów (tylko odczyt).
@@ -327,19 +359,42 @@ pub async fn create_result(
         }
     }
 
+    let raw_sent_oly = payload.snatch.is_some()
+        || payload.clean_and_jerk.is_some()
+        || payload.total.is_some();
+    let raw_sent_sbd = payload.squat_kg.map(|x| x > 0.0).unwrap_or(false)
+        || payload.bench_kg.map(|x| x > 0.0).unwrap_or(false)
+        || payload.deadlift_kg.map(|x| x > 0.0).unwrap_or(false);
+
+    if !raw_sent_oly && !raw_sent_sbd {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Podaj przynajmniej rwanie lub podrzut albo jedno z ćwiczeń siłowych",
+        ));
+    }
+
+    let baseline = athlete_oly_baseline(&state, &payload.athlete_id).await?;
+    let snatch = payload.snatch.unwrap_or(baseline.0);
+    let clean_and_jerk = payload.clean_and_jerk.unwrap_or(baseline.1);
+    let total = payload
+        .total
+        .unwrap_or_else(|| snatch + clean_and_jerk);
+
     let id = Uuid::new_v4().to_string();
     let squat_kg = payload.squat_kg.filter(|x| *x > 0.0);
     let bench_kg = payload.bench_kg.filter(|x| *x > 0.0);
     let deadlift_kg = payload.deadlift_kg.filter(|x| *x > 0.0);
+
+    let strength_only_notify = !raw_sent_oly && raw_sent_sbd;
 
     state.db.execute(
         "INSERT INTO results (id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         (
             id.clone(),
             payload.athlete_id.clone(),
-            payload.snatch,
-            payload.clean_and_jerk,
-            payload.total,
+            snatch,
+            clean_and_jerk,
+            total,
             status.to_string(),
             payload.date.clone(),
             squat_kg,
@@ -360,17 +415,18 @@ pub async fn create_result(
             &state,
             &payload.athlete_id,
             &name,
-            payload.total,
+            total,
             &payload.date,
+            strength_only_notify,
         );
     }
 
     Ok(Json(CompetitionResult {
         id,
         athlete_id: payload.athlete_id,
-        snatch: payload.snatch,
-        clean_and_jerk: payload.clean_and_jerk,
-        total: payload.total,
+        snatch,
+        clean_and_jerk,
+        total,
         status,
         date: payload.date,
         squat_kg,
