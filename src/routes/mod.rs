@@ -18,3 +18,7 @@ pub mod exercises;
 pub mod attendance;
 pub mod chat;
 pub mod system_logs;
+pub mod feature_flags;
+pub mod comments;
+pub mod training_plans;
+pub mod recovery;

@@ -91,6 +91,7 @@ pub struct AthletePublic {
 pub enum ResultStatus {
     Pending,
     Approved,
+    Rejected,
 }
 
 impl std::fmt::Display for ResultStatus {
@@ -98,6 +99,7 @@ impl std::fmt::Display for ResultStatus {
         match self {
             ResultStatus::Pending => write!(f, "Pending"),
             ResultStatus::Approved => write!(f, "Approved"),
+            ResultStatus::Rejected => write!(f, "Rejected"),
         }
     }
 }
@@ -108,6 +110,7 @@ impl std::str::FromStr for ResultStatus {
         match s {
             "Pending" => Ok(ResultStatus::Pending),
             "Approved" => Ok(ResultStatus::Approved),
+            "Rejected" => Ok(ResultStatus::Rejected),
             _ => Err(format!("Invalid status: {}", s)),
         }
     }

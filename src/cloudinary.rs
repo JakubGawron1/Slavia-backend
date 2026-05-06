@@ -63,7 +63,7 @@ pub fn public_id_from_delivery_url(url: &str) -> Option<String> {
 }
 
 /// Usuwa obraz po URL z CDN Cloudinary (np. po wgraniu nowego avatara). Błędy są ignorowane (np. już skasowany).
-pub async fn destroy_if_cloudinary(state: &AppState, delivery_url: &str) {
+pub async fn destroy_if_cloudinary(state: &AppState, delivery_url: &str, resource_type: &str) {
     let Some(public_id) = public_id_from_delivery_url(delivery_url) else {
         return;
     };
@@ -80,8 +80,8 @@ pub async fn destroy_if_cloudinary(state: &AppState, delivery_url: &str) {
     ];
     let signature = cloudinary_signature(&sign_params, state.cloudinary_api_secret.as_str());
     let url = format!(
-        "https://api.cloudinary.com/v1_1/{}/image/destroy",
-        state.cloudinary_cloud_name
+        "https://api.cloudinary.com/v1_1/{}/{}/destroy",
+        state.cloudinary_cloud_name, resource_type
     );
     let client = reqwest::Client::new();
     let res = client

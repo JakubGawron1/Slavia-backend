@@ -4,7 +4,7 @@ use axum::{
     Json,
 };
 use libsql::Row;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use crate::api_error::{api_error, ApiError};
 use crate::models::{Athlete, AthletePublic, Role};
@@ -16,6 +16,7 @@ use crate::middleware::auth::{
 use crate::routes::admins::user_roles_by_id;
 use crate::sql_row;
 use argon2::PasswordHasher;
+use chrono::DateTime;
 
 /// Utworzenie konta (`users`) dla zawodnika — wyłącznie dla Admin / SuperAdmin (wywołanie jest wcześniej chronione).
 async fn insert_athlete_user_account(
@@ -396,7 +397,7 @@ pub async fn update_athlete(
 
     if payload.image_url.as_ref() != prev_img.as_ref() {
         if let Some(ref old) = prev_img {
-            crate::cloudinary::destroy_if_cloudinary(&state, old).await;
+            crate::cloudinary::destroy_if_cloudinary(&state, old, "image").await;
         }
     }
 
@@ -514,6 +515,146 @@ pub async fn me_athlete_handler(
 pub struct LinkUserRequest {
     pub username: String,
     pub password: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct AthleteTimelineItem {
+    pub id: String,
+    pub kind: String,
+    pub at: String,
+    pub title: String,
+    pub detail: String,
+}
+
+fn parse_sort_ts(s: &str) -> i64 {
+    DateTime::parse_from_rfc3339(s).map(|d| d.timestamp()).unwrap_or(0)
+}
+
+fn can_view_athlete(claims: &Claims) -> bool {
+    claims
+        .roles
+        .iter()
+        .any(|r| matches!(r, Role::Athlete | Role::Trainer | Role::Admin | Role::SuperAdmin))
+}
+
+pub async fn athlete_timeline(
+    State(state): State<AppState>,
+    Path(athlete_id): Path<String>,
+    claims: Claims,
+) -> Result<Json<Vec<AthleteTimelineItem>>, ApiError> {
+    if !can_view_athlete(&claims) {
+        return Err(api_error(StatusCode::FORBIDDEN, "Brak dostępu"));
+    }
+    if !claims_has_staff_access_like(&claims) {
+        let mut owned = state
+            .db
+            .query(
+                "SELECT id FROM athletes WHERE id = ?1 AND user_id = ?2",
+                (athlete_id.clone(), claims.sub.clone()),
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if owned
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .is_none()
+        {
+            return Err(api_error(StatusCode::FORBIDDEN, "Brak dostępu do osi czasu tego zawodnika"));
+        }
+    }
+
+    let mut out: Vec<AthleteTimelineItem> = Vec::new();
+
+    let mut results = state
+        .db
+        .query(
+            "SELECT id, date, snatch, clean_and_jerk, total, status FROM results WHERE athlete_id = ?1 ORDER BY date DESC LIMIT 50",
+            [athlete_id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    while let Some(r) = results
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let id: String = r.get(0).unwrap_or_default();
+        let at: String = r.get(1).unwrap_or_default();
+        let snatch: f64 = r.get(2).unwrap_or(0.0);
+        let cj: f64 = r.get(3).unwrap_or(0.0);
+        let total: f64 = r.get(4).unwrap_or(0.0);
+        let status: String = r.get(5).unwrap_or_default();
+        out.push(AthleteTimelineItem {
+            id,
+            kind: "result".to_string(),
+            at,
+            title: format!("Wynik {} kg ({})", total, status),
+            detail: format!("Rwanie {} kg · Podrzut {} kg", snatch, cj),
+        });
+    }
+
+    let mut attendance = state
+        .db
+        .query(
+            "SELECT id, session_date, status, verification_state FROM attendance_records WHERE athlete_id = ?1 ORDER BY session_date DESC LIMIT 50",
+            [athlete_id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    while let Some(r) = attendance
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let id: String = r.get(0).unwrap_or_default();
+        let at: String = r.get(1).unwrap_or_default();
+        let status: String = r.get(2).unwrap_or_default();
+        let verification: String = r.get(3).unwrap_or_default();
+        out.push(AthleteTimelineItem {
+            id,
+            kind: "attendance".to_string(),
+            at,
+            title: format!("Obecność: {}", status),
+            detail: format!("Weryfikacja: {}", verification),
+        });
+    }
+
+    let mut logs = state
+        .db
+        .query(
+            "SELECT id, session_date, title, notes FROM training_log_entries WHERE athlete_id = ?1 ORDER BY session_date DESC, created_at DESC LIMIT 50",
+            [athlete_id],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    while let Some(r) = logs
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let id: String = r.get(0).unwrap_or_default();
+        let at: String = r.get(1).unwrap_or_default();
+        let title: String = r.get(2).unwrap_or_else(|_| "Wpis treningowy".to_string());
+        let notes: String = r.get(3).unwrap_or_default();
+        out.push(AthleteTimelineItem {
+            id,
+            kind: "training_log".to_string(),
+            at,
+            title,
+            detail: notes,
+        });
+    }
+
+    out.sort_by(|a, b| parse_sort_ts(&b.at).cmp(&parse_sort_ts(&a.at)));
+    Ok(Json(out))
+}
+
+fn claims_has_staff_access_like(claims: &Claims) -> bool {
+    claims
+        .roles
+        .iter()
+        .any(|r| matches!(r, Role::Trainer | Role::Admin | Role::SuperAdmin))
 }
 
 pub async fn link_athlete_to_user(

@@ -15,6 +15,14 @@ use crate::models::GalleryPhoto;
 use crate::sql_row;
 use crate::state::AppState;
 
+fn infer_resource_type(media_type: &str) -> &'static str {
+    if media_type.eq_ignore_ascii_case("video") {
+        "video"
+    } else {
+        "image"
+    }
+}
+
 fn row_to_photo(row: &Row) -> Result<GalleryPhoto, libsql::Error> {
     Ok(GalleryPhoto {
         id: sql_row::flex_string(row, 0)?,
@@ -184,7 +192,7 @@ pub async fn update_gallery_photo(
     if url.is_empty() {
         return Err(api_error(StatusCode::BAD_REQUEST, "image_url is required"));
     }
-    let media_type = payload.media_type.clone().unwrap_or(existing.media_type);
+    let media_type = payload.media_type.clone().unwrap_or(existing.media_type.clone());
     let sort_order = payload.sort_order.unwrap_or(existing.sort_order);
     let published = payload.published.unwrap_or(existing.published);
     let pub_i: i64 = if published { 1 } else { 0 };
@@ -204,6 +212,14 @@ pub async fn update_gallery_photo(
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if existing.image_url != url {
+        crate::cloudinary::destroy_if_cloudinary(
+            &state,
+            &existing.image_url,
+            infer_resource_type(&existing.media_type),
+        )
+        .await;
+    }
     let _ = write_audit_log(
         state.db.as_ref(),
         None,
@@ -239,6 +255,17 @@ pub async fn delete_gallery_photo(
     Path(id): Path<String>,
     _auth: RequireAdminOrSuperAdmin,
 ) -> Result<StatusCode, ApiError> {
+    let mut rows = state
+        .db
+        .query(&format!("SELECT {COLS} FROM gallery_photos WHERE id = ?1"), [id.clone()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let existing = if let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+        row_to_photo(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    } else {
+        return Err(api_error(StatusCode::NOT_FOUND, "Photo not found"));
+    };
+
     let n = state
         .db
         .execute("DELETE FROM gallery_photos WHERE id = ?1", [id.clone()])
@@ -247,6 +274,12 @@ pub async fn delete_gallery_photo(
     if n == 0 {
         return Err(api_error(StatusCode::NOT_FOUND, "Photo not found"));
     }
+    crate::cloudinary::destroy_if_cloudinary(
+        &state,
+        &existing.image_url,
+        infer_resource_type(&existing.media_type),
+    )
+    .await;
     let _ = write_audit_log(
         state.db.as_ref(),
         None,
