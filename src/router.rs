@@ -48,6 +48,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/{id}/timeline", get(routes::athletes::athlete_timeline))
         .route("/{id}/link", post(routes::athletes::link_athlete_to_user))
         .route(
+            "/{id}/attach-user",
+            post(routes::athletes::attach_existing_user_to_athlete),
+        )
+        .route(
             "/{id}",
             get(routes::athletes::get_athlete_public)
                 .patch(routes::athletes::update_athlete)
@@ -168,7 +172,11 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/read-all", patch(routes::notifications::mark_all_my_notifications_read))
         .route("/{id}/read", patch(routes::notifications::mark_my_notification_read))
         .route("/{id}", delete(routes::notifications::delete_my_notification))
-        .route("/", get(routes::notifications::list_my_notifications));
+        .route(
+            "/",
+            get(routes::notifications::list_my_notifications)
+                .delete(routes::notifications::delete_all_my_notifications),
+        );
 
     let import_routes = Router::new()
         .route("/data", post(routes::import::import_data_handler));
@@ -203,6 +211,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             get(routes::recovery::list_recovery_logs_for_athlete),
         );
     let system_routes = Router::new()
+        .route("/ping", get(routes::system_logs::ping_backend))
         .route("/audit-logs", get(routes::system_logs::list_audit_logs))
         .route("/metrics", get(routes::system_logs::system_metrics))
         .route("/event-feed", get(routes::system_logs::event_feed))

@@ -95,6 +95,9 @@ pub struct UserInfo {
     pub ui_color_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub athlete_gender: Option<String>,
+    /// Zdjęcie z profilu sportowego (`athletes.image_url`), gdy konto jest powiązane ze zawodnikiem.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub athlete_image_url: Option<String>,
 }
 
 pub async fn me_handler(
@@ -104,7 +107,7 @@ pub async fn me_handler(
     let mut rows = state
         .db
         .query(
-            "SELECT u.username, u.email, u.avatar_url, u.ui_theme_preset, u.ui_color_mode, a.gender
+            "SELECT u.username, u.email, u.avatar_url, u.ui_theme_preset, u.ui_color_mode, a.gender, a.image_url
              FROM users u
              LEFT JOIN athletes a ON a.user_id = u.id
              WHERE u.id = ?1
@@ -124,6 +127,7 @@ pub async fn me_handler(
     let ui_theme_preset: Option<String> = row.get(3).ok();
     let ui_color_mode: Option<String> = row.get(4).ok();
     let athlete_gender: Option<String> = row.get(5).ok();
+    let athlete_image_url: Option<String> = row.get(6).ok();
 
     Ok(Json(UserInfo {
         id: claims.sub,
@@ -134,5 +138,6 @@ pub async fn me_handler(
         ui_theme_preset,
         ui_color_mode,
         athlete_gender,
+        athlete_image_url,
     }))
 }

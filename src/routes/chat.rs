@@ -31,6 +31,11 @@ pub struct ChatMessageDto {
     pub sender_user_id: String,
     pub body: String,
     pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sender_username: Option<String>,
+    /// Cloudinary / URL: `users.avatar_url` lub — gdy puste — `athletes.image_url` nadawcy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sender_photo_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -48,6 +53,45 @@ pub struct UpdateThreadRequest {
 #[derive(Deserialize)]
 pub struct SendMessageRequest {
     pub body: String,
+}
+
+fn trim_opt_url(s: Option<String>) -> Option<String> {
+    s.and_then(|v| {
+        let t = v.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        }
+    })
+}
+
+async fn load_sender_display(
+    state: &AppState,
+    user_id: &str,
+) -> Result<(Option<String>, Option<String>), ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT u.username,
+                    CASE WHEN u.avatar_url IS NOT NULL AND trim(u.avatar_url) != '' THEN trim(u.avatar_url)
+                         ELSE (SELECT image_url FROM athletes WHERE user_id = u.id ORDER BY id ASC LIMIT 1)
+                    END AS sender_photo
+             FROM users u WHERE u.id = ?1",
+            [user_id.to_string()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let Some(row) = row else {
+        return Ok((None, None));
+    };
+    let username: Option<String> = row.get(0).ok();
+    let photo_raw: Option<String> = row.get(1).ok();
+    Ok((username, trim_opt_url(photo_raw)))
 }
 
 fn can_chat(claims: &Claims) -> bool {
@@ -219,10 +263,14 @@ pub async fn list_messages(
     let mut rows = state
         .db
         .query(
-            "SELECT id, thread_id, sender_user_id, body, created_at
-             FROM chat_messages
-             WHERE thread_id = ?1
-             ORDER BY created_at ASC",
+            "SELECT m.id, m.thread_id, m.sender_user_id, m.body, m.created_at, u.username AS sender_username,
+                    CASE WHEN u.avatar_url IS NOT NULL AND trim(u.avatar_url) != '' THEN trim(u.avatar_url)
+                         ELSE (SELECT image_url FROM athletes WHERE user_id = u.id ORDER BY id ASC LIMIT 1)
+                    END AS sender_photo
+             FROM chat_messages m
+             JOIN users u ON u.id = m.sender_user_id
+             WHERE m.thread_id = ?1
+             ORDER BY m.created_at ASC",
             [thread_id.clone()],
         )
         .await
@@ -233,12 +281,15 @@ pub async fn list_messages(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
+        let photo_raw: Option<String> = row.get(6).ok();
         out.push(ChatMessageDto {
             id: row.get(0).unwrap_or_default(),
             thread_id: row.get(1).unwrap_or_default(),
             sender_user_id: row.get(2).unwrap_or_default(),
             body: row.get(3).unwrap_or_default(),
             created_at: row.get(4).unwrap_or_default(),
+            sender_username: row.get(5).ok(),
+            sender_photo_url: trim_opt_url(photo_raw),
         });
     }
 
@@ -324,11 +375,15 @@ pub async fn send_message(
     )
     .await;
 
+    let (sender_username, sender_photo_url) = load_sender_display(&state, &claims.sub).await?;
+
     Ok(Json(ChatMessageDto {
         id,
         thread_id,
         sender_user_id: claims.sub,
         body: body.to_string(),
         created_at: now,
+        sender_username,
+        sender_photo_url,
     }))
 }

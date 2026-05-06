@@ -195,7 +195,14 @@ pub fn notify_result_approved(state: &AppState, athlete_id: &str, total: f64, da
     });
 }
 
-pub fn notify_result_pending(state: &AppState, athlete_id: &str, athlete_name: &str, total: f64, date: &str) {
+pub fn notify_result_pending(
+    state: &AppState,
+    athlete_id: &str,
+    athlete_name: &str,
+    total: f64,
+    date: &str,
+    strength_only: bool,
+) {
     let st = state.clone();
     let aid = athlete_id.to_string();
     let name = athlete_name.to_string();
@@ -203,7 +210,14 @@ pub fn notify_result_pending(state: &AppState, athlete_id: &str, athlete_name: &
     spawn_notify(async move {
         let conn = st.db.as_ref();
         let title = "Nowy wynik do zatwierdzenia";
-        let body = format!("{} zgłosił(a) wynik {:.1} kg ({}).", name, total, date);
+        let body = if strength_only {
+            format!(
+                "{} — zgłoszenie przysiadu/wycisku/martwego do weryfikacji ({}). Wpis dwubojowy: {:.1} kg (z profilu, jeśli nie podano nowych rwanie/podrzut).",
+                name, date, total
+            )
+        } else {
+            format!("{} zgłosił(a) wynik {:.1} kg ({}).", name, total, date)
+        };
         let payload = serde_json::json!({
             "athlete_id": aid,
             "total": total,

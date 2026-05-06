@@ -57,3 +57,11 @@ pub async fn mark_all_read(conn: &Connection, user_id: &str) -> Result<u64, libs
     )
     .await
 }
+
+pub async fn delete_all_for_user(conn: &Connection, user_id: &str) -> Result<u64, libsql::Error> {
+    conn.execute(
+        "DELETE FROM notifications WHERE user_id = ?1",
+        [user_id.to_string()],
+    )
+    .await
+}

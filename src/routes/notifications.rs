@@ -64,3 +64,13 @@ pub async fn mark_all_my_notifications_read(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::OK)
 }
+
+pub async fn delete_all_my_notifications(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> Result<StatusCode, ApiError> {
+    repos::notifications::delete_all_for_user(state.db.as_ref(), &claims.sub)
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
