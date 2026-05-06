@@ -45,6 +45,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             "/{id}/training-log",
             get(routes::training_log::list_training_log).post(routes::training_log::create_training_log),
         )
+        .route("/{id}/timeline", get(routes::athletes::athlete_timeline))
         .route("/{id}/link", post(routes::athletes::link_athlete_to_user))
         .route(
             "/{id}",
@@ -69,6 +70,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
 
     let results_routes = Router::new()
         .route("/public-board", get(routes::results::list_public_results_board))
+        .route("/public-board-olympic", get(routes::results::list_public_olympic_board))
         .route("/all", get(routes::results::list_all_results_staff))
         .route("/pending", get(routes::results::list_pending_results))
         .route(
@@ -77,6 +79,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         )
         .route("/athlete/{id}", get(routes::results::list_athlete_results))
         .route("/{id}/approve", patch(routes::results::approve_result))
+        .route("/{id}/reject", patch(routes::results::reject_result))
         .route(
             "/{id}",
             patch(routes::results::update_result).delete(routes::results::delete_result),
@@ -171,13 +174,40 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/data", post(routes::import::import_data_handler));
     let exercises_routes = Router::new().route("/board", get(routes::exercises::list_exercises_board));
     let attendance_routes = Router::new()
-        .route("/", post(routes::attendance::upsert_attendance))
+        .route("/", get(routes::attendance::list_attendance).post(routes::attendance::upsert_attendance))
+        .route("/summary/{athlete_id}", get(routes::attendance::attendance_summary_for_athlete))
         .route("/{athlete_id}", get(routes::attendance::list_attendance_for_athlete));
     let chat_routes = Router::new()
         .route("/threads", get(routes::chat::list_my_threads).post(routes::chat::open_thread))
         .route("/threads/{thread_id}", patch(routes::chat::update_thread))
         .route("/threads/{thread_id}/messages", get(routes::chat::list_messages).post(routes::chat::send_message));
-    let system_routes = Router::new().route("/audit-logs", get(routes::system_logs::list_audit_logs));
+    let comments_routes = Router::new()
+        .route("/", get(routes::comments::list_comments).post(routes::comments::create_comment));
+    let training_plans_routes = Router::new()
+        .route("/my", get(routes::training_plans::list_my_training_plans))
+        .route(
+            "/athlete/{athlete_id}",
+            get(routes::training_plans::list_athlete_training_plans),
+        )
+        .route("/", post(routes::training_plans::create_training_plan))
+        .route(
+            "/{id}",
+            patch(routes::training_plans::update_training_plan)
+                .delete(routes::training_plans::delete_training_plan),
+        )
+        .route("/{id}/my-progress", patch(routes::training_plans::update_my_plan_progress));
+    let recovery_routes = Router::new()
+        .route("/", get(routes::recovery::list_recovery_logs).post(routes::recovery::upsert_my_recovery_log))
+        .route(
+            "/athlete/{athlete_id}",
+            get(routes::recovery::list_recovery_logs_for_athlete),
+        );
+    let system_routes = Router::new()
+        .route("/audit-logs", get(routes::system_logs::list_audit_logs))
+        .route("/metrics", get(routes::system_logs::system_metrics))
+        .route("/event-feed", get(routes::system_logs::event_feed))
+        .route("/feature-flags", get(routes::feature_flags::list_feature_flags))
+        .route("/feature-flags/{name}", post(routes::feature_flags::upsert_feature_flag));
 
     Router::new()
         .route("/", get(backend_root_page))
@@ -197,6 +227,9 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .nest("/api/exercises", exercises_routes)
         .nest("/api/attendance", attendance_routes)
         .nest("/api/chat", chat_routes)
+        .nest("/api/comments", comments_routes)
+        .nest("/api/training-plans", training_plans_routes)
+        .nest("/api/recovery", recovery_routes)
         .nest("/api/system", system_routes)
         .layer(cors)
         .with_state(state)

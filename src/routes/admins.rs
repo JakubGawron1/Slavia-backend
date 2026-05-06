@@ -561,7 +561,7 @@ pub async fn update_profile(
     if let Some(ref new_av) = payload.avatar_url {
         if prev_avatar.as_ref() != Some(new_av) {
             if let Some(ref old) = prev_avatar {
-                crate::cloudinary::destroy_if_cloudinary(&state, old).await;
+                crate::cloudinary::destroy_if_cloudinary(&state, old, "image").await;
             }
         }
     }

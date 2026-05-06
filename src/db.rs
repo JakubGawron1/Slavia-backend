@@ -242,6 +242,25 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             created_at TEXT NOT NULL
         )",
         "CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON system_audit_logs(created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS feature_flags (
+            name TEXT NOT NULL,
+            value INTEGER NOT NULL,
+            user_id TEXT,
+            updated_by TEXT REFERENCES users(id),
+            updated_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (name, user_id)
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_feature_flags_user ON feature_flags(user_id, name)",
+        "CREATE TABLE IF NOT EXISTS feature_flag_events (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            value INTEGER NOT NULL,
+            user_id TEXT,
+            actor_user_id TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_feature_flag_events_created ON feature_flag_events(created_at DESC)",
         "CREATE TABLE IF NOT EXISTS chat_threads (
             id TEXT PRIMARY KEY,
             athlete_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -292,6 +311,42 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             author_id TEXT NOT NULL REFERENCES users(id),
             created_at TEXT NOT NULL
         )",
+        "CREATE TABLE IF NOT EXISTS coach_comments (
+            id TEXT PRIMARY KEY,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            body TEXT NOT NULL,
+            author_user_id TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_coach_comments_target ON coach_comments(target_type, target_id, created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS training_plans (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            goal TEXT,
+            week_start TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'planned',
+            coach_note TEXT,
+            athlete_note TEXT,
+            progress_percent INTEGER NOT NULL DEFAULT 0,
+            created_by TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_training_plans_athlete_week ON training_plans(athlete_id, week_start DESC)",
+        "CREATE TABLE IF NOT EXISTS recovery_logs (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            date TEXT NOT NULL,
+            sleep_hours REAL NOT NULL,
+            fatigue_level INTEGER NOT NULL,
+            soreness_level INTEGER NOT NULL,
+            readiness_level INTEGER NOT NULL,
+            note TEXT,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_athlete_date ON recovery_logs(athlete_id, date)",
         "CREATE TABLE IF NOT EXISTS contact_messages (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -407,6 +462,12 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             (),
         )
         .await;
+    let _ = conn
+        .execute(
+            "UPDATE attendance_records SET status = 'nieobecny' WHERE status IN ('spóźniony', 'spozniony', 'late')",
+            (),
+        )
+        .await;
 
     let n = sync_all_athletes_bests_from_results(conn)
         .await
@@ -494,12 +555,17 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
         "DROP TABLE IF EXISTS chat_threads",
         "DROP TABLE IF EXISTS attendance_records",
         "DROP TABLE IF EXISTS system_audit_logs",
+        "DROP TABLE IF EXISTS feature_flag_events",
+        "DROP TABLE IF EXISTS feature_flags",
         "DROP TABLE IF EXISTS results",
         "DROP TABLE IF EXISTS competition_participants",
         "DROP TABLE IF EXISTS recurring_training_cancellations",
         "DROP TABLE IF EXISTS training_log_entries",
         "DROP TABLE IF EXISTS contact_messages",
         "DROP TABLE IF EXISTS gallery_photos",
+        "DROP TABLE IF EXISTS coach_comments",
+        "DROP TABLE IF EXISTS training_plans",
+        "DROP TABLE IF EXISTS recovery_logs",
         "DROP TABLE IF EXISTS announcements",
         "DROP TABLE IF EXISTS posts",
         "DROP TABLE IF EXISTS competitions",
@@ -627,6 +693,25 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             created_at TEXT NOT NULL
         )",
         "CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON system_audit_logs(created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS feature_flags (
+            name TEXT NOT NULL,
+            value INTEGER NOT NULL,
+            user_id TEXT,
+            updated_by TEXT REFERENCES users(id),
+            updated_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (name, user_id)
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_feature_flags_user ON feature_flags(user_id, name)",
+        "CREATE TABLE IF NOT EXISTS feature_flag_events (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            value INTEGER NOT NULL,
+            user_id TEXT,
+            actor_user_id TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_feature_flag_events_created ON feature_flag_events(created_at DESC)",
         "CREATE TABLE IF NOT EXISTS chat_threads (
             id TEXT PRIMARY KEY,
             athlete_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -677,6 +762,42 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             author_id TEXT NOT NULL REFERENCES users(id),
             created_at TEXT NOT NULL
         )",
+        "CREATE TABLE IF NOT EXISTS coach_comments (
+            id TEXT PRIMARY KEY,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            body TEXT NOT NULL,
+            author_user_id TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_coach_comments_target ON coach_comments(target_type, target_id, created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS training_plans (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            goal TEXT,
+            week_start TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'planned',
+            coach_note TEXT,
+            athlete_note TEXT,
+            progress_percent INTEGER NOT NULL DEFAULT 0,
+            created_by TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_training_plans_athlete_week ON training_plans(athlete_id, week_start DESC)",
+        "CREATE TABLE IF NOT EXISTS recovery_logs (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            date TEXT NOT NULL,
+            sleep_hours REAL NOT NULL,
+            fatigue_level INTEGER NOT NULL,
+            soreness_level INTEGER NOT NULL,
+            readiness_level INTEGER NOT NULL,
+            note TEXT,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_athlete_date ON recovery_logs(athlete_id, date)",
         "CREATE TABLE IF NOT EXISTS contact_messages (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,

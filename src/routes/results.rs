@@ -165,6 +165,45 @@ pub async fn list_public_results_board(
     Ok(Json(out))
 }
 
+/// Publiczna tablica klasycznego dwuboju (bez wpisów stricte siłowych).
+pub async fn list_public_olympic_board(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<PublicResultBoardRow>>, ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT r.id, r.athlete_id, a.full_name, r.competition_id, c.title, \
+             r.snatch, r.clean_and_jerk, r.total, r.date, r.squat_kg, r.bench_kg, r.deadlift_kg \
+             FROM results r \
+             INNER JOIN athletes a ON a.id = r.athlete_id \
+             LEFT JOIN competitions c ON c.id = r.competition_id \
+             WHERE r.status = 'Approved' AND r.total >= 20 \
+             ORDER BY r.date DESC, r.total DESC",
+            (),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+        out.push(PublicResultBoardRow {
+            id: sql_row::required_string(&row, 0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_id: sql_row::required_string(&row, 1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_name: sql_row::required_string(&row, 2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            competition_id: sql_row::opt_string(&row, 3).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            competition_title: sql_row::opt_string(&row, 4).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            snatch: sql_row::required_f64(&row, 5).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            clean_and_jerk: sql_row::required_f64(&row, 6).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            total: sql_row::required_f64(&row, 7).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            date: sql_row::required_string(&row, 8).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            squat_kg: sql_row::opt_f64(&row, 9).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            bench_kg: sql_row::opt_f64(&row, 10).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            deadlift_kg: sql_row::opt_f64(&row, 11).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        });
+    }
+    Ok(Json(out))
+}
+
 pub async fn list_approved_results(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<CompetitionResult>>, ApiError> {
@@ -372,6 +411,22 @@ pub async fn approve_result(
     }
     sync_athlete_bests_from_approved(&state, &athlete_id).await?;
     crate::notifications::notify_result_approved(&state, &athlete_id, total, &date);
+    Ok(StatusCode::OK)
+}
+
+pub async fn reject_result(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    _auth: RequireTrainerOrHigher,
+) -> Result<StatusCode, ApiError> {
+    let n = state
+        .db
+        .execute("UPDATE results SET status = 'Rejected' WHERE id = ?1", [id.clone()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if n == 0 {
+        return Err(api_error(StatusCode::NOT_FOUND, "Result not found"));
+    }
     Ok(StatusCode::OK)
 }
 

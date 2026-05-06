@@ -500,6 +500,81 @@ pub fn notify_competitions_synced(
     });
 }
 
+pub fn notify_training_plan_assigned(
+    state: &AppState,
+    athlete_id: &str,
+    plan_title: &str,
+    week_start: &str,
+) {
+    let st = state.clone();
+    let aid = athlete_id.to_string();
+    let title = plan_title.to_string();
+    let week = week_start.to_string();
+    spawn_notify(async move {
+        let title_a = "Nowy plan treningowy";
+        let body_a = format!("Dodano plan: „{}” (start tygodnia: {}).", title, week);
+        let title_s = "Plan treningowy przypisany";
+        let body_s = format!(
+            "{} — „{}” ({})",
+            athlete_full_name(st.db.as_ref(), &aid)
+                .await?
+                .unwrap_or_else(|| aid.clone()),
+            title,
+            week
+        );
+        let payload = serde_json::json!({ "athlete_id": aid, "week_start": week }).to_string();
+        athlete_plus_superadmins(
+            &st,
+            &aid,
+            "training_plan_assigned",
+            title_a,
+            &body_a,
+            "training_plan_assigned_staff",
+            title_s,
+            &body_s,
+            Some(&payload),
+        )
+        .await?;
+        Ok(())
+    });
+}
+
+pub fn notify_training_plan_progress_updated(
+    state: &AppState,
+    athlete_id: &str,
+    plan_title: &str,
+    progress_percent: i64,
+) {
+    let st = state.clone();
+    let aid = athlete_id.to_string();
+    let title = plan_title.to_string();
+    spawn_notify(async move {
+        let conn = st.db.as_ref();
+        let n_title = "Aktualizacja progresu planu";
+        let n_body = format!(
+            "{}: {}% ({}).",
+            athlete_full_name(conn, &aid)
+                .await?
+                .unwrap_or_else(|| aid.clone()),
+            progress_percent,
+            title
+        );
+        let payload = serde_json::json!({ "athlete_id": aid, "progress_percent": progress_percent }).to_string();
+        for uid in trainer_staff_ids(conn).await? {
+            insert_notification(
+                conn,
+                &uid,
+                "training_plan_progress",
+                n_title,
+                &n_body,
+                Some(&payload),
+            )
+            .await?;
+        }
+        Ok(())
+    });
+}
+
 pub async fn diff_notify_athlete_competition_assignments(
     state: &AppState,
     athlete_id: &str,
