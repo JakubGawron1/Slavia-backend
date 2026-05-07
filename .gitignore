@@ -8,3 +8,7 @@ Secrets.toml
 # Nie commituj haseł ani lokalnych skryptów testowych z credentialami
 passwords.txt
 **/passwords.txt
+# SQLite — baza robocza i pliki pomocnicze (nie commitujemy dumpów ani kopii z roota projektu)
+*.db
+*.db-shm
+*.db-wal
