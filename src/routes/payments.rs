@@ -423,8 +423,8 @@ pub async fn payments_overview_for_month(
         let full_name = sql_row::string(&r, 1).unwrap_or_else(|_| "?".to_string());
         let approved_count: i64 = r.get(2).unwrap_or(0);
         let pending_count: i64 = r.get(3).unwrap_or(0);
-        let approved_sum: f64 = r.get(4).unwrap_or(0.0);
-        let pending_sum: f64 = r.get(5).unwrap_or(0.0);
+        let approved_sum: f64 = sql_row::opt_f64(&r, 4).unwrap_or(None).unwrap_or(0.0);
+        let pending_sum: f64 = sql_row::opt_f64(&r, 5).unwrap_or(None).unwrap_or(0.0);
         out.push(AthletePaymentOverviewRow {
             athlete_id,
             full_name,
@@ -467,7 +467,7 @@ pub async fn list_pending_payments(
             athlete_id: sql_row::string(&r, 1).unwrap_or_default(),
             athlete_name: sql_row::string(&r, 2).unwrap_or_else(|_| "?".to_string()),
             month: sql_row::string(&r, 3).unwrap_or_default(),
-            amount_pln: r.get(4).ok(),
+            amount_pln: sql_row::opt_f64(&r, 4).unwrap_or(None),
             note: sql_row::opt_string(&r, 5).unwrap_or(None),
             created_at: sql_row::string(&r, 6).unwrap_or_default(),
             created_by_user_id: sql_row::opt_string(&r, 7).unwrap_or(None),
@@ -528,7 +528,7 @@ pub async fn approve_payment(
 
     let athlete_id: String = row.get(0).unwrap_or_default();
     let month: String = row.get(1).unwrap_or_default();
-    let amount_pln: Option<f64> = row.get(2).ok();
+    let amount_pln: Option<f64> = sql_row::opt_f64(&row, 2).unwrap_or(None);
     let note: Option<String> = sql_row::opt_string(&row, 3).unwrap_or(None);
     let created_by_user_id: Option<String> = sql_row::opt_string(&row, 4).unwrap_or(None);
 

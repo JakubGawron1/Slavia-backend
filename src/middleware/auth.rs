@@ -119,6 +119,27 @@ impl FromRequestParts<AppState> for Claims {
         )
         .map_err(|_| api_error(StatusCode::UNAUTHORIZED, "Invalid Token"))?;
 
+        // Banowanie kont jest egzekwowane w backendzie (DB) — działa natychmiast, niezależnie od wieku tokena.
+        // Nie blokujemy SuperAdminów, nawet jeśli ktoś ustawiłby `is_banned=1` (dodatkowe zabezpieczenie).
+        let mut rows = state
+            .db
+            .query(
+                "SELECT is_banned FROM users WHERE id = ?1 LIMIT 1",
+                [token_data.claims.sub.clone()],
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if let Some(r) = row {
+            let is_banned: i64 = r.get(0).unwrap_or(0);
+            if is_banned != 0 && !token_data.claims.roles.contains(&Role::SuperAdmin) {
+                return Err(api_error(StatusCode::FORBIDDEN, "Account is banned"));
+            }
+        }
+
         Ok(token_data.claims)
     }
 }

@@ -88,6 +88,9 @@ pub struct UserInfo {
     pub email: Option<String>,
     pub roles: Vec<Role>,
     pub avatar_url: Option<String>,
+    pub is_banned: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub banned_reason: Option<String>,
     /// Preset kolorystyczny (`slavia`, `iron`, …) — zapisany na koncie.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_theme_preset: Option<String>,
@@ -107,7 +110,7 @@ pub async fn me_handler(
     let mut rows = state
         .db
         .query(
-            "SELECT u.username, u.email, u.avatar_url, u.ui_theme_preset, u.ui_color_mode, a.gender, a.image_url
+            "SELECT u.username, u.email, u.avatar_url, u.ui_theme_preset, u.ui_color_mode, a.gender, a.image_url, u.is_banned, u.banned_reason
              FROM users u
              LEFT JOIN athletes a ON a.user_id = u.id
              WHERE u.id = ?1
@@ -128,6 +131,8 @@ pub async fn me_handler(
     let ui_color_mode: Option<String> = row.get(4).ok();
     let athlete_gender: Option<String> = row.get(5).ok();
     let athlete_image_url: Option<String> = row.get(6).ok();
+    let is_banned_i: i64 = row.get(7).unwrap_or(0);
+    let banned_reason: Option<String> = row.get(8).ok();
 
     Ok(Json(UserInfo {
         id: claims.sub,
@@ -135,6 +140,8 @@ pub async fn me_handler(
         email,
         roles: claims.roles,
         avatar_url,
+        is_banned: is_banned_i != 0,
+        banned_reason,
         ui_theme_preset,
         ui_color_mode,
         athlete_gender,

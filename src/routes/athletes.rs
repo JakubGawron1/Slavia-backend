@@ -786,6 +786,32 @@ pub async fn attach_existing_user_to_athlete(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn detach_user_from_athlete(
+    State(state): State<AppState>,
+    Path(athlete_id): Path<String>,
+    _auth: RequireAdminOrSuperAdmin,
+) -> Result<StatusCode, ApiError> {
+    let n = state
+        .db
+        .execute("UPDATE athletes SET user_id = NULL WHERE id = ?1", [athlete_id.clone()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if n == 0 {
+        return Err(api_error(StatusCode::NOT_FOUND, "Athlete not found"));
+    }
+
+    notifications::notify_admin_broadcast(
+        &state,
+        "admin_athlete_detached_user",
+        "Odłączono konto od zawodnika",
+        &format!("Odłączono konto użytkownika od profilu zawodnika {}.", athlete_id),
+        Some(serde_json::json!({ "athlete_id": athlete_id }).to_string()),
+    );
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn link_athlete_to_user(
     State(state): State<AppState>,
     Path(athlete_id): Path<String>,

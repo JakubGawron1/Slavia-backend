@@ -52,6 +52,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             post(routes::athletes::attach_existing_user_to_athlete),
         )
         .route(
+            "/{id}/detach-user",
+            post(routes::athletes::detach_user_from_athlete),
+        )
+        .route(
             "/{id}",
             get(routes::athletes::get_athlete_public)
                 .patch(routes::athletes::update_athlete)
@@ -64,6 +68,8 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/{id}", delete(routes::admins::delete_admin))
         .route("/{id}/account", patch(routes::admins::update_user_account))
         .route("/{id}/role", patch(routes::admins::update_user_role))
+        .route("/{id}/ban", patch(routes::admins::ban_user))
+        .route("/{id}/unban", patch(routes::admins::unban_user))
         .route("/reset", post(routes::admins::reset_database));
 
     // Zgłoszenia wyników (Pending): osobny `/api/submissions/*`, handlery współdzielone z `results`.
