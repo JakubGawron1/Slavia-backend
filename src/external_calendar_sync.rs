@@ -304,7 +304,15 @@ async fn upsert_external_row(conn: &Connection, row: UpsertRow) -> Result<(), li
     if let Some(r) = existing.next().await? {
         let id: String = r.get(0)?;
         conn.execute(
-            "UPDATE competitions SET title = ?1, date = ?2, location = ?3, description = ?4, category = ?5, status = ?6, external_url = ?7 WHERE id = ?8",
+            "UPDATE competitions SET \
+                title = ?1, \
+                date = ?2, \
+                location = ?3, \
+                description = ?4, \
+                category = CASE WHEN category_override IS NOT NULL THEN category ELSE ?5 END, \
+                status = ?6, \
+                external_url = ?7 \
+             WHERE id = ?8",
             (
                 row.title.clone(),
                 row.date.clone(),

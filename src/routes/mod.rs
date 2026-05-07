@@ -22,3 +22,4 @@ pub mod feature_flags;
 pub mod comments;
 pub mod training_plans;
 pub mod recovery;
+pub mod payments;

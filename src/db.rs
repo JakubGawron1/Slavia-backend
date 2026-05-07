@@ -12,6 +12,31 @@
 //! tej synchronizacji — seed może zostawiać ręczne rekordy do czasu dodania wyników.
 //!
 use libsql::Connection;
+use tokio::time::{sleep, Duration};
+
+async fn exec0_retry(conn: &Connection, sql: &str, label: &str) -> Result<(), String> {
+    // SQLite bywa chwilowo zablokowane (np. równoległe połączenie / statement).
+    // Robimy krótki retry zamiast paniki na starcie.
+    for attempt in 0..80 {
+        match conn.execute(sql, ()).await {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                let locked = msg.contains("database table is locked")
+                    || msg.contains("database is locked")
+                    || msg.contains("SQLITE_BUSY")
+                    || msg.contains("SQLITE_LOCKED");
+                if !locked || attempt == 79 {
+                    return Err(format!("{label}: {msg}"));
+                }
+                // rosnący backoff z limitem ~1.5s; 80 prób ~ < 70s
+                let ms = (100 + (attempt as u64 * 80)).min(1500);
+                sleep(Duration::from_millis(ms)).await;
+            }
+        }
+    }
+    Err(format!("{label}: exhausted retries"))
+}
 
 async fn migrate_remove_trainer_admin_role(conn: &Connection) -> Result<u64, String> {
     let mut rows = conn
@@ -160,6 +185,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             location TEXT NOT NULL,
             description TEXT,
             category TEXT DEFAULT 'club_event',
+            category_override TEXT,
             status TEXT DEFAULT 'scheduled',
             external_source TEXT,
             external_ref TEXT,
@@ -301,6 +327,21 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             author_id TEXT NOT NULL REFERENCES users(id),
             created_at TEXT NOT NULL
         )",
+        "CREATE TABLE IF NOT EXISTS membership_payments (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            month TEXT NOT NULL,
+            amount_pln REAL,
+            note TEXT,
+            status TEXT NOT NULL,
+            created_by_user_id TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL,
+            approved_by_user_id TEXT REFERENCES users(id),
+            approved_at TEXT
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_membership_payments_athlete_month ON membership_payments(athlete_id, month)",
+        "CREATE INDEX IF NOT EXISTS idx_membership_payments_status_created ON membership_payments(status, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_membership_payments_month_status ON membership_payments(month, status)",
         "CREATE TABLE IF NOT EXISTS gallery_photos (
             id TEXT PRIMARY KEY,
             image_url TEXT NOT NULL,
@@ -378,6 +419,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
     // Migrate: add category and status columns if missing (safe for existing DBs)
     let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category TEXT DEFAULT 'club_event'", ()).await;
     let _ = conn.execute("ALTER TABLE competitions ADD COLUMN status TEXT DEFAULT 'scheduled'", ()).await;
+    let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category_override TEXT", ()).await;
 
     // Migrate: kolumna is_active przy starszych instancjach Turso (bez niej SELECT na liście publicznej się wywali)
     let _ = conn
@@ -479,6 +521,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
 
     // Migracja: role → roles (JSON array) — wyłącznie dla starych baz z kolumną `role`
     // (świeże instalacje mają od razu `roles`; SELECT role wtedy kończy się błędem „no such column”).
+    let _ = conn.execute("PRAGMA busy_timeout = 5000", ()).await;
     let mut pragma = conn
         .query(
             "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'role'",
@@ -494,6 +537,8 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         .transpose()
         .map_err(|e| format!("pragma_table_info get: {e}"))?
         .unwrap_or(0);
+    // ważne: zwolnij statement zanim wejdziemy w DDL
+    drop(pragma);
 
     let mut migrated = 0;
     if role_column_exists > 0 {
@@ -536,6 +581,63 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
     }
     println!("🔄 Migracja: users.role → users.roles (JSON array) (migrated {} users).", migrated);
 
+    // Usunięcie legacy kolumny `users.role` (SQLite nie wspiera DROP COLUMN -> rekonstrukcja tabeli)
+    if role_column_exists > 0 {
+        println!("🧱 Migracja: usuwanie legacy kolumny users.role (rekonstrukcja tabeli users)...");
+        // Wyłącz FK na czas rekonstrukcji.
+        let _ = conn.execute("PRAGMA foreign_keys = OFF", ()).await;
+        // BEGIN IMMEDIATE — weź write-lock od razu (mniej szans na DROP/ALTER lock).
+        exec0_retry(conn, "BEGIN IMMEDIATE", "BEGIN IMMEDIATE drop users.role migration").await?;
+
+        // Nowy schemat bez `role`
+        exec0_retry(
+            conn,
+            "CREATE TABLE users__new (
+                id TEXT PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                email TEXT UNIQUE,
+                password_hash TEXT NOT NULL,
+                roles TEXT NOT NULL,
+                avatar_url TEXT,
+                ui_theme_preset TEXT,
+                ui_color_mode TEXT
+            )",
+            "CREATE TABLE users__new",
+        )
+        .await?;
+
+        // Kopiowanie danych: roles -> roles; jeśli roles brak, to role -> JSON; ostatecznie fallback.
+        exec0_retry(
+            conn,
+            "INSERT INTO users__new (id, username, email, password_hash, roles, avatar_url, ui_theme_preset, ui_color_mode)
+             SELECT
+                id,
+                username,
+                email,
+                password_hash,
+                COALESCE(
+                    roles,
+                    CASE
+                        WHEN role IS NOT NULL AND TRIM(role) <> '' THEN ('[\"' || role || '\"]')
+                        ELSE '[\"Athlete\"]'
+                    END
+                ) AS roles,
+                avatar_url,
+                ui_theme_preset,
+                ui_color_mode
+             FROM users",
+            "INSERT users__new",
+        )
+        .await?;
+
+        exec0_retry(conn, "DROP TABLE users", "DROP TABLE users").await?;
+        exec0_retry(conn, "ALTER TABLE users__new RENAME TO users", "RENAME users__new").await?;
+
+        exec0_retry(conn, "COMMIT", "COMMIT drop users.role migration").await?;
+        let _ = conn.execute("PRAGMA foreign_keys = ON", ()).await;
+        println!("✅ Migracja: users.role usunięta.");
+    }
+
     let trainer_admin_fix = migrate_remove_trainer_admin_role(conn)
         .await
         .map_err(|e| format!("migrate_remove_trainer_admin_role: {e}"))?;
@@ -549,6 +651,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
 
 pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let drop_tables = [
+        "DROP TABLE IF EXISTS membership_payments",
         "DROP TABLE IF EXISTS notifications",
         "DROP TABLE IF EXISTS chat_reads",
         "DROP TABLE IF EXISTS chat_messages",
@@ -611,6 +714,7 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             location TEXT NOT NULL,
             description TEXT,
             category TEXT DEFAULT 'club_event',
+            category_override TEXT,
             status TEXT DEFAULT 'scheduled',
             external_source TEXT,
             external_ref TEXT,
@@ -752,6 +856,21 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             author_id TEXT NOT NULL REFERENCES users(id),
             created_at TEXT NOT NULL
         )",
+        "CREATE TABLE IF NOT EXISTS membership_payments (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            month TEXT NOT NULL,
+            amount_pln REAL,
+            note TEXT,
+            status TEXT NOT NULL,
+            created_by_user_id TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL,
+            approved_by_user_id TEXT REFERENCES users(id),
+            approved_at TEXT
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_membership_payments_athlete_month ON membership_payments(athlete_id, month)",
+        "CREATE INDEX IF NOT EXISTS idx_membership_payments_status_created ON membership_payments(status, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_membership_payments_month_status ON membership_payments(month, status)",
         "CREATE TABLE IF NOT EXISTS gallery_photos (
             id TEXT PRIMARY KEY,
             image_url TEXT NOT NULL,
@@ -815,6 +934,7 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
 
     let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category TEXT DEFAULT 'club_event'", ()).await;
     let _ = conn.execute("ALTER TABLE competitions ADD COLUMN status TEXT DEFAULT 'scheduled'", ()).await;
+    let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category_override TEXT", ()).await;
     let _ = conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_competitions_external_ref ON competitions(external_source, external_ref) WHERE external_source IS NOT NULL AND external_ref IS NOT NULL",
         (),

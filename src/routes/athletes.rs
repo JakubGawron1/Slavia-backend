@@ -41,7 +41,12 @@ async fn insert_athlete_user_account(
             (uid.clone(), username, hash, roles_json),
         )
         .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("User creation failed: {}", e)))?;
+        .map_err(|e| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("User creation failed: {}", e),
+            )
+        })?;
     Ok(uid)
 }
 

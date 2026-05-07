@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::api_error::{api_error, ApiError};
 use crate::middleware::auth::{Claims, RequireAdminOrSuperAdmin};
 use crate::models::Announcement;
+use crate::notifications;
 use crate::sql_row;
 use crate::state::AppState;
 
@@ -129,6 +130,10 @@ pub async fn create_announcement(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    if published {
+        notifications::notify_announcement_published(&state, &id, &title);
+    }
+
     Ok(Json(Announcement {
         id,
         title,
@@ -182,6 +187,10 @@ pub async fn update_announcement(
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if !existing.published && published {
+        notifications::notify_announcement_published(&state, &id, &title);
+    }
 
     Ok(Json(Announcement {
         id,

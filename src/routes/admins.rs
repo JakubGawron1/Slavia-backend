@@ -267,10 +267,14 @@ pub async fn create_admin(
     let roles_json =
         serde_json::to_string(&roles_vec).map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error serializing roles"))?;
 
-    state.db.execute(
-        "INSERT INTO users (id, username, password_hash, roles) VALUES (?1, ?2, ?3, ?4)",
-        (user_id.clone(), payload.username.clone(), hash, roles_json),
-    ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    state
+        .db
+        .execute(
+            "INSERT INTO users (id, username, password_hash, roles) VALUES (?1, ?2, ?3, ?4)",
+            (user_id.clone(), payload.username.clone(), hash, roles_json),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let actor = notifications::username_by_id(state.db.as_ref(), &auth.0.sub)
         .await
@@ -343,14 +347,23 @@ pub async fn update_user_account(
     }
 
     if let Some(new_email) = &payload.email {
-        state
-            .db
-            .execute(
-                "UPDATE users SET email = ?1 WHERE id = ?2",
-                (new_email.clone(), id.clone()),
-            )
-            .await
-            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let trimmed = new_email.trim();
+        if trimmed.is_empty() {
+            state
+                .db
+                .execute("UPDATE users SET email = NULL WHERE id = ?1", [id.clone()])
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        } else {
+            state
+                .db
+                .execute(
+                    "UPDATE users SET email = ?1 WHERE id = ?2",
+                    (trimmed.to_string(), id.clone()),
+                )
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
     }
 
     if let Some(new_password) = &payload.password {
@@ -419,10 +432,14 @@ pub async fn update_user_role(
         forbid_mutating_superadmin_user_record(claims, &target_roles)?;
     }
 
-    let result = state.db.execute(
-        "UPDATE users SET roles = ?1 WHERE id = ?2",
-        (roles_json, id.clone()),
-    ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let result = state
+        .db
+        .execute(
+            "UPDATE users SET roles = ?1 WHERE id = ?2",
+            (roles_json, id.clone()),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if result == 0 {
         return Err(api_error(StatusCode::NOT_FOUND, "User not found"));
@@ -581,8 +598,23 @@ pub async fn update_profile(
     }
     
     if let Some(new_email) = payload.email {
-        state.db.execute("UPDATE users SET email = ?1 WHERE id = ?2", (new_email, claims.sub.clone()))
-            .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let trimmed = new_email.trim().to_string();
+        if trimmed.is_empty() {
+            state
+                .db
+                .execute("UPDATE users SET email = NULL WHERE id = ?1", [claims.sub.clone()])
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        } else {
+            state
+                .db
+                .execute(
+                    "UPDATE users SET email = ?1 WHERE id = ?2",
+                    (trimmed, claims.sub.clone()),
+                )
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
     }
 
     if let Some(url) = &payload.avatar_url {

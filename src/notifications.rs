@@ -93,6 +93,16 @@ pub async fn admin_staff_ids(conn: &Connection) -> Result<Vec<String>, libsql::E
     Ok(out)
 }
 
+pub async fn all_user_ids(conn: &Connection) -> Result<Vec<String>, libsql::Error> {
+    let mut rows = conn.query("SELECT id FROM users", ()).await?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let id: String = row.get(0)?;
+        out.push(id);
+    }
+    Ok(out)
+}
+
 pub async fn athlete_user_id(conn: &Connection, athlete_id: &str) -> Result<Option<String>, libsql::Error> {
     let mut rows = conn
         .query(
@@ -460,6 +470,34 @@ pub fn notify_admin_broadcast(state: &AppState, kind: &str, title: &str, body: &
         let payload_ref = payload.as_deref();
         for uid in admin_staff_ids(conn).await? {
             insert_notification(conn, &uid, &kind, &title, &body, payload_ref).await?;
+        }
+        Ok(())
+    });
+}
+
+pub fn notify_announcement_published(state: &AppState, announcement_id: &str, announcement_title: &str) {
+    let st = state.clone();
+    let aid = announcement_id.to_string();
+    let at = announcement_title.trim().to_string();
+    spawn_notify(async move {
+        let conn = st.db.as_ref();
+        let title = "Nowe ogłoszenie";
+        let body = if at.is_empty() {
+            "Dodano nowe ogłoszenie w systemie.".to_string()
+        } else {
+            at
+        };
+        let payload = serde_json::json!({ "announcement_id": aid }).to_string();
+        for uid in all_user_ids(conn).await? {
+            insert_notification(
+                conn,
+                &uid,
+                "announcement_published",
+                title,
+                &body,
+                Some(&payload),
+            )
+            .await?;
         }
         Ok(())
     });
