@@ -387,3 +387,41 @@ pub async fn send_message(
         sender_photo_url,
     }))
 }
+
+pub async fn delete_thread(
+    State(state): State<AppState>,
+    claims: Claims,
+    Path(thread_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if !can_chat(&claims) {
+        return Err(api_error(StatusCode::FORBIDDEN, "Brak uprawnień do czatu"));
+    }
+
+    // Hard-delete: FK z ON DELETE CASCADE usuwa chat_messages i chat_reads.
+    let n = state
+        .db
+        .execute(
+            "DELETE FROM chat_threads WHERE id = ?1 AND (athlete_user_id = ?2 OR trainer_user_id = ?2)",
+            (thread_id.clone(), claims.sub.clone()),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if n == 0 {
+        return Err(api_error(StatusCode::FORBIDDEN, "Brak dostępu do wątku"));
+    }
+
+    let _ = write_audit_log(
+        state.db.as_ref(),
+        Some(&claims.sub),
+        Some("chat"),
+        "chat",
+        "thread_deleted",
+        Some("thread"),
+        Some(&thread_id),
+        None,
+    )
+    .await;
+
+    Ok(StatusCode::NO_CONTENT)
+}

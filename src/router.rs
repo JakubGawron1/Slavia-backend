@@ -178,6 +178,18 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
                 .delete(routes::notifications::delete_all_my_notifications),
         );
 
+    let payments_routes = Router::new()
+        .route("/my", post(routes::payments::create_my_payment))
+        .route("/my/status", get(routes::payments::my_payment_status))
+        .route("/status", get(routes::payments::list_athletes_payment_status))
+        .route("/pending", get(routes::payments::list_pending_payments))
+        .route("/{id}/approve", patch(routes::payments::approve_payment))
+        .route("/{id}/reject", patch(routes::payments::reject_payment))
+        .route(
+            "/athlete/{athlete_id}/approved",
+            post(routes::payments::create_approved_payment_for_athlete),
+        );
+
     let import_routes = Router::new()
         .route("/data", post(routes::import::import_data_handler));
     let exercises_routes = Router::new().route("/board", get(routes::exercises::list_exercises_board));
@@ -187,7 +199,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/{athlete_id}", get(routes::attendance::list_attendance_for_athlete));
     let chat_routes = Router::new()
         .route("/threads", get(routes::chat::list_my_threads).post(routes::chat::open_thread))
-        .route("/threads/{thread_id}", patch(routes::chat::update_thread))
+        .route(
+            "/threads/{thread_id}",
+            patch(routes::chat::update_thread).delete(routes::chat::delete_thread),
+        )
         .route("/threads/{thread_id}/messages", get(routes::chat::list_messages).post(routes::chat::send_message));
     let comments_routes = Router::new()
         .route("/", get(routes::comments::list_comments).post(routes::comments::create_comment));
@@ -232,6 +247,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .nest("/api/gallery", gallery_routes)
         .nest("/api/contact", contact_routes)
         .nest("/api/notifications", notifications_routes)
+        .nest("/api/payments", payments_routes)
         .nest("/api/import", import_routes)
         .nest("/api/exercises", exercises_routes)
         .nest("/api/attendance", attendance_routes)

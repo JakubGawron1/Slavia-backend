@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::api_error::{api_error, ApiError};
 use crate::external_calendar_sync;
-use crate::middleware::auth::RequireTrainerOrHigher;
+use crate::middleware::auth::{RequireAdminOrSuperAdmin, RequireTrainerOrHigher};
 use crate::models::Competition;
 use crate::notifications;
 use crate::state::AppState;
@@ -45,7 +45,7 @@ pub async fn list_competitions(
     let mut rows = state
         .db
         .query(
-            "SELECT id, title, date, location, description, category, status, external_source, external_ref, external_url \
+            "SELECT id, title, date, location, description, COALESCE(category_override, category) AS category, status, external_source, external_ref, external_url \
              FROM competitions ORDER BY date ASC",
             (),
         )
@@ -172,11 +172,17 @@ pub async fn update_competition(
 
     if ext.is_some() {
         let status = payload.status.unwrap_or_else(|| "scheduled".to_string());
+        let category_opt = payload.category.map(|s| s.trim().to_string());
+        let category_override: Option<String> = category_opt
+            .as_deref()
+            .map(|s| s.trim())
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty());
         state
             .db
             .execute(
-                "UPDATE competitions SET status = ?1 WHERE id = ?2",
-                (status.clone(), id.clone()),
+                "UPDATE competitions SET status = ?1, category_override = ?2 WHERE id = ?3",
+                (status.clone(), category_override, id.clone()),
             )
             .await
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -204,7 +210,7 @@ pub async fn update_competition(
     let mut rows = state
         .db
         .query(
-            "SELECT id, title, date, location, description, category, status, external_source, external_ref, external_url FROM competitions WHERE id = ?1",
+            "SELECT id, title, date, location, description, COALESCE(category_override, category) AS category, status, external_source, external_ref, external_url FROM competitions WHERE id = ?1",
             [id],
         )
         .await
@@ -225,7 +231,7 @@ pub async fn update_competition(
 
 pub async fn sync_external_competitions(
     State(state): State<AppState>,
-    _auth: RequireTrainerOrHigher,
+    _auth: RequireAdminOrSuperAdmin,
 ) -> Result<Json<external_calendar_sync::SyncExternalResponse>, ApiError> {
     let r = external_calendar_sync::run_sync(state.db.as_ref()).await?;
     notifications::notify_competitions_synced(
