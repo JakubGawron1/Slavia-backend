@@ -1,22 +1,31 @@
 use std::env;
 use std::net::SocketAddr;
 use std::path::Path;
+use std::path::PathBuf;
 use tokio::net::TcpListener;
+
 use dotenvy::dotenv;
+use slavia_backend::DatabaseBackend;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Próbujemy załadować .env
     let _ = dotenv();
 
-    // Ładujemy konfigurację (Env > Secrets.toml)
-    let (db_url, db_token, jwt_secret, c_name, c_key, c_secret) = load_config()?;
+    let (database, jwt_secret, c_name, c_key, c_secret) = load_config()?;
 
-    let app = slavia_backend::create_app(&db_url, &db_token, jwt_secret, c_name, c_key, c_secret)
+    match &database {
+        DatabaseBackend::Local(p) => {
+            println!("📂 Baza lokalna (SQLite): {}", p.display());
+        }
+        DatabaseBackend::Remote { url, .. } => {
+            println!("☁️  Baza zdalna (Turso): {url}");
+        }
+    }
+
+    let app = slavia_backend::create_app(database, jwt_secret, c_name, c_key, c_secret)
         .await
         .expect("Failed to create application");
 
-    // Port z env (np. dla Render/Railways) lub domyślnie 8000 — zgodnie z NUXT_PUBLIC_API_BASE_URL w frontendzie
     let port = env::var("PORT")
         .unwrap_or_else(|_| "8080".to_string())
         .parse::<u16>()
@@ -31,67 +40,85 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-fn load_config() -> Result<(String, String, String, String, String, String), Box<dyn std::error::Error + Send + Sync>> {
-    // 1. Próbujemy z zmiennych środowiskowych
-    let from_env = (
-        env::var("TURSO_DATABASE_URL").ok(),
-        env::var("TURSO_AUTH_TOKEN").ok(),
-        env::var("JWT_SECRET").ok(),
-        env::var("CLOUDINARY_CLOUD_NAME").ok(),
-        env::var("CLOUDINARY_API_KEY").ok(),
-        env::var("CLOUDINARY_API_SECRET").ok(),
-    );
+fn load_secrets_table() -> Option<toml::Table> {
+    let raw = std::fs::read_to_string(Path::new("Secrets.toml")).ok()?;
+    toml::from_str(&raw).ok()
+}
 
-    if let (Some(url), token, jwt, Some(cn), Some(ck), Some(cs)) = from_env {
-        if !url.is_empty() {
-            return Ok((
-                url,
-                token.unwrap_or_default(),
-                jwt.unwrap_or_else(|| "default_secret_for_dev_only".to_string()),
-                cn,
-                ck,
-                cs,
-            ));
-        }
+fn pick_cfg(
+    secrets: Option<&toml::Table>,
+    env_key: &'static str,
+    secret_key: &str,
+) -> Option<String> {
+    env::var(env_key)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            secrets?
+                .get(secret_key)
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+}
+
+fn load_database_backend(secrets: Option<&toml::Table>) -> Result<DatabaseBackend, String> {
+    let mode = pick_cfg(secrets, "DATABASE_MODE", "DATABASE_MODE")
+        .unwrap_or_else(|| "turso".to_string())
+        .to_lowercase();
+
+    if matches!(mode.as_str(), "local" | "sqlite" | "file") {
+        let path_str = pick_cfg(secrets, "DATABASE_LOCAL_PATH", "DATABASE_LOCAL_PATH")
+            .unwrap_or_else(|| ".local/slavia.db".to_string());
+        return Ok(DatabaseBackend::Local(PathBuf::from(path_str)));
     }
 
-    // 2. Próbujemy z Secrets.toml (pozostałość po Shuttle/slavia-local)
-    let path = Path::new("Secrets.toml");
-    if path.exists() {
-        let raw = std::fs::read_to_string(path)?;
-        let table: toml::Table = toml::from_str(&raw)?;
-        
-        let url = table.get("TURSO_DATABASE_URL")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-            
-        let token = table.get("TURSO_AUTH_TOKEN")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-            
-        let jwt = table.get("JWT_SECRET")
-            .and_then(|v| v.as_str())
-            .unwrap_or("default_secret_for_dev_only")
-            .to_string();
-
-        let cn = table.get("CLOUDINARY_CLOUD_NAME")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let ck = table.get("CLOUDINARY_API_KEY")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let cs = table.get("CLOUDINARY_API_SECRET")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        if let Some(url) = url {
-            return Ok((url, token, jwt, cn, ck, cs));
-        }
+    if mode != "turso" && mode != "remote" {
+        return Err(format!(
+            "Nieznany DATABASE_MODE={mode:?}. Użyj: local | sqlite | file | turso | remote"
+        ));
     }
 
-    Err("Brak konfiguracji! Ustaw zmienne środowiskowe (TURSO_DATABASE_URL) lub plik Secrets.toml / .env".into())
+    let url = pick_cfg(secrets, "TURSO_DATABASE_URL", "TURSO_DATABASE_URL").ok_or_else(|| {
+        "Brak TURSO_DATABASE_URL (tryb turso). Ustaw zmienną lub Secrets.toml — albo DATABASE_MODE=local dla SQLite.".to_string()
+    })?;
+
+    let token = pick_cfg(secrets, "TURSO_AUTH_TOKEN", "TURSO_AUTH_TOKEN").unwrap_or_default();
+
+    Ok(DatabaseBackend::Remote {
+        url,
+        auth_token: token,
+    })
+}
+
+fn load_config(
+) -> Result<(DatabaseBackend, String, String, String, String), Box<dyn std::error::Error + Send + Sync>>
+{
+    let secrets = load_secrets_table();
+
+    let database = load_database_backend(secrets.as_ref()).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+        e.into()
+    })?;
+
+    let jwt_secret =
+        pick_cfg(secrets.as_ref(), "JWT_SECRET", "JWT_SECRET").unwrap_or_else(|| {
+            "default_secret_for_dev_only".to_string()
+        });
+
+    let cn = pick_cfg(
+        secrets.as_ref(),
+        "CLOUDINARY_CLOUD_NAME",
+        "CLOUDINARY_CLOUD_NAME",
+    )
+    .unwrap_or_default();
+    let ck =
+        pick_cfg(secrets.as_ref(), "CLOUDINARY_API_KEY", "CLOUDINARY_API_KEY").unwrap_or_default();
+    let cs = pick_cfg(
+        secrets.as_ref(),
+        "CLOUDINARY_API_SECRET",
+        "CLOUDINARY_API_SECRET",
+    )
+    .unwrap_or_default();
+    Ok((database, jwt_secret, cn, ck, cs))
 }

@@ -12,6 +12,65 @@
 //! tej synchronizacji — seed może zostawiać ręczne rekordy do czasu dodania wyników.
 //!
 use libsql::Connection;
+use tokio::time::{sleep, Duration};
+
+async fn exec0_retry(conn: &Connection, sql: &str, label: &str) -> Result<(), String> {
+    // SQLite bywa chwilowo zablokowane (np. równoległe połączenie / statement).
+    // Robimy krótki retry zamiast paniki na starcie.
+    for attempt in 0..80 {
+        match conn.execute(sql, ()).await {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                let locked = msg.contains("database table is locked")
+                    || msg.contains("database is locked")
+                    || msg.contains("SQLITE_BUSY")
+                    || msg.contains("SQLITE_LOCKED");
+                if !locked || attempt == 79 {
+                    return Err(format!("{label}: {msg}"));
+                }
+                // rosnący backoff z limitem ~1.5s; 80 prób ~ < 70s
+                let ms = (100 + (attempt as u64 * 80)).min(1500);
+                sleep(Duration::from_millis(ms)).await;
+            }
+        }
+    }
+    Err(format!("{label}: exhausted retries"))
+}
+
+async fn migrate_remove_trainer_admin_role(conn: &Connection) -> Result<u64, String> {
+    let mut rows = conn
+        .query(
+            "SELECT id, roles FROM users WHERE roles IS NOT NULL AND roles LIKE '%TrainerAdmin%'",
+            (),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut updated = 0u64;
+    while let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+        let id: String = row.get(0).map_err(|e| e.to_string())?;
+        let roles_json: String = row.get(1).map_err(|e| e.to_string())?;
+        let Ok(mut roles) = serde_json::from_str::<Vec<String>>(&roles_json) else {
+            continue;
+        };
+        if !roles.iter().any(|r| r == "TrainerAdmin") {
+            continue;
+        }
+        roles.retain(|r| r != "TrainerAdmin");
+        if !roles.iter().any(|r| r == "Admin") {
+            roles.push("Admin".into());
+        }
+        if !roles.iter().any(|r| r == "Trainer") {
+            roles.push("Trainer".into());
+        }
+        let new_json = serde_json::to_string(&roles).map_err(|e| e.to_string())?;
+        conn.execute("UPDATE users SET roles = ?1 WHERE id = ?2", (new_json, id))
+            .await
+            .map_err(|e| e.to_string())?;
+        updated += 1;
+    }
+    Ok(updated)
+}
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
     Argon2,
@@ -97,8 +156,10 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             username TEXT UNIQUE NOT NULL,
             email TEXT UNIQUE,
             password_hash TEXT NOT NULL,
-            role TEXT NOT NULL,
-            avatar_url TEXT
+            roles TEXT NOT NULL,
+            avatar_url TEXT,
+            ui_theme_preset TEXT,
+            ui_color_mode TEXT
         )",
         "CREATE TABLE IF NOT EXISTS athletes (
             id TEXT PRIMARY KEY,
@@ -113,6 +174,8 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             total_kg REAL,
             image_url TEXT,
             notes TEXT,
+            profile_tagline TEXT,
+            public_bio TEXT,
             is_active BOOLEAN DEFAULT 1
         )",
         "CREATE TABLE IF NOT EXISTS competitions (
@@ -122,7 +185,11 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             location TEXT NOT NULL,
             description TEXT,
             category TEXT DEFAULT 'club_event',
-            status TEXT DEFAULT 'scheduled'
+            category_override TEXT,
+            status TEXT DEFAULT 'scheduled',
+            external_source TEXT,
+            external_ref TEXT,
+            external_url TEXT
         )",
         "CREATE TABLE IF NOT EXISTS competition_participants (
             competition_id TEXT NOT NULL,
@@ -141,7 +208,10 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             clean_and_jerk REAL NOT NULL,
             total REAL NOT NULL,
             status TEXT NOT NULL,
-            date TEXT NOT NULL
+            date TEXT NOT NULL,
+            squat_kg REAL,
+            bench_kg REAL,
+            deadlift_kg REAL
         )",
         "CREATE TABLE IF NOT EXISTS posts (
             id TEXT PRIMARY KEY,
@@ -149,7 +219,8 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             content TEXT NOT NULL,
             author_id TEXT NOT NULL REFERENCES users(id),
             image_url TEXT,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            published INTEGER NOT NULL DEFAULT 1
         )",
         "CREATE TABLE IF NOT EXISTS training_log_entries (
             id TEXT PRIMARY KEY,
@@ -160,15 +231,195 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             author_user_id TEXT REFERENCES users(id),
             created_at TEXT NOT NULL
         )",
+        "CREATE TABLE IF NOT EXISTS notifications (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            payload TEXT,
+            created_at TEXT NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS attendance_records (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            session_date TEXT NOT NULL,
+            status TEXT NOT NULL,
+            source_role TEXT NOT NULL,
+            created_by TEXT REFERENCES users(id),
+            verified_by TEXT REFERENCES users(id),
+            verification_state TEXT NOT NULL DEFAULT 'verified',
+            note TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_attendance_athlete_date ON attendance_records(athlete_id, session_date DESC)",
+        "CREATE TABLE IF NOT EXISTS system_audit_logs (
+            id TEXT PRIMARY KEY,
+            actor_user_id TEXT,
+            actor_role TEXT,
+            category TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target_type TEXT,
+            target_id TEXT,
+            details TEXT,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON system_audit_logs(created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS feature_flags (
+            name TEXT NOT NULL,
+            value INTEGER NOT NULL,
+            user_id TEXT,
+            updated_by TEXT REFERENCES users(id),
+            updated_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (name, user_id)
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_feature_flags_user ON feature_flags(user_id, name)",
+        "CREATE TABLE IF NOT EXISTS feature_flag_events (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            value INTEGER NOT NULL,
+            user_id TEXT,
+            actor_user_id TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_feature_flag_events_created ON feature_flag_events(created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS chat_threads (
+            id TEXT PRIMARY KEY,
+            athlete_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            trainer_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            title TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_threads_pair ON chat_threads(athlete_user_id, trainer_user_id)",
+        "CREATE TABLE IF NOT EXISTS chat_messages (
+            id TEXT PRIMARY KEY,
+            thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+            sender_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            deleted_by_sender INTEGER NOT NULL DEFAULT 0,
+            deleted_by_receiver INTEGER NOT NULL DEFAULT 0
+        )",
+        "CREATE TABLE IF NOT EXISTS chat_reads (
+            thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            last_read_at TEXT NOT NULL,
+            PRIMARY KEY (thread_id, user_id)
+        )",
+        "CREATE TABLE IF NOT EXISTS recurring_training_cancellations (
+            session_date TEXT PRIMARY KEY,
+            cancelled_at TEXT NOT NULL,
+            cancelled_by TEXT REFERENCES users(id),
+            status TEXT NOT NULL DEFAULT 'cancelled'
+        )",
+        "CREATE TABLE IF NOT EXISTS announcements (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            pinned INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            published INTEGER NOT NULL DEFAULT 1,
+            author_id TEXT NOT NULL REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS membership_payments (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            month TEXT NOT NULL,
+            amount_pln REAL,
+            note TEXT,
+            status TEXT NOT NULL,
+            created_by_user_id TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL,
+            approved_by_user_id TEXT REFERENCES users(id),
+            approved_at TEXT
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_membership_payments_athlete_month ON membership_payments(athlete_id, month)",
+        "CREATE INDEX IF NOT EXISTS idx_membership_payments_status_created ON membership_payments(status, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_membership_payments_month_status ON membership_payments(month, status)",
+        "CREATE TABLE IF NOT EXISTS gallery_photos (
+            id TEXT PRIMARY KEY,
+            image_url TEXT NOT NULL,
+            media_type TEXT NOT NULL DEFAULT 'image',
+            caption TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            published INTEGER NOT NULL DEFAULT 1,
+            author_id TEXT NOT NULL REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS coach_comments (
+            id TEXT PRIMARY KEY,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            body TEXT NOT NULL,
+            author_user_id TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_coach_comments_target ON coach_comments(target_type, target_id, created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS training_plans (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            goal TEXT,
+            week_start TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'planned',
+            coach_note TEXT,
+            athlete_note TEXT,
+            progress_percent INTEGER NOT NULL DEFAULT 0,
+            created_by TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_training_plans_athlete_week ON training_plans(athlete_id, week_start DESC)",
+        "CREATE TABLE IF NOT EXISTS recovery_logs (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            date TEXT NOT NULL,
+            sleep_hours REAL NOT NULL,
+            fatigue_level INTEGER NOT NULL,
+            soreness_level INTEGER NOT NULL,
+            readiness_level INTEGER NOT NULL,
+            note TEXT,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_athlete_date ON recovery_logs(athlete_id, date)",
+        "CREATE TABLE IF NOT EXISTS contact_messages (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            phone TEXT,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0
+        )",
     ];
 
     for sql in create_tables {
         conn.execute(sql, ()).await?;
     }
 
+    let _ = conn
+        .execute(
+            "ALTER TABLE recurring_training_cancellations ADD COLUMN status TEXT DEFAULT 'cancelled'",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
+            "UPDATE recurring_training_cancellations SET status = 'cancelled' WHERE status IS NULL OR trim(status) = ''",
+            (),
+        )
+        .await;
+
     // Migrate: add category and status columns if missing (safe for existing DBs)
     let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category TEXT DEFAULT 'club_event'", ()).await;
     let _ = conn.execute("ALTER TABLE competitions ADD COLUMN status TEXT DEFAULT 'scheduled'", ()).await;
+    let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category_override TEXT", ()).await;
 
     // Migrate: kolumna is_active przy starszych instancjach Turso (bez niej SELECT na liście publicznej się wywali)
     let _ = conn
@@ -190,7 +441,74 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         .await;
 
     let _ = conn
+        .execute("ALTER TABLE athletes ADD COLUMN profile_tagline TEXT", ())
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE athletes ADD COLUMN public_bio TEXT", ())
+        .await;
+
+    let _ = conn
         .execute("ALTER TABLE users ADD COLUMN avatar_url TEXT", ())
+        .await;
+
+    let _ = conn
+        .execute("ALTER TABLE users ADD COLUMN ui_theme_preset TEXT", ())
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE users ADD COLUMN ui_color_mode TEXT", ())
+        .await;
+
+    let _ = conn
+        .execute(
+            "ALTER TABLE posts ADD COLUMN published INTEGER NOT NULL DEFAULT 1",
+            (),
+        )
+        .await;
+
+    let _ = conn
+        .execute("ALTER TABLE competitions ADD COLUMN external_source TEXT", ())
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE competitions ADD COLUMN external_ref TEXT", ())
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE competitions ADD COLUMN external_url TEXT", ())
+        .await;
+    let _ = conn
+        .execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_competitions_external_ref ON competitions(external_source, external_ref) WHERE external_source IS NOT NULL AND external_ref IS NOT NULL",
+            (),
+        )
+        .await;
+
+    let _ = conn
+        .execute(
+            "ALTER TABLE gallery_photos ADD COLUMN media_type TEXT NOT NULL DEFAULT 'image'",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
+            "UPDATE gallery_photos SET media_type = 'image' WHERE media_type IS NULL",
+            (),
+        )
+        .await;
+
+    let _ = conn.execute("ALTER TABLE results ADD COLUMN squat_kg REAL", ()).await;
+    let _ = conn.execute("ALTER TABLE results ADD COLUMN bench_kg REAL", ()).await;
+    let _ = conn.execute("ALTER TABLE results ADD COLUMN deadlift_kg REAL", ()).await;
+    let _ = conn.execute("ALTER TABLE chat_threads ADD COLUMN title TEXT", ()).await;
+    let _ = conn
+        .execute(
+            "ALTER TABLE notifications ADD COLUMN is_read INTEGER NOT NULL DEFAULT 0",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
+            "UPDATE attendance_records SET status = 'nieobecny' WHERE status IN ('spóźniony', 'spozniony', 'late')",
+            (),
+        )
         .await;
 
     let n = sync_all_athletes_bests_from_results(conn)
@@ -201,14 +519,157 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         n
     );
 
+    // Migracja: role → roles (JSON array) — wyłącznie dla starych baz z kolumną `role`
+    // (świeże instalacje mają od razu `roles`; SELECT role wtedy kończy się błędem „no such column”).
+    let _ = conn.execute("PRAGMA busy_timeout = 5000", ()).await;
+    let mut pragma = conn
+        .query(
+            "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'role'",
+            (),
+        )
+        .await
+        .map_err(|e| format!("pragma_table_info(users): {e}"))?;
+    let role_column_exists: i64 = pragma
+        .next()
+        .await
+        .map_err(|e| format!("pragma_table_info row: {e}"))?
+        .map(|row| row.get::<i64>(0))
+        .transpose()
+        .map_err(|e| format!("pragma_table_info get: {e}"))?
+        .unwrap_or(0);
+    // ważne: zwolnij statement zanim wejdziemy w DDL
+    drop(pragma);
+
+    let mut migrated = 0;
+    if role_column_exists > 0 {
+        let mut pragma_roles = conn
+            .query(
+                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'roles'",
+                (),
+            )
+            .await
+            .map_err(|e| format!("pragma_table_info(users) roles: {e}"))?;
+        let roles_column_exists: i64 = pragma_roles
+            .next()
+            .await
+            .map_err(|e| format!("pragma_table_info roles row: {e}"))?
+            .map(|row| row.get::<i64>(0))
+            .transpose()
+            .map_err(|e| format!("pragma_table_info roles get: {e}"))?
+            .unwrap_or(0);
+
+        // Stary schemat: jedna kolumna `role` — dopiero potem dodajemy `roles` i kopiujemy wartości.
+        if roles_column_exists == 0 {
+            conn.execute("ALTER TABLE users ADD COLUMN roles TEXT", ())
+                .await
+                .map_err(|e| format!("ALTER ADD users.roles: {e}"))?;
+        }
+
+        let mut rows = conn
+            .query("SELECT id, role FROM users WHERE role IS NOT NULL", ())
+            .await
+            .map_err(|e| format!("select users for role migration: {e}"))?;
+        while let Some(row) = rows.next().await.map_err(|e| format!("next row: {e}"))? {
+            let id: String = row.get(0).map_err(|e| format!("get id: {e}"))?;
+            let role: String = row.get(1).map_err(|e| format!("get role: {e}"))?;
+            let roles_json = format!("[\"{}\"]", role);
+            conn.execute("UPDATE users SET roles = ?1 WHERE id = ?2", (roles_json, id))
+                .await
+                .map_err(|e| format!("update roles: {e}"))?;
+            migrated += 1;
+        }
+    }
+    println!("🔄 Migracja: users.role → users.roles (JSON array) (migrated {} users).", migrated);
+
+    // Usunięcie legacy kolumny `users.role` (SQLite nie wspiera DROP COLUMN -> rekonstrukcja tabeli)
+    if role_column_exists > 0 {
+        println!("🧱 Migracja: usuwanie legacy kolumny users.role (rekonstrukcja tabeli users)...");
+        // Wyłącz FK na czas rekonstrukcji.
+        let _ = conn.execute("PRAGMA foreign_keys = OFF", ()).await;
+        // BEGIN IMMEDIATE — weź write-lock od razu (mniej szans na DROP/ALTER lock).
+        exec0_retry(conn, "BEGIN IMMEDIATE", "BEGIN IMMEDIATE drop users.role migration").await?;
+
+        // Nowy schemat bez `role`
+        exec0_retry(
+            conn,
+            "CREATE TABLE users__new (
+                id TEXT PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                email TEXT UNIQUE,
+                password_hash TEXT NOT NULL,
+                roles TEXT NOT NULL,
+                avatar_url TEXT,
+                ui_theme_preset TEXT,
+                ui_color_mode TEXT
+            )",
+            "CREATE TABLE users__new",
+        )
+        .await?;
+
+        // Kopiowanie danych: roles -> roles; jeśli roles brak, to role -> JSON; ostatecznie fallback.
+        exec0_retry(
+            conn,
+            "INSERT INTO users__new (id, username, email, password_hash, roles, avatar_url, ui_theme_preset, ui_color_mode)
+             SELECT
+                id,
+                username,
+                email,
+                password_hash,
+                COALESCE(
+                    roles,
+                    CASE
+                        WHEN role IS NOT NULL AND TRIM(role) <> '' THEN ('[\"' || role || '\"]')
+                        ELSE '[\"Athlete\"]'
+                    END
+                ) AS roles,
+                avatar_url,
+                ui_theme_preset,
+                ui_color_mode
+             FROM users",
+            "INSERT users__new",
+        )
+        .await?;
+
+        exec0_retry(conn, "DROP TABLE users", "DROP TABLE users").await?;
+        exec0_retry(conn, "ALTER TABLE users__new RENAME TO users", "RENAME users__new").await?;
+
+        exec0_retry(conn, "COMMIT", "COMMIT drop users.role migration").await?;
+        let _ = conn.execute("PRAGMA foreign_keys = ON", ()).await;
+        println!("✅ Migracja: users.role usunięta.");
+    }
+
+    let trainer_admin_fix = migrate_remove_trainer_admin_role(conn)
+        .await
+        .map_err(|e| format!("migrate_remove_trainer_admin_role: {e}"))?;
+    println!(
+        "🔄 Migracja: TrainerAdmin → Admin + Trainer w JSON roles (zaktualizowano {} kont).",
+        trainer_admin_fix
+    );
+
     Ok(())
 }
 
 pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let drop_tables = [
+        "DROP TABLE IF EXISTS membership_payments",
+        "DROP TABLE IF EXISTS notifications",
+        "DROP TABLE IF EXISTS chat_reads",
+        "DROP TABLE IF EXISTS chat_messages",
+        "DROP TABLE IF EXISTS chat_threads",
+        "DROP TABLE IF EXISTS attendance_records",
+        "DROP TABLE IF EXISTS system_audit_logs",
+        "DROP TABLE IF EXISTS feature_flag_events",
+        "DROP TABLE IF EXISTS feature_flags",
         "DROP TABLE IF EXISTS results",
         "DROP TABLE IF EXISTS competition_participants",
+        "DROP TABLE IF EXISTS recurring_training_cancellations",
         "DROP TABLE IF EXISTS training_log_entries",
+        "DROP TABLE IF EXISTS contact_messages",
+        "DROP TABLE IF EXISTS gallery_photos",
+        "DROP TABLE IF EXISTS coach_comments",
+        "DROP TABLE IF EXISTS training_plans",
+        "DROP TABLE IF EXISTS recovery_logs",
+        "DROP TABLE IF EXISTS announcements",
         "DROP TABLE IF EXISTS posts",
         "DROP TABLE IF EXISTS competitions",
         "DROP TABLE IF EXISTS athletes",
@@ -224,8 +685,10 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             username TEXT UNIQUE NOT NULL,
             email TEXT UNIQUE,
             password_hash TEXT NOT NULL,
-            role TEXT NOT NULL,
-            avatar_url TEXT
+            roles TEXT NOT NULL,
+            avatar_url TEXT,
+            ui_theme_preset TEXT,
+            ui_color_mode TEXT
         )",
         "CREATE TABLE IF NOT EXISTS athletes (
             id TEXT PRIMARY KEY,
@@ -240,6 +703,8 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             total_kg REAL,
             image_url TEXT,
             notes TEXT,
+            profile_tagline TEXT,
+            public_bio TEXT,
             is_active BOOLEAN DEFAULT 1
         )",
         "CREATE TABLE IF NOT EXISTS competitions (
@@ -249,7 +714,11 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             location TEXT NOT NULL,
             description TEXT,
             category TEXT DEFAULT 'club_event',
-            status TEXT DEFAULT 'scheduled'
+            category_override TEXT,
+            status TEXT DEFAULT 'scheduled',
+            external_source TEXT,
+            external_ref TEXT,
+            external_url TEXT
         )",
         "CREATE TABLE IF NOT EXISTS competition_participants (
             competition_id TEXT NOT NULL,
@@ -268,7 +737,10 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             clean_and_jerk REAL NOT NULL,
             total REAL NOT NULL,
             status TEXT NOT NULL,
-            date TEXT NOT NULL
+            date TEXT NOT NULL,
+            squat_kg REAL,
+            bench_kg REAL,
+            deadlift_kg REAL
         )",
         "CREATE TABLE IF NOT EXISTS posts (
             id TEXT PRIMARY KEY,
@@ -276,7 +748,8 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             content TEXT NOT NULL,
             author_id TEXT NOT NULL REFERENCES users(id),
             image_url TEXT,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            published INTEGER NOT NULL DEFAULT 1
         )",
         "CREATE TABLE IF NOT EXISTS training_log_entries (
             id TEXT PRIMARY KEY,
@@ -287,6 +760,172 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             author_user_id TEXT REFERENCES users(id),
             created_at TEXT NOT NULL
         )",
+        "CREATE TABLE IF NOT EXISTS notifications (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            payload TEXT,
+            created_at TEXT NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS attendance_records (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            session_date TEXT NOT NULL,
+            status TEXT NOT NULL,
+            source_role TEXT NOT NULL,
+            created_by TEXT REFERENCES users(id),
+            verified_by TEXT REFERENCES users(id),
+            verification_state TEXT NOT NULL DEFAULT 'verified',
+            note TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_attendance_athlete_date ON attendance_records(athlete_id, session_date DESC)",
+        "CREATE TABLE IF NOT EXISTS system_audit_logs (
+            id TEXT PRIMARY KEY,
+            actor_user_id TEXT,
+            actor_role TEXT,
+            category TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target_type TEXT,
+            target_id TEXT,
+            details TEXT,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON system_audit_logs(created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS feature_flags (
+            name TEXT NOT NULL,
+            value INTEGER NOT NULL,
+            user_id TEXT,
+            updated_by TEXT REFERENCES users(id),
+            updated_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (name, user_id)
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_feature_flags_user ON feature_flags(user_id, name)",
+        "CREATE TABLE IF NOT EXISTS feature_flag_events (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            value INTEGER NOT NULL,
+            user_id TEXT,
+            actor_user_id TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_feature_flag_events_created ON feature_flag_events(created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS chat_threads (
+            id TEXT PRIMARY KEY,
+            athlete_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            trainer_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            title TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_threads_pair ON chat_threads(athlete_user_id, trainer_user_id)",
+        "CREATE TABLE IF NOT EXISTS chat_messages (
+            id TEXT PRIMARY KEY,
+            thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+            sender_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            deleted_by_sender INTEGER NOT NULL DEFAULT 0,
+            deleted_by_receiver INTEGER NOT NULL DEFAULT 0
+        )",
+        "CREATE TABLE IF NOT EXISTS chat_reads (
+            thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            last_read_at TEXT NOT NULL,
+            PRIMARY KEY (thread_id, user_id)
+        )",
+        "CREATE TABLE IF NOT EXISTS recurring_training_cancellations (
+            session_date TEXT PRIMARY KEY,
+            cancelled_at TEXT NOT NULL,
+            cancelled_by TEXT REFERENCES users(id),
+            status TEXT NOT NULL DEFAULT 'cancelled'
+        )",
+        "CREATE TABLE IF NOT EXISTS announcements (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            pinned INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            published INTEGER NOT NULL DEFAULT 1,
+            author_id TEXT NOT NULL REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS membership_payments (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            month TEXT NOT NULL,
+            amount_pln REAL,
+            note TEXT,
+            status TEXT NOT NULL,
+            created_by_user_id TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL,
+            approved_by_user_id TEXT REFERENCES users(id),
+            approved_at TEXT
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_membership_payments_athlete_month ON membership_payments(athlete_id, month)",
+        "CREATE INDEX IF NOT EXISTS idx_membership_payments_status_created ON membership_payments(status, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_membership_payments_month_status ON membership_payments(month, status)",
+        "CREATE TABLE IF NOT EXISTS gallery_photos (
+            id TEXT PRIMARY KEY,
+            image_url TEXT NOT NULL,
+            media_type TEXT NOT NULL DEFAULT 'image',
+            caption TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            published INTEGER NOT NULL DEFAULT 1,
+            author_id TEXT NOT NULL REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS coach_comments (
+            id TEXT PRIMARY KEY,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            body TEXT NOT NULL,
+            author_user_id TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_coach_comments_target ON coach_comments(target_type, target_id, created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS training_plans (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            goal TEXT,
+            week_start TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'planned',
+            coach_note TEXT,
+            athlete_note TEXT,
+            progress_percent INTEGER NOT NULL DEFAULT 0,
+            created_by TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_training_plans_athlete_week ON training_plans(athlete_id, week_start DESC)",
+        "CREATE TABLE IF NOT EXISTS recovery_logs (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            date TEXT NOT NULL,
+            sleep_hours REAL NOT NULL,
+            fatigue_level INTEGER NOT NULL,
+            soreness_level INTEGER NOT NULL,
+            readiness_level INTEGER NOT NULL,
+            note TEXT,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_athlete_date ON recovery_logs(athlete_id, date)",
+        "CREATE TABLE IF NOT EXISTS contact_messages (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            phone TEXT,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0
+        )",
     ];
 
     for sql in create_tables {
@@ -295,9 +934,17 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
 
     let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category TEXT DEFAULT 'club_event'", ()).await;
     let _ = conn.execute("ALTER TABLE competitions ADD COLUMN status TEXT DEFAULT 'scheduled'", ()).await;
+    let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category_override TEXT", ()).await;
+    let _ = conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_competitions_external_ref ON competitions(external_source, external_ref) WHERE external_source IS NOT NULL AND external_ref IS NOT NULL",
+        (),
+    )
+    .await;
     let _ = conn.execute("ALTER TABLE athletes ADD COLUMN is_active BOOLEAN DEFAULT 1", ()).await;
     let _ = conn.execute("UPDATE athletes SET is_active = 1 WHERE is_active IS NULL", ()).await;
     let _ = conn.execute("ALTER TABLE athletes ADD COLUMN gender TEXT", ()).await;
+    let _ = conn.execute("ALTER TABLE athletes ADD COLUMN profile_tagline TEXT", ()).await;
+    let _ = conn.execute("ALTER TABLE athletes ADD COLUMN public_bio TEXT", ()).await;
 
     seed_data(conn).await?;
     println!("✅ Baza danych zrekonstruowana i zasilona danymi!");
@@ -313,23 +960,52 @@ async fn seed_data(conn: &Connection) -> Result<(), Box<dyn std::error::Error + 
     let super_hash = argon2.hash_password(super_pass.as_bytes(), &salt).map_err(|e| e.to_string())?.to_string();
     let super_id = Uuid::new_v4().to_string();
     conn.execute(
-        "INSERT INTO users (id, username, email, password_hash, role) VALUES (?1, ?2, ?3, ?4, ?5)",
-        (super_id.clone(), "Slavia", Some("biuro@slavia.pl".to_string()), super_hash, "SuperAdmin"),
-    ).await?;
+        "INSERT INTO users (id, username, email, password_hash, roles) VALUES (?1, ?2, ?3, ?4, ?5)",
+        (
+            super_id.clone(),
+            "Slavia",
+            Some("biuro@slavia.pl".to_string()),
+            super_hash,
+            "[\"SuperAdmin\"]",
+        ),
+    )
+    .await?;
 
     // 2. Jakub Gawron
     let jakub_pass = "Jakubzofia2030?";
     let jakub_hash = argon2.hash_password(jakub_pass.as_bytes(), &salt).map_err(|e| e.to_string())?.to_string();
     let jakub_id = Uuid::new_v4().to_string();
     conn.execute(
-        "INSERT INTO users (id, username, email, password_hash, role) VALUES (?1, ?2, ?3, ?4, ?5)",
-        (jakub_id.clone(), "JakubGawron", Some("jakubgawron.dev.pl@gmail.com".to_string()), jakub_hash, "SuperAdmin"),
-    ).await?;
+        "INSERT INTO users (id, username, email, password_hash, roles) VALUES (?1, ?2, ?3, ?4, ?5)",
+        (
+            jakub_id.clone(),
+            "JakubGawron",
+            Some("jakubgawron.dev.pl@gmail.com".to_string()),
+            jakub_hash,
+            "[\"SuperAdmin\"]",
+        ),
+    )
+    .await?;
 
     conn.execute(
-        "INSERT INTO athletes (id, user_id, full_name, birth_year, gender, weight_category, bodyweight, best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, is_active)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1)",
-        (Uuid::new_v4().to_string(), Some(jakub_id), "Jakub Gawron", 2000, "male", "81kg", 80.5, 110.0, 140.0, 250.0, Some("https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/people/smiling-man".to_string()), "Założyciel klubu.",),
+        "INSERT INTO athletes (id, user_id, full_name, birth_year, gender, weight_category, bodyweight, best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, profile_tagline, public_bio, is_active)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 1)",
+        (
+            Uuid::new_v4().to_string(),
+            Some(jakub_id),
+            "Jakub Gawron",
+            2000,
+            "male",
+            "81kg",
+            80.5,
+            110.0,
+            140.0,
+            250.0,
+            Some("https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/people/smiling-man".to_string()),
+            "Założyciel klubu.",
+            Some("Założyciel · trener".to_string()),
+            Some("Założyciel sekcji i jeden z filarów rozwoju CKS Slavia.".to_string()),
+        ),
     ).await?;
 
     // 3. Athletes seed with images
@@ -341,8 +1017,8 @@ async fn seed_data(conn: &Connection) -> Result<(), Box<dyn std::error::Error + 
 
     for (name, year, gender, cat, bw, snatch, cj, total, img, note) in athletes {
         conn.execute(
-            "INSERT INTO athletes (id, user_id, full_name, birth_year, gender, weight_category, bodyweight, best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, is_active)
-             VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1)",
+            "INSERT INTO athletes (id, user_id, full_name, birth_year, gender, weight_category, bodyweight, best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, profile_tagline, public_bio, is_active)
+             VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, NULL, 1)",
             (Uuid::new_v4().to_string(), name, year, gender, cat, bw, snatch, cj, total, Some(img.to_string()), note),
         ).await?;
     }
@@ -367,7 +1043,7 @@ async fn seed_data(conn: &Connection) -> Result<(), Box<dyn std::error::Error + 
 
     // 5. Posts
     conn.execute(
-        "INSERT INTO posts (id, title, content, author_id, image_url, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO posts (id, title, content, author_id, image_url, created_at, published) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)",
         (Uuid::new_v4().to_string(), "Nowa strona klubu!", "Witajcie w nowym systemie. Cieszcie się pięknym designem i nowymi funkcjami!", super_id, Some("https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/landscapes/nature-mountains".to_string()), "2026-05-01T09:00:00Z"),
     ).await?;
 

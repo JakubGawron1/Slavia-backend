@@ -1,0 +1,10 @@
+target
+.git
+.github
+.local
+tests
+*.db
+*.db-shm
+*.db-wal
+Secrets.toml
+.env

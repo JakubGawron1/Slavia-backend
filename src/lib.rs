@@ -1,37 +1,67 @@
 //! Współdzielona logika HTTP — używana przez `main` (Axum/Tokio) i testy.
 
-use axum::{
-    routing::{delete, get, patch, post},
-    Router,
-};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
 pub mod db;
+pub mod dto;
 pub mod middleware;
 pub mod models;
+pub mod notifications;
+pub mod audit;
+pub mod repos;
+pub mod router;
 pub mod routes;
 pub mod state;
 
 pub(crate) mod api_error;
 mod sql_row;
+pub mod cloudinary;
+mod external_calendar_sync;
+
+#[cfg(test)]
+mod import_http_integration_test;
 
 use state::AppState;
 
-/// Buduje router Axum (Turso/libsql + JWT). Bez `Box::pin` — mniejsze ryzyko problemów ze stosem na Windows.
+/// Skąd brać bazę: lokalny plik SQLite (dev) albo Turso przez HTTP (`new_remote`).
+#[derive(Debug, Clone)]
+pub enum DatabaseBackend {
+    Local(PathBuf),
+    Remote {
+        url: String,
+        auth_token: String,
+    },
+}
+
+async fn connect_database(
+    backend: DatabaseBackend,
+) -> Result<libsql::Connection, Box<dyn std::error::Error + Send + Sync>> {
+    match backend {
+        DatabaseBackend::Local(path) => {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            let db = libsql::Builder::new_local(path).build().await?;
+            Ok(db.connect()?)
+        }
+        DatabaseBackend::Remote { url, auth_token } => {
+            let db = libsql::Builder::new_remote(url, auth_token).build().await?;
+            Ok(db.connect()?)
+        }
+    }
+}
+
+/// Buduje router Axum (libsql: SQLite lokalnie lub Turso zdalnie + JWT).
 pub async fn create_app(
-    db_url: &str,
-    db_token: &str,
+    database: DatabaseBackend,
     jwt_secret: String,
     cloudinary_cloud_name: String,
     cloudinary_api_key: String,
     cloudinary_api_secret: String,
-) -> Result<Router, Box<dyn std::error::Error + Send + Sync>> {
-    let client = libsql::Builder::new_remote(db_url.to_string(), db_token.to_string())
-        .build()
-        .await?;
-
-    let conn = client.connect()?;
+) -> Result<axum::Router, Box<dyn std::error::Error + Send + Sync>> {
+    let conn = connect_database(database).await?;
 
     db::init_db(&conn).await?;
 
@@ -48,120 +78,5 @@ pub async fn create_app(
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let auth_routes = Router::new()
-        .route("/login", post(routes::auth::login_handler))
-        .route("/me", get(routes::auth::me_handler))
-        .route("/profile", patch(routes::admins::update_profile));
-
-    let upload_routes = Router::new()
-        .route("/", post(routes::upload::upload_handler));
-
-    let athletes_routes = Router::new()
-        .route("/", get(routes::athletes::list_athletes_public).post(routes::athletes::create_athlete))
-        .route("/me", get(routes::athletes::me_athlete_handler))
-        .route(
-            "/my-calendar",
-            get(routes::competition_participants::my_calendar_for_athlete),
-        )
-        .route("/admin", get(routes::athletes::list_athletes))
-        .route(
-            "/{id}/competitions",
-            get(routes::competition_participants::list_competitions_for_athlete).put(
-                routes::competition_participants::sync_competitions_for_athlete,
-            ),
-        )
-        .route(
-            "/{id}/training-log/{entry_id}",
-            patch(routes::training_log::update_training_log)
-                .delete(routes::training_log::delete_training_log),
-        )
-        .route(
-            "/{id}/training-log",
-            get(routes::training_log::list_training_log).post(routes::training_log::create_training_log),
-        )
-        .route("/{id}/link", post(routes::athletes::link_athlete_to_user))
-        .route(
-            "/{id}",
-            patch(routes::athletes::update_athlete).delete(routes::athletes::delete_athlete),
-        );
-
-    let admins_routes = Router::new()
-        .route("/", get(routes::admins::list_admins).post(routes::admins::create_admin))
-        .route("/{id}", delete(routes::admins::delete_admin))
-        .route("/{id}/account", patch(routes::admins::update_user_account))
-        .route("/{id}/role", patch(routes::admins::update_user_role))
-        .route("/reset", post(routes::admins::reset_database));
-
-    let results_routes = Router::new()
-        .route("/all", get(routes::results::list_all_results_staff))
-        .route("/pending", get(routes::results::list_pending_results))
-        .route(
-            "/athlete/{id}/submissions",
-            get(routes::results::list_athlete_result_submissions),
-        )
-        .route("/athlete/{id}", get(routes::results::list_athlete_results))
-        .route("/{id}/approve", patch(routes::results::approve_result))
-        .route(
-            "/{id}",
-            patch(routes::results::update_result).delete(routes::results::delete_result),
-        )
-        .route("/", get(routes::results::list_approved_results).post(routes::results::create_result));
-
-    let competitions_routes = Router::new()
-        .route(
-            "/",
-            get(routes::competitions::list_competitions)
-                .post(routes::competitions::create_competition),
-        )
-        .route(
-            "/{id}/participants",
-            get(routes::competition_participants::list_participants).put(
-                routes::competition_participants::set_participants,
-            ),
-        )
-        .route("/{id}", delete(routes::competitions::delete_competition).patch(routes::competitions::update_competition));
-
-    let posts_routes = Router::new()
-        .route(
-            "/",
-            get(routes::posts::list_posts).post(routes::posts::create_post),
-        )
-        .route("/{id}", get(routes::posts::get_post).delete(routes::posts::delete_post));
-
-    let app = Router::new()
-        .route(
-            "/",
-            get(|| async {
-                axum::response::Html(
-                    "<!DOCTYPE html>
-                <html lang=\"pl\">
-                <head>
-                    <meta charset=\"UTF-8\">
-                    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
-                    <title>Slavia Backend</title>
-                    <style>
-                        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #121212; color: #ffffff; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-                        h1 { color: #e50914; }
-                        p { font-size: 1.2rem; color: #cccccc; }
-                    </style>
-                </head>
-                <body>
-                    <h1>CKS Slavia Ruda Śląska</h1>
-                    <p>Witaj! To jest oficjalny serwer backendowy (API) klubu podnoszenia ciężarów.</p>
-                </body>
-                </html>",
-                )
-            }),
-        )
-        .nest("/api/auth", auth_routes)
-        .nest("/api/upload", upload_routes)
-        .nest("/api/athletes", athletes_routes)
-        .nest("/api/admins", admins_routes)
-        .nest("/api/results", results_routes)
-        .nest("/api/competitions", competitions_routes)
-        .nest("/api/posts", posts_routes)
-        .layer(cors)
-        .with_state(state);
-
-    Ok(app)
+    Ok(router::build_router(state, cors))
 }

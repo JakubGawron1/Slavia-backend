@@ -22,7 +22,7 @@ pub struct LoginRequest {
 #[derive(Serialize)]
 pub struct LoginResponse {
     pub token: String,
-    pub role: Role,
+    pub roles: Vec<Role>,
     pub user_id: String,
 }
 
@@ -32,7 +32,7 @@ pub async fn login_handler(
 ) -> Result<Json<LoginResponse>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id, username, password_hash, role FROM users WHERE username = ?1", [payload.username])
+        .query("SELECT id, username, password_hash, roles FROM users WHERE username = ?1", [payload.username])
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -46,8 +46,8 @@ pub async fn login_handler(
     let user_id: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("id error: {}", e)))?;
     let _username: String = row.get(1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("username error: {}", e)))?;
     let password_hash: String = row.get(2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("hash error: {}", e)))?;
-    let role_str: String = row.get(3).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("role error: {}", e)))?;
-    let role: Role = role_str.parse().map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Invalid role in db"))?;
+    let roles_json: String = row.get(3).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("roles error: {}", e)))?;
+    let roles: Vec<Role> = serde_json::from_str(&roles_json).map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Invalid roles in db"))?;
 
     let parsed_hash = PasswordHash::new(&password_hash)
         .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error parsing hash"))?;
@@ -63,7 +63,7 @@ pub async fn login_handler(
 
     let claims = crate::middleware::auth::Claims {
         sub: user_id.clone(),
-        role: role.clone(),
+        roles: roles.clone(),
         exp,
     };
 
@@ -76,7 +76,7 @@ pub async fn login_handler(
 
     Ok(Json(LoginResponse {
         token,
-        role,
+        roles,
         user_id,
     }))
 }
@@ -86,8 +86,18 @@ pub struct UserInfo {
     pub id: String,
     pub username: String,
     pub email: Option<String>,
-    pub role: Role,
+    pub roles: Vec<Role>,
     pub avatar_url: Option<String>,
+    /// Preset kolorystyczny (`slavia`, `iron`, …) — zapisany na koncie.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_theme_preset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_color_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub athlete_gender: Option<String>,
+    /// Zdjęcie z profilu sportowego (`athletes.image_url`), gdy konto jest powiązane ze zawodnikiem.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub athlete_image_url: Option<String>,
 }
 
 pub async fn me_handler(
@@ -96,7 +106,15 @@ pub async fn me_handler(
 ) -> Result<Json<UserInfo>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT username, email, avatar_url FROM users WHERE id = ?1", [claims.sub.clone()])
+        .query(
+            "SELECT u.username, u.email, u.avatar_url, u.ui_theme_preset, u.ui_color_mode, a.gender, a.image_url
+             FROM users u
+             LEFT JOIN athletes a ON a.user_id = u.id
+             WHERE u.id = ?1
+             ORDER BY a.id ASC
+             LIMIT 1",
+            [claims.sub.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -106,12 +124,20 @@ pub async fn me_handler(
     let username: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let email: Option<String> = row.get(1).ok();
     let avatar_url: Option<String> = row.get(2).ok();
+    let ui_theme_preset: Option<String> = row.get(3).ok();
+    let ui_color_mode: Option<String> = row.get(4).ok();
+    let athlete_gender: Option<String> = row.get(5).ok();
+    let athlete_image_url: Option<String> = row.get(6).ok();
 
     Ok(Json(UserInfo {
         id: claims.sub,
         username,
         email,
-        role: claims.role,
+        roles: claims.roles,
         avatar_url,
+        ui_theme_preset,
+        ui_color_mode,
+        athlete_gender,
+        athlete_image_url,
     }))
 }

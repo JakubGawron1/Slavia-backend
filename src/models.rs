@@ -1,10 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub enum Role {
     SuperAdmin,
     Admin,
-    TrainerAdmin,
     Trainer,
     Athlete,
 }
@@ -20,7 +19,6 @@ impl std::fmt::Display for Role {
         let s = match self {
             Role::SuperAdmin => "SuperAdmin",
             Role::Admin => "Admin",
-            Role::TrainerAdmin => "TrainerAdmin",
             Role::Trainer => "Trainer",
             Role::Athlete => "Athlete",
         };
@@ -34,7 +32,6 @@ impl std::str::FromStr for Role {
         match s {
             "SuperAdmin" => Ok(Role::SuperAdmin),
             "Admin" => Ok(Role::Admin),
-            "TrainerAdmin" => Ok(Role::TrainerAdmin),
             "Trainer" => Ok(Role::Trainer),
             "Athlete" => Ok(Role::Athlete),
             _ => Err(format!("Invalid role: {}", s)),
@@ -50,7 +47,7 @@ pub struct User {
     pub avatar_url: Option<String>,
     #[serde(skip_serializing)]
     pub password_hash: String,
-    pub role: Role,
+    pub roles: Vec<Role>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -67,6 +64,26 @@ pub struct Athlete {
     pub total_kg: Option<f64>,
     pub image_url: Option<String>,
     pub notes: Option<String>,
+    pub profile_tagline: Option<String>,
+    pub public_bio: Option<String>,
+    pub is_active: bool,
+}
+
+/// Widok publiczny profilu — bez `user_id` i bez notatek wewnętrznych (`notes`).
+#[derive(Debug, Serialize, Clone)]
+pub struct AthletePublic {
+    pub id: String,
+    pub full_name: String,
+    pub birth_year: Option<i64>,
+    pub gender: Option<String>,
+    pub weight_category: Option<String>,
+    pub bodyweight: Option<f64>,
+    pub best_snatch_kg: Option<f64>,
+    pub best_clean_jerk_kg: Option<f64>,
+    pub total_kg: Option<f64>,
+    pub image_url: Option<String>,
+    pub profile_tagline: Option<String>,
+    pub public_bio: Option<String>,
     pub is_active: bool,
 }
 
@@ -74,6 +91,7 @@ pub struct Athlete {
 pub enum ResultStatus {
     Pending,
     Approved,
+    Rejected,
 }
 
 impl std::fmt::Display for ResultStatus {
@@ -81,6 +99,7 @@ impl std::fmt::Display for ResultStatus {
         match self {
             ResultStatus::Pending => write!(f, "Pending"),
             ResultStatus::Approved => write!(f, "Approved"),
+            ResultStatus::Rejected => write!(f, "Rejected"),
         }
     }
 }
@@ -91,6 +110,7 @@ impl std::str::FromStr for ResultStatus {
         match s {
             "Pending" => Ok(ResultStatus::Pending),
             "Approved" => Ok(ResultStatus::Approved),
+            "Rejected" => Ok(ResultStatus::Rejected),
             _ => Err(format!("Invalid status: {}", s)),
         }
     }
@@ -105,6 +125,12 @@ pub struct CompetitionResult {
     pub total: f64,
     pub status: ResultStatus,
     pub date: String,
+    #[serde(default)]
+    pub squat_kg: Option<f64>,
+    #[serde(default)]
+    pub bench_kg: Option<f64>,
+    #[serde(default)]
+    pub deadlift_kg: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -116,6 +142,13 @@ pub struct Competition {
     pub description: Option<String>,
     pub category: Option<String>, // "championship", "league", "club_event", "training"
     pub status: Option<String>, // "scheduled", "cancelled", "moved"
+    /// np. `pzpc`, `podnoszenieciezarow` — brak = zawody utworzone w klubie
+    #[serde(default)]
+    pub external_source: Option<String>,
+    #[serde(default)]
+    pub external_ref: Option<String>,
+    #[serde(default)]
+    pub external_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -138,4 +171,86 @@ pub struct Post {
     pub author_id: String,
     pub image_url: Option<String>,
     pub created_at: String,
+    #[serde(default = "default_post_published")]
+    pub published: bool,
+}
+
+fn default_post_published() -> bool {
+    true
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Announcement {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub sort_order: i64,
+    #[serde(default = "default_post_published")]
+    pub published: bool,
+    pub author_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GalleryPhoto {
+    pub id: String,
+    pub image_url: String,
+    #[serde(default)]
+    pub media_type: String,
+    pub caption: Option<String>,
+    #[serde(default)]
+    pub sort_order: i64,
+    #[serde(default = "default_post_published")]
+    pub published: bool,
+    pub author_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContactMessage {
+    pub id: String,
+    pub name: String,
+    pub email: String,
+    pub phone: Option<String>,
+    pub message: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub is_read: bool,
+}
+
+/// Publiczna lista wyników z imieniem zawodnika i nazwą zawodów (bez edycji).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PublicResultBoardRow {
+    pub id: String,
+    pub athlete_id: String,
+    pub athlete_name: String,
+    pub competition_id: Option<String>,
+    pub competition_title: Option<String>,
+    pub snatch: f64,
+    pub clean_and_jerk: f64,
+    pub total: f64,
+    pub date: String,
+    #[serde(default)]
+    pub squat_kg: Option<f64>,
+    #[serde(default)]
+    pub bench_kg: Option<f64>,
+    #[serde(default)]
+    pub deadlift_kg: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ExerciseBoardRow {
+    pub athlete_id: String,
+    pub athlete_name: String,
+    pub squat_kg: Option<f64>,
+    pub bench_kg: Option<f64>,
+    pub deadlift_kg: Option<f64>,
+    pub source_trainer_direct: bool,
+    pub source_athlete_pending_count: i64,
+    pub source_approved_results_count: i64,
+    pub source_training_log_count: i64,
+    pub source_last_approved_date: Option<String>,
 }

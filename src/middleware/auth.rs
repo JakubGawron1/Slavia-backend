@@ -3,17 +3,93 @@ use axum::{
     http::{request::Parts, StatusCode},
 };
 use jsonwebtoken::{decode, DecodingKey, Validation};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::api_error::{api_error, ApiError};
 use crate::models::Role;
 use crate::state::AppState;
 
+/// JWT zawiera `roles` jako tablicę nazw albo (starsze tokeny) jak serde serializuje enum.
+/// `TrainerAdmin` ze starych tokenów mapujemy na `Admin` + `Trainer`.
+fn deserialize_claim_roles<'de, D>(deserializer: D) -> Result<Vec<Role>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    let mut out: Vec<Role> = Vec::new();
+    let mut add = |r: Role| {
+        if !out.contains(&r) {
+            out.push(r);
+        }
+    };
+    for item in raw {
+        match item {
+            serde_json::Value::String(s) => match s.as_str() {
+                "TrainerAdmin" => {
+                    add(Role::Admin);
+                    add(Role::Trainer);
+                }
+                other => {
+                    if let Ok(r) = other.parse::<Role>() {
+                        add(r);
+                    }
+                }
+            },
+            serde_json::Value::Object(map) => {
+                for key in map.keys() {
+                    match key.as_str() {
+                        "SuperAdmin" => add(Role::SuperAdmin),
+                        "Admin" => add(Role::Admin),
+                        "Trainer" => add(Role::Trainer),
+                        "Athlete" => add(Role::Athlete),
+                        "TrainerAdmin" => {
+                            add(Role::Admin);
+                            add(Role::Trainer);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
     pub sub: String,
-    pub role: Role,
+    #[serde(deserialize_with = "deserialize_claim_roles")]
+    pub roles: Vec<Role>,
     pub exp: usize,
+}
+
+/// Kadra (trener i wyżej) — dostęp jak przy starym pojedynczym polu `role` dla tych ról.
+pub(crate) fn claims_has_staff_access(claims: &Claims) -> bool {
+    claims
+        .roles
+        .iter()
+        .any(|r| matches!(r, Role::Trainer | Role::Admin | Role::SuperAdmin))
+}
+
+/// Zawodnik bez uprawnień kadrowych — np. własne zgłoszenia wyniku jako Pending.
+pub(crate) fn claims_is_pure_athlete(claims: &Claims) -> bool {
+    claims.roles.contains(&Role::Athlete) && !claims_has_staff_access(claims)
+}
+
+/// Konta z rolą `SuperAdmin` mogą być modyfikowane (rekord `users`, powiązania, usuwanie konta)
+/// wyłącznie przez użytkownika z rolą `SuperAdmin` w JWT.
+pub(crate) fn forbid_mutating_superadmin_user_record(
+    claims: &Claims,
+    target_roles: &[Role],
+) -> Result<(), ApiError> {
+    if target_roles.contains(&Role::SuperAdmin) && !claims.roles.contains(&Role::SuperAdmin) {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Only SuperAdmin can modify SuperAdmin accounts",
+        ));
+    }
+    Ok(())
 }
 
 impl FromRequestParts<AppState> for Claims {
@@ -54,7 +130,7 @@ impl FromRequestParts<AppState> for RequireSuperAdmin {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
         let claims = Claims::from_request_parts(parts, state).await?;
-        if claims.role != Role::SuperAdmin {
+        if !claims.roles.contains(&Role::SuperAdmin) {
             return Err(api_error(StatusCode::FORBIDDEN, "Requires SuperAdmin role"));
         }
         Ok(RequireSuperAdmin(claims))
@@ -68,8 +144,8 @@ impl FromRequestParts<AppState> for RequireAdminOrSuperAdmin {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
         let claims = Claims::from_request_parts(parts, state).await?;
-        if claims.role != Role::Admin && claims.role != Role::SuperAdmin && claims.role != Role::TrainerAdmin {
-            return Err(api_error(StatusCode::FORBIDDEN, "Requires Admin, TrainerAdmin or SuperAdmin role"));
+        if !claims.roles.contains(&Role::Admin) && !claims.roles.contains(&Role::SuperAdmin) {
+            return Err(api_error(StatusCode::FORBIDDEN, "Requires Admin or SuperAdmin role"));
         }
         Ok(RequireAdminOrSuperAdmin(claims))
     }
@@ -82,7 +158,7 @@ impl FromRequestParts<AppState> for RequireTrainerOrHigher {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
         let claims = Claims::from_request_parts(parts, state).await?;
-        if !matches!(claims.role, Role::Trainer | Role::TrainerAdmin | Role::Admin | Role::SuperAdmin) {
+        if !claims.roles.iter().any(|r| matches!(r, Role::Trainer | Role::Admin | Role::SuperAdmin)) {
             return Err(api_error(StatusCode::FORBIDDEN, "Requires Trainer or higher role"));
         }
         Ok(RequireTrainerOrHigher(claims))
@@ -100,14 +176,23 @@ mod jwt_claims_tests {
     fn claims_serde_json_roundtrip() {
         let c = Claims {
             sub: "user-1".into(),
-            role: Role::SuperAdmin,
+            roles: vec![Role::SuperAdmin],
             exp: 2_147_483_647,
         };
         let json = serde_json::to_string(&c).expect("serialize claims");
         let c2: Claims = serde_json::from_str(&json).expect("deserialize claims");
         assert_eq!(c.sub, c2.sub);
-        assert_eq!(c.role, c2.role);
+        assert_eq!(c.roles, c2.roles);
         assert_eq!(c.exp, c2.exp);
+    }
+
+    #[test]
+    fn claims_deserialize_legacy_trainer_admin_string() {
+        let json = r#"{"sub":"u1","roles":["TrainerAdmin","Athlete"],"exp":99}"#;
+        let c: Claims = serde_json::from_str(json).expect("deserialize legacy roles");
+        assert!(c.roles.contains(&Role::Admin));
+        assert!(c.roles.contains(&Role::Trainer));
+        assert!(c.roles.contains(&Role::Athlete));
     }
 
     #[test]
@@ -116,7 +201,7 @@ mod jwt_claims_tests {
         let exp = (Utc::now() + Duration::hours(24)).timestamp() as usize;
         let claims = Claims {
             sub: "uid".into(),
-            role: Role::Admin,
+            roles: vec![Role::Admin],
             exp,
         };
         let token = encode(
@@ -131,6 +216,6 @@ mod jwt_claims_tests {
             &Validation::default(),
         )
         .expect("decode jwt");
-        assert_eq!(decoded.claims.role, Role::Admin);
+        assert_eq!(decoded.claims.roles, vec![Role::Admin]);
     }
 }

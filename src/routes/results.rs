@@ -11,8 +11,8 @@ use libsql::Row;
 use crate::api_error::{api_error, ApiError};
 use crate::db;
 use crate::state::AppState;
-use crate::models::{CompetitionResult, ResultStatus, Role};
-use crate::middleware::auth::{Claims, RequireTrainerOrHigher};
+use crate::models::{CompetitionResult, PublicResultBoardRow, ResultStatus, Role};
+use crate::middleware::auth::{claims_has_staff_access, claims_is_pure_athlete, Claims, RequireTrainerOrHigher};
 use crate::sql_row;
 
 pub(crate) async fn sync_athlete_bests_from_approved(
@@ -45,47 +45,49 @@ async fn ensure_can_view_athlete_submissions(
     claims: &Claims,
     athlete_id: &str,
 ) -> Result<(), ApiError> {
-    match claims.role {
-        Role::Trainer | Role::TrainerAdmin | Role::Admin | Role::SuperAdmin => {
-            let mut rows = state
-                .db
-                .query("SELECT id FROM athletes WHERE id = ?1", [athlete_id.to_string()])
-                .await
-                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            if rows
-                .next()
-                .await
-                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-                .is_none()
-            {
-                return Err(api_error(StatusCode::NOT_FOUND, "Athlete not found"));
-            }
-            Ok(())
+    if claims_has_staff_access(claims) {
+        let mut rows = state
+            .db
+            .query("SELECT id FROM athletes WHERE id = ?1", [athlete_id.to_string()])
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if rows
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .is_none()
+        {
+            return Err(api_error(StatusCode::NOT_FOUND, "Athlete not found"));
         }
-        Role::Athlete => {
-            let mut rows = state
-                .db
-                .query(
-                    "SELECT id FROM athletes WHERE id = ?1 AND user_id = ?2",
-                    (athlete_id.to_string(), claims.sub.clone()),
-                )
-                .await
-                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-            if rows
-                .next()
-                .await
-                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-                .is_none()
-            {
-                return Err(api_error(
-                    StatusCode::FORBIDDEN,
-                    "You can only view your own submissions",
-                ));
-            }
-            Ok(())
-        }
+        return Ok(());
     }
+    if claims.roles.contains(&Role::Athlete) {
+        let mut rows = state
+            .db
+            .query(
+                "SELECT id FROM athletes WHERE id = ?1 AND user_id = ?2",
+                (athlete_id.to_string(), claims.sub.clone()),
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        if rows
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .is_none()
+        {
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "You can only view your own submissions",
+            ));
+        }
+        return Ok(());
+    }
+    Err(api_error(
+        StatusCode::FORBIDDEN,
+        "Insufficient permissions to view submissions",
+    ))
 }
 
 fn competition_result_from_row(row: &Row) -> Result<CompetitionResult, String> {
@@ -101,16 +103,137 @@ fn competition_result_from_row(row: &Row) -> Result<CompetitionResult, String> {
         total: sql_row::required_f64(row, 4)?,
         status,
         date: sql_row::required_string(row, 6)?,
+        squat_kg: sql_row::opt_f64(row, 7).map_err(|e| e.to_string())?,
+        bench_kg: sql_row::opt_f64(row, 8).map_err(|e| e.to_string())?,
+        deadlift_kg: sql_row::opt_f64(row, 9).map_err(|e| e.to_string())?,
     })
 }
 
 #[derive(Deserialize)]
 pub struct CreateResultRequest {
     pub athlete_id: String,
-    pub snatch: f64,
-    pub clean_and_jerk: f64,
-    pub total: f64,
+    /// Brak pola — przy tworzeniu wpisu użyj aktualnych wartości z profilu zawodnika (`athletes.best_*`).
+    #[serde(default)]
+    pub snatch: Option<f64>,
+    #[serde(default)]
+    pub clean_and_jerk: Option<f64>,
+    #[serde(default)]
+    pub total: Option<f64>,
     pub date: String,
+    #[serde(default)]
+    pub squat_kg: Option<f64>,
+    #[serde(default)]
+    pub bench_kg: Option<f64>,
+    #[serde(default)]
+    pub deadlift_kg: Option<f64>,
+}
+
+async fn athlete_oly_baseline(
+    state: &AppState,
+    athlete_id: &str,
+) -> Result<(f64, f64, f64), ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT best_snatch_kg, best_clean_jerk_kg, total_kg FROM athletes WHERE id = ?1",
+            [athlete_id.to_string()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Athlete not found"))?;
+
+    let sn_o: Option<f64> = row.get(0).ok();
+    let cj_o: Option<f64> = row.get(1).ok();
+    let tot_o: Option<f64> = row.get(2).ok();
+    let sn = sn_o.unwrap_or(0.0);
+    let cj = cj_o.unwrap_or(0.0);
+    let tot = tot_o.unwrap_or(sn + cj);
+    Ok((sn, cj, tot))
+}
+
+/// Publiczna tablica wyników z imieniem zawodnika i nazwą zawodów (tylko odczyt).
+pub async fn list_public_results_board(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<PublicResultBoardRow>>, ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT r.id, r.athlete_id, a.full_name, r.competition_id, c.title, \
+             r.snatch, r.clean_and_jerk, r.total, r.date, r.squat_kg, r.bench_kg, r.deadlift_kg \
+             FROM results r \
+             INNER JOIN athletes a ON a.id = r.athlete_id \
+             LEFT JOIN competitions c ON c.id = r.competition_id \
+             WHERE r.status = 'Approved' \
+             ORDER BY r.date DESC, r.total DESC",
+            (),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+        let competition_title = sql_row::opt_string(&row, 4).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        out.push(PublicResultBoardRow {
+            id: sql_row::required_string(&row, 0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_id: sql_row::required_string(&row, 1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_name: sql_row::required_string(&row, 2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            competition_id: sql_row::opt_string(&row, 3).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            competition_title,
+            snatch: sql_row::required_f64(&row, 5).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            clean_and_jerk: sql_row::required_f64(&row, 6).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            total: sql_row::required_f64(&row, 7).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            date: sql_row::required_string(&row, 8).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            squat_kg: sql_row::opt_f64(&row, 9).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            bench_kg: sql_row::opt_f64(&row, 10).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            deadlift_kg: sql_row::opt_f64(&row, 11).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        });
+    }
+
+    Ok(Json(out))
+}
+
+/// Publiczna tablica klasycznego dwuboju (bez wpisów stricte siłowych).
+pub async fn list_public_olympic_board(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<PublicResultBoardRow>>, ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT r.id, r.athlete_id, a.full_name, r.competition_id, c.title, \
+             r.snatch, r.clean_and_jerk, r.total, r.date, r.squat_kg, r.bench_kg, r.deadlift_kg \
+             FROM results r \
+             INNER JOIN athletes a ON a.id = r.athlete_id \
+             LEFT JOIN competitions c ON c.id = r.competition_id \
+             WHERE r.status = 'Approved' AND r.total >= 20 \
+             ORDER BY r.date DESC, r.total DESC",
+            (),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+        out.push(PublicResultBoardRow {
+            id: sql_row::required_string(&row, 0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_id: sql_row::required_string(&row, 1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_name: sql_row::required_string(&row, 2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            competition_id: sql_row::opt_string(&row, 3).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            competition_title: sql_row::opt_string(&row, 4).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            snatch: sql_row::required_f64(&row, 5).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            clean_and_jerk: sql_row::required_f64(&row, 6).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            total: sql_row::required_f64(&row, 7).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            date: sql_row::required_string(&row, 8).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            squat_kg: sql_row::opt_f64(&row, 9).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            bench_kg: sql_row::opt_f64(&row, 10).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            deadlift_kg: sql_row::opt_f64(&row, 11).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        });
+    }
+    Ok(Json(out))
 }
 
 pub async fn list_approved_results(
@@ -118,7 +241,7 @@ pub async fn list_approved_results(
 ) -> Result<Json<Vec<CompetitionResult>>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date FROM results WHERE status = 'Approved'", ())
+        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results WHERE status = 'Approved'", ())
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -138,7 +261,7 @@ pub async fn list_pending_results(
 ) -> Result<Json<Vec<CompetitionResult>>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date FROM results WHERE status = 'Pending'", ())
+        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results WHERE status = 'Pending'", ())
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -160,8 +283,10 @@ pub async fn list_athlete_results(
     let mut rows = state
         .db
         .query(
-            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date FROM results \
-             WHERE athlete_id = ?1 AND status = 'Approved' ORDER BY date ASC",
+            "SELECT r.id, r.athlete_id, r.snatch, r.clean_and_jerk, r.total, r.status, r.date, r.squat_kg, r.bench_kg, r.deadlift_kg \
+             FROM results r \
+             INNER JOIN athletes a ON a.id = r.athlete_id AND (a.is_active IS NULL OR a.is_active = 1) \
+             WHERE r.athlete_id = ?1 AND r.status = 'Approved' ORDER BY r.date ASC",
             [athlete_id],
         )
         .await
@@ -188,7 +313,7 @@ pub async fn list_athlete_result_submissions(
     let mut rows = state
         .db
         .query(
-            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date FROM results \
+            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results \
              WHERE athlete_id = ?1 ORDER BY date DESC, id DESC",
             [athlete_id],
         )
@@ -210,12 +335,18 @@ pub async fn create_result(
     claims: Claims, // Must be authenticated
     Json(payload): Json<CreateResultRequest>,
 ) -> Result<Json<CompetitionResult>, ApiError> {
-    let status = match claims.role {
-        Role::Admin | Role::SuperAdmin | Role::TrainerAdmin => ResultStatus::Approved,
-        Role::Trainer | Role::Athlete => ResultStatus::Pending,
+    let status = if claims_has_staff_access(&claims) {
+        ResultStatus::Approved
+    } else if claims.roles.contains(&Role::Athlete) {
+        ResultStatus::Pending
+    } else {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Insufficient role to create results",
+        ));
     };
 
-    if claims.role == Role::Athlete {
+    if claims_is_pure_athlete(&claims) {
         let mut rows = state.db.query("SELECT id FROM athletes WHERE user_id = ?1", [claims.sub])
             .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         if let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
@@ -228,23 +359,79 @@ pub async fn create_result(
         }
     }
 
+    let raw_sent_oly = payload.snatch.is_some()
+        || payload.clean_and_jerk.is_some()
+        || payload.total.is_some();
+    let raw_sent_sbd = payload.squat_kg.map(|x| x > 0.0).unwrap_or(false)
+        || payload.bench_kg.map(|x| x > 0.0).unwrap_or(false)
+        || payload.deadlift_kg.map(|x| x > 0.0).unwrap_or(false);
+
+    if !raw_sent_oly && !raw_sent_sbd {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Podaj przynajmniej rwanie lub podrzut albo jedno z ćwiczeń siłowych",
+        ));
+    }
+
+    let baseline = athlete_oly_baseline(&state, &payload.athlete_id).await?;
+    let snatch = payload.snatch.unwrap_or(baseline.0);
+    let clean_and_jerk = payload.clean_and_jerk.unwrap_or(baseline.1);
+    let total = payload
+        .total
+        .unwrap_or_else(|| snatch + clean_and_jerk);
+
     let id = Uuid::new_v4().to_string();
-    
+    let squat_kg = payload.squat_kg.filter(|x| *x > 0.0);
+    let bench_kg = payload.bench_kg.filter(|x| *x > 0.0);
+    let deadlift_kg = payload.deadlift_kg.filter(|x| *x > 0.0);
+
+    let strength_only_notify = !raw_sent_oly && raw_sent_sbd;
+
     state.db.execute(
-        "INSERT INTO results (id, athlete_id, snatch, clean_and_jerk, total, status, date) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        (id.clone(), payload.athlete_id.clone(), payload.snatch, payload.clean_and_jerk, payload.total, status.to_string(), payload.date.clone()),
+        "INSERT INTO results (id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        (
+            id.clone(),
+            payload.athlete_id.clone(),
+            snatch,
+            clean_and_jerk,
+            total,
+            status.to_string(),
+            payload.date.clone(),
+            squat_kg,
+            bench_kg,
+            deadlift_kg,
+        ),
     ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     sync_athlete_bests_from_approved(&state, &payload.athlete_id).await?;
 
+    if status == ResultStatus::Pending {
+        let name = crate::notifications::athlete_full_name(state.db.as_ref(), &payload.athlete_id)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "Zawodnik".to_string());
+        crate::notifications::notify_result_pending(
+            &state,
+            &payload.athlete_id,
+            &name,
+            total,
+            &payload.date,
+            strength_only_notify,
+        );
+    }
+
     Ok(Json(CompetitionResult {
         id,
         athlete_id: payload.athlete_id,
-        snatch: payload.snatch,
-        clean_and_jerk: payload.clean_and_jerk,
-        total: payload.total,
+        snatch,
+        clean_and_jerk,
+        total,
         status,
         date: payload.date,
+        squat_kg,
+        bench_kg,
+        deadlift_kg,
     }))
 }
 
@@ -253,7 +440,23 @@ pub async fn approve_result(
     Path(id): Path<String>,
     _auth: RequireTrainerOrHigher,
 ) -> Result<StatusCode, ApiError> {
-    let athlete_id = result_row_athlete_id(&state, &id).await?;
+    let mut rows = state
+        .db
+        .query(
+            "SELECT athlete_id, total, date FROM results WHERE id = ?1",
+            [id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Result not found"))?;
+    let athlete_id: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let total: f64 = row.get(1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let date: String = row.get(2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
     let n = state
         .db
         .execute("UPDATE results SET status = 'Approved' WHERE id = ?1", [id.clone()])
@@ -263,6 +466,23 @@ pub async fn approve_result(
         return Err(api_error(StatusCode::NOT_FOUND, "Result not found"));
     }
     sync_athlete_bests_from_approved(&state, &athlete_id).await?;
+    crate::notifications::notify_result_approved(&state, &athlete_id, total, &date);
+    Ok(StatusCode::OK)
+}
+
+pub async fn reject_result(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    _auth: RequireTrainerOrHigher,
+) -> Result<StatusCode, ApiError> {
+    let n = state
+        .db
+        .execute("UPDATE results SET status = 'Rejected' WHERE id = ?1", [id.clone()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if n == 0 {
+        return Err(api_error(StatusCode::NOT_FOUND, "Result not found"));
+    }
     Ok(StatusCode::OK)
 }
 
@@ -273,6 +493,13 @@ pub struct UpdateResultRequest {
     pub total: Option<f64>,
     pub date: Option<String>,
     pub status: Option<String>,
+    /// Brak pola — bez zmiany; `null` — wyczyść w bazie; liczba — ustaw.
+    #[serde(default)]
+    pub squat_kg: Option<Option<f64>>,
+    #[serde(default)]
+    pub bench_kg: Option<Option<f64>>,
+    #[serde(default)]
+    pub deadlift_kg: Option<Option<f64>>,
 }
 
 pub async fn list_all_results_staff(
@@ -282,7 +509,7 @@ pub async fn list_all_results_staff(
     let mut rows = state
         .db
         .query(
-            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date FROM results ORDER BY date DESC",
+            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results ORDER BY date DESC",
             (),
         )
         .await
@@ -309,6 +536,9 @@ pub async fn update_result(
         && payload.total.is_none()
         && payload.date.is_none()
         && payload.status.is_none()
+        && payload.squat_kg.is_none()
+        && payload.bench_kg.is_none()
+        && payload.deadlift_kg.is_none()
     {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
@@ -319,7 +549,7 @@ pub async fn update_result(
     let mut rows = state
         .db
         .query(
-            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date FROM results WHERE id = ?1",
+            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results WHERE id = ?1",
             [id.clone()],
         )
         .await
@@ -353,17 +583,29 @@ pub async fn update_result(
             .parse::<ResultStatus>()
             .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?;
     }
+    if let Some(inner) = payload.squat_kg {
+        cr.squat_kg = inner;
+    }
+    if let Some(inner) = payload.bench_kg {
+        cr.bench_kg = inner;
+    }
+    if let Some(inner) = payload.deadlift_kg {
+        cr.deadlift_kg = inner;
+    }
 
     state
         .db
         .execute(
-            "UPDATE results SET snatch = ?1, clean_and_jerk = ?2, total = ?3, status = ?4, date = ?5 WHERE id = ?6",
+            "UPDATE results SET snatch = ?1, clean_and_jerk = ?2, total = ?3, status = ?4, date = ?5, squat_kg = ?6, bench_kg = ?7, deadlift_kg = ?8 WHERE id = ?9",
             (
                 cr.snatch,
                 cr.clean_and_jerk,
                 cr.total,
                 cr.status.to_string(),
                 cr.date.clone(),
+                cr.squat_kg,
+                cr.bench_kg,
+                cr.deadlift_kg,
                 id,
             ),
         )
