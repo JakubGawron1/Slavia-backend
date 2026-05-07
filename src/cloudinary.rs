@@ -5,7 +5,7 @@ use sha1::{Digest, Sha1};
 
 use crate::state::AppState;
 
-fn cloudinary_signature(params: &[(String, String)], api_secret: &str) -> String {
+pub(crate) fn cloudinary_signature(params: &[(String, String)], api_secret: &str) -> String {
     let mut pairs = params.to_vec();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
     let string_to_sign = pairs

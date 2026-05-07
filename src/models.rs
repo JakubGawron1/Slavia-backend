@@ -45,6 +45,10 @@ pub struct User {
     pub username: String,
     pub email: Option<String>,
     pub avatar_url: Option<String>,
+    #[serde(default)]
+    pub is_banned: bool,
+    #[serde(default)]
+    pub banned_reason: Option<String>,
     #[serde(skip_serializing)]
     pub password_hash: String,
     pub roles: Vec<Role>,

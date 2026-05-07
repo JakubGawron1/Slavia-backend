@@ -75,6 +75,11 @@ pub struct UpdateUserAccountRequest {
     pub password: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct BanUserRequest {
+    pub reason: Option<String>,
+}
+
 fn has_staff_admin_access(roles: &[Role]) -> bool {
     roles
         .iter()
@@ -167,11 +172,15 @@ async fn collect_users_for_sql(state: &AppState, sql: &str) -> Result<Vec<User>,
     {
         let roles_json: String = row.get(4).unwrap();
         let roles: Vec<Role> = serde_json::from_str(&roles_json).unwrap();
+        let is_banned: i64 = row.get(5).unwrap_or(0);
+        let banned_reason: Option<String> = row.get(6).ok();
         out.push(User {
             id: row.get(0).unwrap(),
             username: row.get(1).unwrap(),
             email: row.get(2).ok(),
             avatar_url: row.get(3).ok(),
+            is_banned: is_banned != 0,
+            banned_reason,
             password_hash: "".to_string(),
             roles,
         });
@@ -183,7 +192,7 @@ pub async fn list_admins(
     State(state): State<AppState>,
     auth: RequireAdminOrSuperAdmin,
 ) -> Result<Json<Vec<User>>, ApiError> {
-    let sql = "SELECT id, username, email, avatar_url, roles FROM users ORDER BY username ASC";
+    let sql = "SELECT id, username, email, avatar_url, roles, is_banned, banned_reason FROM users ORDER BY username ASC";
     let all_users = collect_users_for_sql(&state, sql).await?;
     let caller_super = auth.0.roles.contains(&Role::SuperAdmin);
     let admins = all_users
@@ -212,7 +221,7 @@ pub async fn list_accounts_grouped(
     State(state): State<AppState>,
     auth: RequireAdminOrSuperAdmin,
 ) -> Result<Json<GroupedAccounts>, ApiError> {
-    let sql = "SELECT id, username, email, avatar_url, roles FROM users ORDER BY username ASC";
+    let sql = "SELECT id, username, email, avatar_url, roles, is_banned, banned_reason FROM users ORDER BY username ASC";
     let all_users = collect_users_for_sql(&state, sql).await?;
     let caller_super = auth.0.roles.contains(&Role::SuperAdmin);
 
@@ -299,6 +308,8 @@ pub async fn create_admin(
         username: payload.username,
         email: None,
         avatar_url: None,
+        is_banned: false,
+        banned_reason: None,
         password_hash: "".to_string(),
         roles: roles_vec,
     }))
@@ -469,6 +480,81 @@ pub async fn update_user_role(
             serde_json::json!({ "target_user_id": id, "roles": payload.roles.clone() }).to_string(),
         ),
     );
+
+    Ok(StatusCode::OK)
+}
+
+pub async fn ban_user(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth: RequireAdminOrSuperAdmin,
+    Json(payload): Json<BanUserRequest>,
+) -> Result<StatusCode, ApiError> {
+    let claims = &auth.0;
+    if claims.sub == id {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Nie możesz zbanować własnego konta",
+        ));
+    }
+
+    let target_roles = user_roles_by_id(&state, &id)
+        .await?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "User not found"))?;
+    forbid_mutating_superadmin_user_record(claims, &target_roles)?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let reason = payload
+        .reason
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let n = state
+        .db
+        .execute(
+            "UPDATE users SET is_banned = 1, banned_at = ?1, banned_by_user_id = ?2, banned_reason = ?3 WHERE id = ?4",
+            (now, claims.sub.clone(), reason, id.clone()),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if n == 0 {
+        return Err(api_error(StatusCode::NOT_FOUND, "User not found"));
+    }
+
+    Ok(StatusCode::OK)
+}
+
+pub async fn unban_user(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth: RequireAdminOrSuperAdmin,
+) -> Result<StatusCode, ApiError> {
+    let claims = &auth.0;
+    if claims.sub == id {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Nie możesz odbanować własnego konta (nie powinno być zbanowane)",
+        ));
+    }
+
+    let target_roles = user_roles_by_id(&state, &id)
+        .await?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "User not found"))?;
+    forbid_mutating_superadmin_user_record(claims, &target_roles)?;
+
+    let n = state
+        .db
+        .execute(
+            "UPDATE users SET is_banned = 0, banned_at = NULL, banned_by_user_id = NULL, banned_reason = NULL WHERE id = ?1",
+            [id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if n == 0 {
+        return Err(api_error(StatusCode::NOT_FOUND, "User not found"));
+    }
 
     Ok(StatusCode::OK)
 }

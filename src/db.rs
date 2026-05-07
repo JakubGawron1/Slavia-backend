@@ -159,7 +159,11 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             roles TEXT NOT NULL,
             avatar_url TEXT,
             ui_theme_preset TEXT,
-            ui_color_mode TEXT
+            ui_color_mode TEXT,
+            is_banned INTEGER NOT NULL DEFAULT 0,
+            banned_at TEXT,
+            banned_by_user_id TEXT,
+            banned_reason TEXT
         )",
         "CREATE TABLE IF NOT EXISTS athletes (
             id TEXT PRIMARY KEY,
@@ -456,6 +460,23 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         .await;
     let _ = conn
         .execute("ALTER TABLE users ADD COLUMN ui_color_mode TEXT", ())
+        .await;
+
+    // Banowanie kont (egzekwowane w middleware auth)
+    let _ = conn
+        .execute(
+            "ALTER TABLE users ADD COLUMN is_banned INTEGER NOT NULL DEFAULT 0",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE users ADD COLUMN banned_at TEXT", ())
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE users ADD COLUMN banned_by_user_id TEXT", ())
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE users ADD COLUMN banned_reason TEXT", ())
         .await;
 
     let _ = conn

@@ -8,10 +8,18 @@
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #121212; color: #ffffff; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
         h1 { color: #e50914; }
         p { font-size: 1.2rem; color: #cccccc; }
+        .actions { display: flex; gap: 12px; margin-top: 18px; flex-wrap: wrap; justify-content: center; }
+        .btn { display: inline-block; padding: 10px 14px; border-radius: 12px; text-decoration: none; font-weight: 700; font-size: 0.95rem; border: 1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.06); color: #ffffff; }
+        .btn:hover { background: rgba(255,255,255,0.10); border-color: rgba(255,255,255,0.28); }
+        .btn-primary { border-color: rgba(229,9,20,0.55); background: rgba(229,9,20,0.16); }
+        .btn-primary:hover { background: rgba(229,9,20,0.22); border-color: rgba(229,9,20,0.75); }
     </style>
 </head>
 <body>
     <h1>CKS Slavia Ruda Śląska</h1>
     <p>Witaj! To jest oficjalny serwer backendowy (API) klubu podnoszenia ciężarów.</p>
+    <div class="actions">
+        <a class="btn btn-primary" href="https://cksslavia.vercel.app" target="_blank" rel="noopener noreferrer">Przejdź do strony klubu</a>
+    </div>
 </body>
 </html>
