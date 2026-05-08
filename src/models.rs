@@ -70,6 +70,10 @@ pub struct Athlete {
     pub profile_tagline: Option<String>,
     pub public_bio: Option<String>,
     pub is_active: bool,
+    /// Czy zawodnik ma zlecenie stałe na składkę — wtedy scheduler automatycznie tworzy
+    /// Approved-payment dla bieżącego miesiąca (jeśli jeszcze go nie ma).
+    #[serde(default)]
+    pub has_standing_order: bool,
 }
 
 /// Widok publiczny profilu — bez `user_id` i bez notatek wewnętrznych (`notes`).
@@ -119,6 +123,42 @@ impl std::str::FromStr for ResultStatus {
     }
 }
 
+/// Rozróżnienie wpisu w `results`:
+/// `Competition` — start zawodów (publiczne, ranking, public-board, wykres na karcie)
+/// `Training` — wynik z treningu (widoczny po zalogowaniu, nie wpływa na PB w `athletes`).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ResultKind {
+    Competition,
+    Training,
+}
+
+impl Default for ResultKind {
+    fn default() -> Self {
+        ResultKind::Competition
+    }
+}
+
+impl std::fmt::Display for ResultKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResultKind::Competition => write!(f, "competition"),
+            ResultKind::Training => write!(f, "training"),
+        }
+    }
+}
+
+impl std::str::FromStr for ResultKind {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "competition" | "comp" | "" => Ok(ResultKind::Competition),
+            "training" | "train" => Ok(ResultKind::Training),
+            other => Err(format!("Invalid result kind: {}", other)),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CompetitionResult {
     pub id: String,
@@ -128,6 +168,11 @@ pub struct CompetitionResult {
     pub total: f64,
     pub status: ResultStatus,
     pub date: String,
+    #[serde(default)]
+    pub kind: ResultKind,
+    /// Miejsce zawodów — wypełniane tylko dla `kind = Competition`.
+    #[serde(default)]
+    pub location: Option<String>,
     #[serde(default)]
     pub squat_kg: Option<f64>,
     #[serde(default)]
@@ -225,7 +270,7 @@ pub struct ContactMessage {
     pub is_read: bool,
 }
 
-/// Publiczna lista wyników z imieniem zawodnika i nazwą zawodów (bez edycji).
+/// Publiczna lista wyników z imieniem zawodnika i miejscem zawodów (bez edycji).
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PublicResultBoardRow {
     pub id: String,
@@ -237,6 +282,10 @@ pub struct PublicResultBoardRow {
     pub clean_and_jerk: f64,
     pub total: f64,
     pub date: String,
+    #[serde(default)]
+    pub kind: ResultKind,
+    #[serde(default)]
+    pub location: Option<String>,
     #[serde(default)]
     pub squat_kg: Option<f64>,
     #[serde(default)]

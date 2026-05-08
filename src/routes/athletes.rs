@@ -128,18 +128,21 @@ fn athlete_from_row(row: &Row) -> Result<Athlete, libsql::Error> {
         profile_tagline: sql_row::opt_string(row, 12)?,
         public_bio: sql_row::opt_string(row, 13)?,
         is_active: sql_row::bool_active(row, 14)?,
+        has_standing_order: sql_row::opt_i64(row, 15)?.unwrap_or(0) != 0,
     })
 }
 
 const ATHLETE_ROW_SQL: &str =
     "SELECT id, user_id, full_name, birth_year, gender, weight_category, bodyweight, \
-     best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, profile_tagline, public_bio, is_active \
+     best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, profile_tagline, public_bio, is_active, has_standing_order \
      FROM athletes";
 
 /// Jak na liście zawodników / profilu publicznym: najpierw zdjęcie konta (`users.avatar_url`), potem karta sportowa.
+/// Kolumna `has_standing_order` zostaje na pozycji 15 (po `is_active`), `avatar_url` na 16 — żeby
+/// `athlete_from_row_merge_public_photo` mogło użyć indeksu o 1 dalej niż w wariancie bez JOIN.
 const ATHLETE_ROW_JOIN_USER_AVATAR_SQL: &str =
     "SELECT a.id, a.user_id, a.full_name, a.birth_year, a.gender, a.weight_category, a.bodyweight, \
-     a.best_snatch_kg, a.best_clean_jerk_kg, a.total_kg, a.image_url, a.notes, a.profile_tagline, a.public_bio, a.is_active, \
+     a.best_snatch_kg, a.best_clean_jerk_kg, a.total_kg, a.image_url, a.notes, a.profile_tagline, a.public_bio, a.is_active, a.has_standing_order, \
      u.avatar_url \
      FROM athletes a \
      LEFT JOIN users u ON u.id = a.user_id";
@@ -161,7 +164,7 @@ fn merge_profile_image(
 
 fn athlete_from_row_merge_public_photo(row: &Row) -> Result<Athlete, libsql::Error> {
     let mut a = athlete_from_row(row)?;
-    let linked_avatar = sql_row::opt_string(row, 15)?;
+    let linked_avatar = sql_row::opt_string(row, 16)?;
     a.image_url = merge_profile_image(a.image_url.clone(), linked_avatar);
     Ok(a)
 }
@@ -357,6 +360,7 @@ pub async fn create_athlete(
         profile_tagline: payload.profile_tagline,
         public_bio: payload.public_bio,
         is_active,
+        has_standing_order: false,
     }))
 }
 
@@ -483,7 +487,7 @@ pub async fn update_athlete(
         &state,
         "admin_athlete_updated",
         "Zaktualizowano zawodnika",
-        &format!("Zmieniono dane zawodnika (profil ID: {}).", id),
+        &format!("Zmieniono dane zawodnika: {}.", display_name),
         Some(serde_json::json!({ "athlete_id": id }).to_string()),
     );
 
@@ -764,13 +768,20 @@ pub async fn attach_existing_user_to_athlete(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    let login = notifications::username_by_id(state.db.as_ref(), &user_id)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "(login niedostępny)".to_string());
+
     notifications::notify_admin_broadcast(
         &state,
         "admin_athlete_linked_existing",
         "Powiązano istniejące konto ze zawodnikiem",
         &format!(
-            "Przypisano konto użytkownika {} do profilu zawodnika {}.",
-            user_id, athlete_id
+            "Powiązano konto „{}” ze zawodnikiem {}.",
+            login,
+            athlete.full_name
         ),
         Some(
             serde_json::json!({ "athlete_id": athlete_id, "user_id": user_id }).to_string(),
@@ -785,6 +796,21 @@ pub async fn detach_user_from_athlete(
     Path(athlete_id): Path<String>,
     _auth: RequireAdminOrSuperAdmin,
 ) -> Result<StatusCode, ApiError> {
+    let mut rows = state
+        .db
+        .query("SELECT full_name FROM athletes WHERE id = ?1", [athlete_id.clone()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let athlete_name = if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        row.get::<String>(0).unwrap_or_else(|_| "Zawodnik".to_string())
+    } else {
+        return Err(api_error(StatusCode::NOT_FOUND, "Athlete not found"));
+    };
+
     let n = state
         .db
         .execute("UPDATE athletes SET user_id = NULL WHERE id = ?1", [athlete_id.clone()])
@@ -799,7 +825,7 @@ pub async fn detach_user_from_athlete(
         &state,
         "admin_athlete_detached_user",
         "Odłączono konto od zawodnika",
-        &format!("Odłączono konto użytkownika od profilu zawodnika {}.", athlete_id),
+        &format!("Odłączono konto logowania od zawodnika: {}.", athlete_name),
         Some(serde_json::json!({ "athlete_id": athlete_id }).to_string()),
     );
 
@@ -812,6 +838,21 @@ pub async fn link_athlete_to_user(
     _auth: RequireAdminOrSuperAdmin,
     Json(payload): Json<LinkUserRequest>,
 ) -> Result<StatusCode, ApiError> {
+    let mut rows = state
+        .db
+        .query("SELECT full_name FROM athletes WHERE id = ?1", [athlete_id.clone()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let athlete_name = if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        row.get::<String>(0).unwrap_or_else(|_| "Zawodnik".to_string())
+    } else {
+        return Err(api_error(StatusCode::NOT_FOUND, "Athlete not found"));
+    };
+
     let password = payload.password.unwrap_or_else(|| "Slavia2026".to_string());
     let linked_username = payload.username.clone();
     let user_id = insert_athlete_user_account(&state, payload.username, password).await?;
@@ -827,8 +868,8 @@ pub async fn link_athlete_to_user(
         "admin_athlete_linked",
         "Powiązano zawodnika z kontem",
         &format!(
-            "Utworzono konto „{}” i powiązano z profilem zawodnika ({}).",
-            linked_username, athlete_id
+            "Utworzono konto „{}” i powiązano z zawodnikiem {}.",
+            linked_username, athlete_name
         ),
         Some(
             serde_json::json!({ "athlete_id": athlete_id, "user_id": user_id }).to_string(),

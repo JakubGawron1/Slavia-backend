@@ -144,6 +144,27 @@ pub async fn competition_title(conn: &Connection, competition_id: &str) -> Resul
     Ok(row.and_then(|r| r.get::<String>(0).ok()))
 }
 
+/// Imię i nazwisko do treści powiadomień — bez surowych UUID w UI.
+pub async fn athlete_display_for_notification(conn: &Connection, athlete_id: &str) -> Result<String, libsql::Error> {
+    Ok(athlete_full_name(conn, athlete_id)
+        .await?
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Zawodnik".to_string()))
+}
+
+/// Tytuł zawodów w treści powiadomień — jeśli w bazie brak tytułu albo został podany sam UUID, nie pokazujemy hasha.
+pub fn competition_title_for_notification(raw: &str) -> String {
+    let t = raw.trim();
+    if t.is_empty() {
+        return "Wydarzenie w kalendarzu".to_string();
+    }
+    if Uuid::parse_str(t).is_ok() {
+        return "Wydarzenie w kalendarzu".to_string();
+    }
+    t.to_string()
+}
+
 async fn athlete_plus_superadmins(
     state: &AppState,
     athlete_id: &str,
@@ -175,7 +196,7 @@ pub fn notify_result_approved(state: &AppState, athlete_id: &str, total: f64, da
     let date = date.to_string();
     spawn_notify(async move {
         let conn = st.db.as_ref();
-        let name = athlete_full_name(conn, &aid).await?.unwrap_or_else(|| aid.clone());
+        let name = athlete_display_for_notification(conn, &aid).await?;
         let title_a = "Wynik zatwierdzony";
         let body_a = format!(
             "Kadra zatwierdziła Twój wynik z {}: {:.1} kg (dwubój).",
@@ -247,16 +268,14 @@ pub fn notify_competition_assigned_to_athlete(state: &AppState, athlete_id: &str
     let cid = competition_id.to_string();
     let ct = competition_title_str.to_string();
     spawn_notify(async move {
+        let ct_h = competition_title_for_notification(&ct);
         let title_a = "Przypisano do zawodów";
-        let body_a = format!("Jesteś zapisany(a) na: {}.", ct);
+        let body_a = format!("Jesteś zapisany(a) na: {}.", ct_h);
         let title_s = "Przypisanie zawodnika";
         let body_s = format!(
-            "{} → „{}” ({})",
-            athlete_full_name(st.db.as_ref(), &aid)
-                .await?
-                .unwrap_or_else(|| aid.clone()),
-            ct,
-            cid
+            "{} — zapis na „{}”.",
+            athlete_display_for_notification(st.db.as_ref(), &aid).await?,
+            ct_h
         );
         let payload = serde_json::json!({
             "athlete_id": aid,
@@ -290,16 +309,14 @@ pub fn notify_competition_unassigned_from_athlete(
     let cid = competition_id.to_string();
     let ct = competition_title_str.to_string();
     spawn_notify(async move {
+        let ct_h = competition_title_for_notification(&ct);
         let title_a = "Usunięto przypisanie";
-        let body_a = format!("Nie jesteś już zapisany(a) na: {}.", ct);
+        let body_a = format!("Nie jesteś już zapisany(a) na: {}.", ct_h);
         let title_s = "Usunięto przypisanie zawodnika";
         let body_s = format!(
-            "{} — „{}” ({})",
-            athlete_full_name(st.db.as_ref(), &aid)
-                .await?
-                .unwrap_or_else(|| aid.clone()),
-            ct,
-            cid
+            "{} — usunięto z „{}”.",
+            athlete_display_for_notification(st.db.as_ref(), &aid).await?,
+            ct_h
         );
         let payload = serde_json::json!({
             "athlete_id": aid,
@@ -340,9 +357,7 @@ pub fn notify_training_log_trainer_note(
         let title_s = "Dziennik: notatka kadry";
         let body_s = format!(
             "{} — {} dodał(a) wpis ({})",
-            athlete_full_name(st.db.as_ref(), &aid)
-                .await?
-                .unwrap_or_else(|| aid.clone()),
+            athlete_display_for_notification(st.db.as_ref(), &aid).await?,
             au,
             sd
         );
@@ -419,7 +434,8 @@ pub fn notify_competition_created(state: &AppState, title_ev: &str, date: &str, 
     spawn_notify(async move {
         let conn = st.db.as_ref();
         let title = "Nowe wydarzenie w kalendarzu";
-        let body = format!("{} — {} ({})", title_ev, date, loc);
+        let ev = competition_title_for_notification(&title_ev);
+        let body = format!("{} — {} ({})", ev, date, loc);
         let payload = serde_json::json!({ "competition_id": cid }).to_string();
         for uid in trainer_staff_ids(conn).await? {
             insert_notification(conn, &uid, "competition_created", title, &body, Some(&payload)).await?;
@@ -435,7 +451,8 @@ pub fn notify_competition_updated(state: &AppState, title_ev: &str, competition_
     spawn_notify(async move {
         let conn = st.db.as_ref();
         let title = "Zaktualizowano zawody";
-        let body = format!("„{}” — zmieniono szczegóły.", title_ev);
+        let ev = competition_title_for_notification(&title_ev);
+        let body = format!("„{}” — zmieniono szczegóły.", ev);
         let payload = serde_json::json!({ "competition_id": cid }).to_string();
         for uid in trainer_staff_ids(conn).await? {
             insert_notification(conn, &uid, "competition_updated", title, &body, Some(&payload)).await?;
@@ -451,7 +468,8 @@ pub fn notify_competition_deleted(state: &AppState, title_ev: &str, competition_
     spawn_notify(async move {
         let conn = st.db.as_ref();
         let title = "Usunięto zawody z kalendarza";
-        let body = format!("„{}” zostało usunięte.", title_ev);
+        let ev = competition_title_for_notification(&title_ev);
+        let body = format!("„{}” zostało usunięte.", ev);
         let payload = serde_json::json!({ "competition_id": cid }).to_string();
         for uid in trainer_staff_ids(conn).await? {
             insert_notification(conn, &uid, "competition_deleted", title, &body, Some(&payload)).await?;
@@ -510,7 +528,8 @@ pub fn notify_competition_roster_updated(state: &AppState, competition_id: &str,
     spawn_notify(async move {
         let conn = st.db.as_ref();
         let title = "Lista zapisów na zawody";
-        let body = format!("Zaktualizowano zapisy na „{}”.", ct);
+        let ev = competition_title_for_notification(&ct);
+        let body = format!("Zaktualizowano zapisy na „{}”.", ev);
         let payload = serde_json::json!({ "competition_id": cid }).to_string();
         for uid in trainer_staff_ids(conn).await? {
             insert_notification(
@@ -567,10 +586,8 @@ pub fn notify_training_plan_assigned(
         let body_a = format!("Dodano plan: „{}” (start tygodnia: {}).", title, week);
         let title_s = "Plan treningowy przypisany";
         let body_s = format!(
-            "{} — „{}” ({})",
-            athlete_full_name(st.db.as_ref(), &aid)
-                .await?
-                .unwrap_or_else(|| aid.clone()),
+            "{} — plan „{}”, tydzień {}.",
+            athlete_display_for_notification(st.db.as_ref(), &aid).await?,
             title,
             week
         );
@@ -604,10 +621,8 @@ pub fn notify_training_plan_progress_updated(
         let conn = st.db.as_ref();
         let n_title = "Aktualizacja progresu planu";
         let n_body = format!(
-            "{}: {}% ({}).",
-            athlete_full_name(conn, &aid)
-                .await?
-                .unwrap_or_else(|| aid.clone()),
+            "{}: {}% — plan „{}”.",
+            athlete_display_for_notification(conn, &aid).await?,
             progress_percent,
             title
         );
@@ -642,11 +657,17 @@ pub async fn diff_notify_athlete_competition_assignments(
         }
     }
     for removed in old_competition_ids.difference(&new_competition_ids) {
-        let title_c = titles.get(removed).map(|s| s.as_str()).unwrap_or(removed.as_str());
+        let title_c = titles
+            .get(removed)
+            .map(|s| s.as_str())
+            .unwrap_or("Wydarzenie w kalendarzu");
         notify_competition_unassigned_from_athlete(state, athlete_id, removed, title_c);
     }
     for added in new_competition_ids.difference(&old_competition_ids) {
-        let title_c = titles.get(added).map(|s| s.as_str()).unwrap_or(added.as_str());
+        let title_c = titles
+            .get(added)
+            .map(|s| s.as_str())
+            .unwrap_or("Wydarzenie w kalendarzu");
         notify_competition_assigned_to_athlete(state, athlete_id, added, title_c);
     }
 }

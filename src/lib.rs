@@ -4,12 +4,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
+pub mod chat_cleanup;
 pub mod db;
 pub mod dto;
 pub mod middleware;
 pub mod models;
 pub mod notifications;
 pub mod audit;
+pub mod payments_scheduler;
 pub mod repos;
 pub mod router;
 pub mod routes;
@@ -65,8 +67,54 @@ pub async fn create_app(
 
     db::init_db(&conn).await?;
 
+    let db_arc = Arc::new(conn);
+
+    // Uruchom „best-effort" jednorazowe czyszczenie wątków na starcie (nie blokuje startu).
+    {
+        let db_for_initial = db_arc.clone();
+        tokio::spawn(async move {
+            match chat_cleanup::prune_inactive_chat_threads(
+                db_for_initial.as_ref(),
+                chat_cleanup::CHAT_INACTIVITY_DAYS,
+            )
+            .await
+            {
+                Ok(0) => {}
+                Ok(n) => eprintln!(
+                    "[chat-pruner] start: usunięto {n} nieaktywnych wątków czatu (>{} dni)",
+                    chat_cleanup::CHAT_INACTIVITY_DAYS
+                ),
+                Err(e) => eprintln!("[chat-pruner] start: błąd: {e}"),
+            }
+        });
+    }
+
+    // Stałe zadanie w tle — co kilka godzin przegląda i usuwa nieaktywne wątki.
+    let _pruner_handle = chat_cleanup::spawn_chat_pruner_task(db_arc.clone());
+
+    // Auto-składki dla zawodników z przelewem stałym — sprawdzaj raz dziennie i
+    // dla bieżącego miesiąca twórz Approved-wpisy, jeśli ich brakuje. Catch-up
+    // przy starcie (gdyby backend był wyłączony 1-go).
+    {
+        let db_for_initial = db_arc.clone();
+        tokio::spawn(async move {
+            match payments_scheduler::run_standing_orders_for_current_month(
+                db_for_initial.as_ref(),
+            )
+            .await
+            {
+                Ok(0) => {}
+                Ok(n) => eprintln!(
+                    "[standing-order] start: utworzono {n} auto-składek za bieżący miesiąc."
+                ),
+                Err(e) => eprintln!("[standing-order] start: błąd: {e}"),
+            }
+        });
+    }
+    let _standing_order_handle = payments_scheduler::spawn_standing_order_task(db_arc.clone());
+
     let state = AppState {
-        db: Arc::new(conn),
+        db: db_arc,
         jwt_secret,
         cloudinary_cloud_name,
         cloudinary_api_key,

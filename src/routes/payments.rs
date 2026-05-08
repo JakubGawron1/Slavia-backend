@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api_error::{api_error, ApiError};
+use crate::audit::write_audit_log;
 use crate::middleware::auth::{Claims, RequireTrainerOrHigher};
 use crate::sql_row;
 use crate::state::AppState;
@@ -623,6 +624,98 @@ pub struct CreateApprovedPaymentRequest {
     pub month: Option<String>,
     pub amount_pln: Option<f64>,
     pub note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StandingOrderRequest {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StandingOrderResponse {
+    pub athlete_id: String,
+    pub has_standing_order: bool,
+}
+
+/// Włącza/wyłącza zlecenie stałe na składkę dla zawodnika.
+///
+/// Gdy włączono, scheduler automatycznie zaznaczy bieżący miesiąc jako opłacony
+/// (Approved-payment, kwota = `MONTHLY_FEE_PLN`) o ile nie ma już Approved-wpisu.
+/// Jeśli scheduler znajdzie tę flagę przy włączeniu (np. kilka dni po starcie miesiąca),
+/// utworzy płatność „wstecznie" za bieżący miesiąc.
+pub async fn set_standing_order(
+    State(state): State<AppState>,
+    auth: RequireTrainerOrHigher,
+    Path(athlete_id): Path<String>,
+    Json(payload): Json<StandingOrderRequest>,
+) -> Result<Json<StandingOrderResponse>, ApiError> {
+    let value: i64 = if payload.enabled { 1 } else { 0 };
+    let updated = state
+        .db
+        .execute(
+            "UPDATE athletes SET has_standing_order = ?1 WHERE id = ?2",
+            (value, athlete_id.clone()),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if updated == 0 {
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            "Nie znaleziono zawodnika.",
+        ));
+    }
+
+    let _ = write_audit_log(
+        state.db.as_ref(),
+        Some(&auth.0.sub),
+        Some("trainer"),
+        "payments",
+        if payload.enabled {
+            "standing_order_enabled"
+        } else {
+            "standing_order_disabled"
+        },
+        Some("athlete"),
+        Some(&athlete_id),
+        Some(
+            &serde_json::json!({ "athlete_id": athlete_id, "enabled": payload.enabled })
+                .to_string(),
+        ),
+    )
+    .await;
+
+    // Przy włączaniu od razu próbujemy „dogonić" bieżący miesiąc — jeśli zawodnik nie miał
+    // jeszcze Approved-wpisu, tworzymy go teraz, żeby nie czekać do nocnego cyklu.
+    if payload.enabled {
+        let current_month = current_month_yyyy_mm();
+        if !is_month_paid_approved(&state, &athlete_id, &current_month).await? {
+            let now = Utc::now().to_rfc3339();
+            let id = Uuid::new_v4().to_string();
+            let _ = state
+                .db
+                .execute(
+                    "INSERT INTO membership_payments (id, athlete_id, month, amount_pln, note, status, created_by_user_id, created_at, approved_by_user_id, approved_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, 'Approved', ?6, ?7, ?8, ?9)",
+                    (
+                        id,
+                        athlete_id.clone(),
+                        current_month.clone(),
+                        Some(MONTHLY_FEE_PLN),
+                        Some("Przelew stały (auto)".to_string()),
+                        auth.0.sub.clone(),
+                        now.clone(),
+                        auth.0.sub.clone(),
+                        now,
+                    ),
+                )
+                .await;
+        }
+    }
+
+    Ok(Json(StandingOrderResponse {
+        athlete_id,
+        has_standing_order: payload.enabled,
+    }))
 }
 
 pub async fn create_approved_payment_for_athlete(
