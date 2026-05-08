@@ -69,7 +69,7 @@ pub(crate) fn claims_has_staff_access(claims: &Claims) -> bool {
     claims
         .roles
         .iter()
-        .any(|r| matches!(r, Role::Trainer | Role::Admin | Role::SuperAdmin))
+        .any(|r| matches!(r, Role::Trainer | Role::SuperAdmin))
 }
 
 /// Zawodnik bez uprawnień kadrowych — np. własne zgłoszenia wyniku jako Pending.
@@ -179,7 +179,7 @@ impl FromRequestParts<AppState> for RequireTrainerOrHigher {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
         let claims = Claims::from_request_parts(parts, state).await?;
-        if !claims.roles.iter().any(|r| matches!(r, Role::Trainer | Role::Admin | Role::SuperAdmin)) {
+        if !claims.roles.iter().any(|r| matches!(r, Role::Trainer | Role::SuperAdmin)) {
             return Err(api_error(StatusCode::FORBIDDEN, "Requires Trainer or higher role"));
         }
         Ok(RequireTrainerOrHigher(claims))

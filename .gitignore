@@ -18,7 +18,6 @@ Secrets.toml
 # Nie commituj haseł ani lokalnych skryptów testowych z credentialami
 passwords.txt
 **/passwords.txt
-=======
 
 # IDE / OS
 .idea/
@@ -26,4 +25,3 @@ passwords.txt
 *.swp
 .DS_Store
 Thumbs.db
->>>>>>> 243f90b7bef1499494b4fe3869a27f94cd7e8774

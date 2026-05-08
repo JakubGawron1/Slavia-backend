@@ -11,7 +11,8 @@ use crate::models::{Athlete, AthletePublic, Role};
 use crate::notifications;
 use crate::state::AppState;
 use crate::middleware::auth::{
-    forbid_mutating_superadmin_user_record, Claims, RequireAdminOrSuperAdmin, RequireTrainerOrHigher,
+    claims_has_staff_access, forbid_mutating_superadmin_user_record, Claims, RequireAdminOrSuperAdmin,
+    RequireTrainerOrHigher,
 };
 use crate::routes::admins::user_roles_by_id;
 use crate::sql_row;
@@ -590,7 +591,7 @@ pub async fn athlete_timeline(
     if !can_view_athlete(&claims) {
         return Err(api_error(StatusCode::FORBIDDEN, "Brak dostępu"));
     }
-    if !claims_has_staff_access_like(&claims) {
+    if !claims_has_staff_access(&claims) {
         let mut owned = state
             .db
             .query(
@@ -693,13 +694,6 @@ pub async fn athlete_timeline(
 
     out.sort_by(|a, b| parse_sort_ts(&b.at).cmp(&parse_sort_ts(&a.at)));
     Ok(Json(out))
-}
-
-fn claims_has_staff_access_like(claims: &Claims) -> bool {
-    claims
-        .roles
-        .iter()
-        .any(|r| matches!(r, Role::Trainer | Role::Admin | Role::SuperAdmin))
 }
 
 pub async fn attach_existing_user_to_athlete(

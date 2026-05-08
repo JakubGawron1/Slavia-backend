@@ -43,7 +43,6 @@ impl std::str::FromStr for Role {
 pub struct User {
     pub id: String,
     pub username: String,
-    pub email: Option<String>,
     pub avatar_url: Option<String>,
     #[serde(default)]
     pub is_banned: bool,
@@ -217,7 +216,8 @@ pub struct GalleryPhoto {
 pub struct ContactMessage {
     pub id: String,
     pub name: String,
-    pub email: String,
+    #[serde(default)]
+    pub email: Option<String>,
     pub phone: Option<String>,
     pub message: String,
     pub created_at: String,

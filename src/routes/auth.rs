@@ -85,7 +85,6 @@ pub async fn login_handler(
 pub struct UserInfo {
     pub id: String,
     pub username: String,
-    pub email: Option<String>,
     pub roles: Vec<Role>,
     pub avatar_url: Option<String>,
     pub is_banned: bool,
@@ -110,7 +109,7 @@ pub async fn me_handler(
     let mut rows = state
         .db
         .query(
-            "SELECT u.username, u.email, u.avatar_url, u.ui_theme_preset, u.ui_color_mode, a.gender, a.image_url, u.is_banned, u.banned_reason
+            "SELECT u.username, u.avatar_url, u.ui_theme_preset, u.ui_color_mode, a.gender, a.image_url, u.is_banned, u.banned_reason
              FROM users u
              LEFT JOIN athletes a ON a.user_id = u.id
              WHERE u.id = ?1
@@ -125,19 +124,17 @@ pub async fn me_handler(
     let row = row.ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "User not found"))?;
     
     let username: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let email: Option<String> = row.get(1).ok();
-    let avatar_url: Option<String> = row.get(2).ok();
-    let ui_theme_preset: Option<String> = row.get(3).ok();
-    let ui_color_mode: Option<String> = row.get(4).ok();
-    let athlete_gender: Option<String> = row.get(5).ok();
-    let athlete_image_url: Option<String> = row.get(6).ok();
-    let is_banned_i: i64 = row.get(7).unwrap_or(0);
-    let banned_reason: Option<String> = row.get(8).ok();
+    let avatar_url: Option<String> = row.get(1).ok();
+    let ui_theme_preset: Option<String> = row.get(2).ok();
+    let ui_color_mode: Option<String> = row.get(3).ok();
+    let athlete_gender: Option<String> = row.get(4).ok();
+    let athlete_image_url: Option<String> = row.get(5).ok();
+    let is_banned_i: i64 = row.get(6).unwrap_or(0);
+    let banned_reason: Option<String> = row.get(7).ok();
 
     Ok(Json(UserInfo {
         id: claims.sub,
         username,
-        email,
         roles: claims.roles,
         avatar_url,
         is_banned: is_banned_i != 0,
