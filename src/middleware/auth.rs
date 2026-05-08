@@ -1,5 +1,5 @@
 use axum::{
-    extract::FromRequestParts,
+    extract::{FromRequestParts, OptionalFromRequestParts},
     http::{request::Parts, StatusCode},
 };
 use jsonwebtoken::{decode, DecodingKey, Validation};
@@ -144,13 +144,37 @@ impl FromRequestParts<AppState> for Claims {
     }
 }
 
+/// Pozwala użyć `claims: Option<Claims>` w handlerze, gdy endpoint jest publiczny,
+/// ale powinien rozszerzyć zwracane dane dla zalogowanych użytkowników.
+/// Brak/niepoprawny token → `None`, bez błędu.
+impl OptionalFromRequestParts<AppState> for Claims {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Option<Self>, Self::Rejection> {
+        let has_auth = parts
+            .headers
+            .get(axum::http::header::AUTHORIZATION)
+            .is_some();
+        if !has_auth {
+            return Ok(None);
+        }
+        match <Self as FromRequestParts<AppState>>::from_request_parts(parts, state).await {
+            Ok(c) => Ok(Some(c)),
+            Err(_) => Ok(None),
+        }
+    }
+}
+
 pub struct RequireSuperAdmin(pub Claims);
 
 impl FromRequestParts<AppState> for RequireSuperAdmin {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let claims = Claims::from_request_parts(parts, state).await?;
+        let claims = <Claims as FromRequestParts<AppState>>::from_request_parts(parts, state).await?;
         if !claims.roles.contains(&Role::SuperAdmin) {
             return Err(api_error(StatusCode::FORBIDDEN, "Requires SuperAdmin role"));
         }
@@ -164,7 +188,7 @@ impl FromRequestParts<AppState> for RequireAdminOrSuperAdmin {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let claims = Claims::from_request_parts(parts, state).await?;
+        let claims = <Claims as FromRequestParts<AppState>>::from_request_parts(parts, state).await?;
         if !claims.roles.contains(&Role::Admin) && !claims.roles.contains(&Role::SuperAdmin) {
             return Err(api_error(StatusCode::FORBIDDEN, "Requires Admin or SuperAdmin role"));
         }
@@ -178,7 +202,7 @@ impl FromRequestParts<AppState> for RequireTrainerOrHigher {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let claims = Claims::from_request_parts(parts, state).await?;
+        let claims = <Claims as FromRequestParts<AppState>>::from_request_parts(parts, state).await?;
         if !claims.roles.iter().any(|r| matches!(r, Role::Trainer | Role::SuperAdmin)) {
             return Err(api_error(StatusCode::FORBIDDEN, "Requires Trainer or higher role"));
         }

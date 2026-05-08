@@ -195,6 +195,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route(
             "/athlete/{athlete_id}/approved",
             post(routes::payments::create_approved_payment_for_athlete),
+        )
+        .route(
+            "/athlete/{athlete_id}/standing-order",
+            patch(routes::payments::set_standing_order),
         );
 
     let import_routes = Router::new()
@@ -210,7 +214,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             "/threads/{thread_id}",
             patch(routes::chat::update_thread).delete(routes::chat::delete_thread),
         )
-        .route("/threads/{thread_id}/messages", get(routes::chat::list_messages).post(routes::chat::send_message));
+        .route("/threads/{thread_id}/messages", get(routes::chat::list_messages).post(routes::chat::send_message))
+        // Ręczne czyszczenie bezczynnych wątków (Admin+). Domyślnie używa progu z `chat_cleanup::CHAT_INACTIVITY_DAYS`,
+        // można go nadpisać query paramem `?days=N` (1..=365) — np. by ręcznie posprzątać po incydencie.
+        .route("/admin/prune", post(routes::chat::admin_prune_threads));
     let comments_routes = Router::new()
         .route("/", get(routes::comments::list_comments).post(routes::comments::create_comment));
     let training_plans_routes = Router::new()

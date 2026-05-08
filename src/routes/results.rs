@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, Path},
+    extract::{Query, State, Path},
     http::StatusCode,
     Json,
 };
@@ -11,9 +11,38 @@ use libsql::Row;
 use crate::api_error::{api_error, ApiError};
 use crate::db;
 use crate::state::AppState;
-use crate::models::{CompetitionResult, PublicResultBoardRow, ResultStatus, Role};
+use crate::models::{CompetitionResult, PublicResultBoardRow, ResultKind, ResultStatus, Role};
 use crate::middleware::auth::{claims_has_staff_access, claims_is_pure_athlete, Claims, RequireTrainerOrHigher};
 use crate::sql_row;
+
+/// Domyślne „miejsce" dla wyników treningowych — wszystkie treningi odbywają się na sali klubowej.
+const TRAINING_DEFAULT_LOCATION: &str = "Slavia";
+
+/// Filtr `?kind=competition|training|all` dla list wyników. Domyślnie tylko zawody (publiczne).
+#[derive(Debug, Deserialize, Default)]
+pub struct ResultsListQuery {
+    #[serde(default)]
+    pub kind: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KindFilter {
+    Competition,
+    Training,
+    All,
+}
+
+fn parse_kind_filter(raw: Option<&str>) -> Result<KindFilter, ApiError> {
+    match raw.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        None | Some("") | Some("competition") | Some("comp") => Ok(KindFilter::Competition),
+        Some("training") | Some("train") => Ok(KindFilter::Training),
+        Some("all") | Some("any") | Some("*") => Ok(KindFilter::All),
+        Some(other) => Err(api_error(
+            StatusCode::BAD_REQUEST,
+            format!("Invalid kind filter: {other}"),
+        )),
+    }
+}
 
 pub(crate) async fn sync_athlete_bests_from_approved(
     state: &AppState,
@@ -90,11 +119,19 @@ async fn ensure_can_view_athlete_submissions(
     ))
 }
 
+/// Wiersz oczekuje kolumn:
+/// `id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location`
 fn competition_result_from_row(row: &Row) -> Result<CompetitionResult, String> {
     let status_str = sql_row::required_string(row, 5)?;
     let status = status_str
         .parse::<ResultStatus>()
         .map_err(|e| format!("{} (status={:?})", e, status_str))?;
+    let kind_str = sql_row::opt_string(row, 10)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| "competition".to_string());
+    let kind = kind_str
+        .parse::<ResultKind>()
+        .unwrap_or(ResultKind::Competition);
     Ok(CompetitionResult {
         id: sql_row::required_string(row, 0)?,
         athlete_id: sql_row::required_string(row, 1)?,
@@ -103,6 +140,8 @@ fn competition_result_from_row(row: &Row) -> Result<CompetitionResult, String> {
         total: sql_row::required_f64(row, 4)?,
         status,
         date: sql_row::required_string(row, 6)?,
+        kind,
+        location: sql_row::opt_string(row, 11).map_err(|e| e.to_string())?,
         squat_kg: sql_row::opt_f64(row, 7).map_err(|e| e.to_string())?,
         bench_kg: sql_row::opt_f64(row, 8).map_err(|e| e.to_string())?,
         deadlift_kg: sql_row::opt_f64(row, 9).map_err(|e| e.to_string())?,
@@ -126,6 +165,12 @@ pub struct CreateResultRequest {
     pub bench_kg: Option<f64>,
     #[serde(default)]
     pub deadlift_kg: Option<f64>,
+    /// `competition` (domyślnie) albo `training` — trening jest niepubliczny i nie wpływa na PB w `athletes`.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Miejsce zawodów — wypełniane tylko dla `kind = 'competition'`.
+    #[serde(default)]
+    pub location: Option<String>,
 }
 
 async fn athlete_oly_baseline(
@@ -156,7 +201,7 @@ async fn athlete_oly_baseline(
     Ok((sn, cj, tot))
 }
 
-/// Publiczna tablica wyników z imieniem zawodnika i nazwą zawodów (tylko odczyt).
+/// Publiczna tablica wyników z imieniem zawodnika i miejscem zawodów (tylko odczyt; wyłącznie `kind = competition`).
 pub async fn list_public_results_board(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<PublicResultBoardRow>>, ApiError> {
@@ -164,11 +209,11 @@ pub async fn list_public_results_board(
         .db
         .query(
             "SELECT r.id, r.athlete_id, a.full_name, r.competition_id, c.title, \
-             r.snatch, r.clean_and_jerk, r.total, r.date, r.squat_kg, r.bench_kg, r.deadlift_kg \
+             r.snatch, r.clean_and_jerk, r.total, r.date, r.squat_kg, r.bench_kg, r.deadlift_kg, r.location \
              FROM results r \
              INNER JOIN athletes a ON a.id = r.athlete_id \
              LEFT JOIN competitions c ON c.id = r.competition_id \
-             WHERE r.status = 'Approved' \
+             WHERE r.status = 'Approved' AND r.kind = 'competition' \
              ORDER BY r.date DESC, r.total DESC",
             (),
         )
@@ -188,6 +233,8 @@ pub async fn list_public_results_board(
             clean_and_jerk: sql_row::required_f64(&row, 6).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
             total: sql_row::required_f64(&row, 7).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
             date: sql_row::required_string(&row, 8).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            kind: ResultKind::Competition,
+            location: sql_row::opt_string(&row, 12).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
             squat_kg: sql_row::opt_f64(&row, 9).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
             bench_kg: sql_row::opt_f64(&row, 10).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
             deadlift_kg: sql_row::opt_f64(&row, 11).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
@@ -197,7 +244,7 @@ pub async fn list_public_results_board(
     Ok(Json(out))
 }
 
-/// Publiczna tablica klasycznego dwuboju (bez wpisów stricte siłowych).
+/// Publiczna tablica klasycznego dwuboju (bez wpisów stricte siłowych; wyłącznie `kind = competition`).
 pub async fn list_public_olympic_board(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<PublicResultBoardRow>>, ApiError> {
@@ -205,11 +252,11 @@ pub async fn list_public_olympic_board(
         .db
         .query(
             "SELECT r.id, r.athlete_id, a.full_name, r.competition_id, c.title, \
-             r.snatch, r.clean_and_jerk, r.total, r.date, r.squat_kg, r.bench_kg, r.deadlift_kg \
+             r.snatch, r.clean_and_jerk, r.total, r.date, r.squat_kg, r.bench_kg, r.deadlift_kg, r.location \
              FROM results r \
              INNER JOIN athletes a ON a.id = r.athlete_id \
              LEFT JOIN competitions c ON c.id = r.competition_id \
-             WHERE r.status = 'Approved' AND r.total >= 20 \
+             WHERE r.status = 'Approved' AND r.kind = 'competition' AND r.total >= 20 \
              ORDER BY r.date DESC, r.total DESC",
             (),
         )
@@ -228,6 +275,8 @@ pub async fn list_public_olympic_board(
             clean_and_jerk: sql_row::required_f64(&row, 6).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
             total: sql_row::required_f64(&row, 7).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
             date: sql_row::required_string(&row, 8).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            kind: ResultKind::Competition,
+            location: sql_row::opt_string(&row, 12).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
             squat_kg: sql_row::opt_f64(&row, 9).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
             bench_kg: sql_row::opt_f64(&row, 10).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
             deadlift_kg: sql_row::opt_f64(&row, 11).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
@@ -241,7 +290,7 @@ pub async fn list_approved_results(
 ) -> Result<Json<Vec<CompetitionResult>>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results WHERE status = 'Approved'", ())
+        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location FROM results WHERE status = 'Approved' AND kind = 'competition'", ())
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -261,7 +310,7 @@ pub async fn list_pending_results(
 ) -> Result<Json<Vec<CompetitionResult>>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results WHERE status = 'Pending'", ())
+        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location FROM results WHERE status = 'Pending'", ())
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -275,20 +324,40 @@ pub async fn list_pending_results(
     Ok(Json(results))
 }
 
-/// Publiczne karty / ranking / wykresy — wyłącznie zatwierdzone zgłoszenia.
+/// Publiczne karty / ranking / wykresy.
+/// Domyślnie tylko `kind = 'competition'` (publiczne, bez auth).
+/// Dla `?kind=training` lub `?kind=all` wymagana sesja zalogowanego użytkownika
+/// (dane treningowe są niepubliczne).
 pub async fn list_athlete_results(
     State(state): State<AppState>,
     Path(athlete_id): Path<String>,
+    Query(q): Query<ResultsListQuery>,
+    claims: Option<Claims>,
 ) -> Result<Json<Vec<CompetitionResult>>, ApiError> {
+    let kind_filter = parse_kind_filter(q.kind.as_deref())?;
+    if matches!(kind_filter, KindFilter::Training | KindFilter::All) && claims.is_none() {
+        return Err(api_error(
+            StatusCode::UNAUTHORIZED,
+            "Dane treningowe wymagają zalogowanego konta",
+        ));
+    }
+
+    let kind_clause = match kind_filter {
+        KindFilter::Competition => " AND r.kind = 'competition'",
+        KindFilter::Training => " AND r.kind = 'training'",
+        KindFilter::All => "",
+    };
+
+    let sql = format!(
+        "SELECT r.id, r.athlete_id, r.snatch, r.clean_and_jerk, r.total, r.status, r.date, r.squat_kg, r.bench_kg, r.deadlift_kg, r.kind, r.location \
+         FROM results r \
+         INNER JOIN athletes a ON a.id = r.athlete_id AND (a.is_active IS NULL OR a.is_active = 1) \
+         WHERE r.athlete_id = ?1 AND r.status = 'Approved'{kind_clause} ORDER BY r.date ASC"
+    );
+
     let mut rows = state
         .db
-        .query(
-            "SELECT r.id, r.athlete_id, r.snatch, r.clean_and_jerk, r.total, r.status, r.date, r.squat_kg, r.bench_kg, r.deadlift_kg \
-             FROM results r \
-             INNER JOIN athletes a ON a.id = r.athlete_id AND (a.is_active IS NULL OR a.is_active = 1) \
-             WHERE r.athlete_id = ?1 AND r.status = 'Approved' ORDER BY r.date ASC",
-            [athlete_id],
-        )
+        .query(&sql, [athlete_id])
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -303,20 +372,34 @@ pub async fn list_athlete_results(
 }
 
 /// Zawodnik (własny profil) lub kadra — wszystkie zgłoszenia (Pending + Approved).
+/// Domyślnie zwraca oba rodzaje wpisów (`competition` + `training`); można zawęzić przez `?kind=`.
 pub async fn list_athlete_result_submissions(
     State(state): State<AppState>,
     Path(athlete_id): Path<String>,
+    Query(q): Query<ResultsListQuery>,
     claims: Claims,
 ) -> Result<Json<Vec<CompetitionResult>>, ApiError> {
     ensure_can_view_athlete_submissions(&state, &claims, &athlete_id).await?;
 
+    // Domyślnie `All`, bo zawodnik widzi własne wpisy obu typów.
+    let kind_filter = match q.kind.as_deref() {
+        None | Some("") => KindFilter::All,
+        Some(other) => parse_kind_filter(Some(other))?,
+    };
+    let kind_clause = match kind_filter {
+        KindFilter::Competition => " AND kind = 'competition'",
+        KindFilter::Training => " AND kind = 'training'",
+        KindFilter::All => "",
+    };
+
+    let sql = format!(
+        "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location FROM results \
+         WHERE athlete_id = ?1{kind_clause} ORDER BY date DESC, id DESC"
+    );
+
     let mut rows = state
         .db
-        .query(
-            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results \
-             WHERE athlete_id = ?1 ORDER BY date DESC, id DESC",
-            [athlete_id],
-        )
+        .query(&sql, [athlete_id])
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -387,8 +470,28 @@ pub async fn create_result(
 
     let strength_only_notify = !raw_sent_oly && raw_sent_sbd;
 
+    let kind = payload
+        .kind
+        .as_deref()
+        .map(|s| s.parse::<ResultKind>())
+        .transpose()
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?
+        .unwrap_or(ResultKind::Competition);
+    // Trening to zawsze sala klubowa — twardo wstawiamy "Slavia", ignorując ewentualne pole.
+    // Dzięki temu w widokach wyników treningowych zawsze widać sensowne źródło wpisu.
+    let location = if matches!(kind, ResultKind::Competition) {
+        payload
+            .location
+            .as_deref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+    } else {
+        Some(TRAINING_DEFAULT_LOCATION.to_string())
+    };
+
     state.db.execute(
-        "INSERT INTO results (id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO results (id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         (
             id.clone(),
             payload.athlete_id.clone(),
@@ -400,6 +503,8 @@ pub async fn create_result(
             squat_kg,
             bench_kg,
             deadlift_kg,
+            kind.to_string(),
+            location.clone(),
         ),
     ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -429,6 +534,8 @@ pub async fn create_result(
         total,
         status,
         date: payload.date,
+        kind,
+        location,
         squat_kg,
         bench_kg,
         deadlift_kg,
@@ -500,18 +607,35 @@ pub struct UpdateResultRequest {
     pub bench_kg: Option<Option<f64>>,
     #[serde(default)]
     pub deadlift_kg: Option<Option<f64>>,
+    /// `competition` lub `training`. Pomiń — bez zmiany.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Brak pola — bez zmiany; `null`/pusty string — wyczyść; tekst — ustaw.
+    /// Ignorowane dla wpisów typu `training`.
+    #[serde(default)]
+    pub location: Option<Option<String>>,
 }
 
 pub async fn list_all_results_staff(
     State(state): State<AppState>,
+    Query(q): Query<ResultsListQuery>,
     _auth: RequireTrainerOrHigher,
 ) -> Result<Json<Vec<CompetitionResult>>, ApiError> {
+    let kind_filter = match q.kind.as_deref() {
+        None | Some("") => KindFilter::All,
+        Some(other) => parse_kind_filter(Some(other))?,
+    };
+    let kind_clause = match kind_filter {
+        KindFilter::Competition => " WHERE kind = 'competition'",
+        KindFilter::Training => " WHERE kind = 'training'",
+        KindFilter::All => "",
+    };
+    let sql = format!(
+        "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location FROM results{kind_clause} ORDER BY date DESC"
+    );
     let mut rows = state
         .db
-        .query(
-            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results ORDER BY date DESC",
-            (),
-        )
+        .query(&sql, ())
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -539,6 +663,8 @@ pub async fn update_result(
         && payload.squat_kg.is_none()
         && payload.bench_kg.is_none()
         && payload.deadlift_kg.is_none()
+        && payload.kind.is_none()
+        && payload.location.is_none()
     {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
@@ -549,7 +675,7 @@ pub async fn update_result(
     let mut rows = state
         .db
         .query(
-            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg FROM results WHERE id = ?1",
+            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location FROM results WHERE id = ?1",
             [id.clone()],
         )
         .await
@@ -592,11 +718,27 @@ pub async fn update_result(
     if let Some(inner) = payload.deadlift_kg {
         cr.deadlift_kg = inner;
     }
+    if let Some(ref k) = payload.kind {
+        cr.kind = k
+            .parse::<ResultKind>()
+            .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?;
+    }
+    if let Some(loc) = payload.location {
+        cr.location = loc
+            .as_deref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+    }
+    // Trening jest zawsze oznaczany jako sala klubowa „Slavia" — niezależnie od inputu.
+    if matches!(cr.kind, ResultKind::Training) {
+        cr.location = Some(TRAINING_DEFAULT_LOCATION.to_string());
+    }
 
     state
         .db
         .execute(
-            "UPDATE results SET snatch = ?1, clean_and_jerk = ?2, total = ?3, status = ?4, date = ?5, squat_kg = ?6, bench_kg = ?7, deadlift_kg = ?8 WHERE id = ?9",
+            "UPDATE results SET snatch = ?1, clean_and_jerk = ?2, total = ?3, status = ?4, date = ?5, squat_kg = ?6, bench_kg = ?7, deadlift_kg = ?8, kind = ?9, location = ?10 WHERE id = ?11",
             (
                 cr.snatch,
                 cr.clean_and_jerk,
@@ -606,6 +748,8 @@ pub async fn update_result(
                 cr.squat_kg,
                 cr.bench_kg,
                 cr.deadlift_kg,
+                cr.kind.to_string(),
+                cr.location.clone(),
                 id,
             ),
         )

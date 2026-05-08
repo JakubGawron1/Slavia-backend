@@ -287,13 +287,18 @@ pub async fn create_admin(
         .ok()
         .flatten()
         .unwrap_or_else(|| "?".to_string());
+    let roles_human = roles_vec
+        .iter()
+        .map(|r| r.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
     notifications::notify_admin_broadcast(
         &state,
         "admin_user_created",
         "Nowe konto administracyjne",
         &format!(
-            "{} utworzył konto „{}” z rolami {:?}.",
-            actor, payload.username, roles_vec
+            "{} utworzył konto „{}” z rolami: {}.",
+            actor, payload.username, roles_human
         ),
         Some(
             serde_json::json!({ "user_id": user_id.clone(), "username": payload.username.clone(), "roles": roles_vec }).to_string(),
@@ -442,15 +447,16 @@ pub async fn update_user_role(
         .ok()
         .flatten()
         .unwrap_or_else(|| id.clone());
+    let roles_human = payload.roles.join(", ");
     notifications::notify_admin_broadcast(
         &state,
         "admin_role_changed",
         "Zmiana ról",
         &format!(
-            "{} ustawił role użytkownika „{}” na {:?}.",
+            "{} ustawił role użytkownika „{}” na: {}.",
             actor,
             target,
-            payload.roles
+            roles_human
         ),
         Some(
             serde_json::json!({ "target_user_id": id, "roles": payload.roles.clone() }).to_string(),

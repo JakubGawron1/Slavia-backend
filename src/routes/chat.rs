@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -9,7 +9,8 @@ use uuid::Uuid;
 
 use crate::api_error::{api_error, ApiError};
 use crate::audit::write_audit_log;
-use crate::middleware::auth::Claims;
+use crate::chat_cleanup::{prune_inactive_chat_threads, CHAT_INACTIVITY_DAYS};
+use crate::middleware::auth::{Claims, RequireAdminOrSuperAdmin};
 use crate::models::Role;
 use crate::notifications;
 use crate::state::AppState;
@@ -356,11 +357,16 @@ pub async fn send_message(
     } else {
         athlete_uid
     };
+    let sender_login = notifications::username_by_id(state.db.as_ref(), &claims.sub)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "Nadawca".to_string());
     notifications::notify_admin_broadcast(
         &state,
         "chat_message",
         "Nowa wiadomość na czacie",
-        "Wątek trener–zawodnik ma nową wiadomość.",
+        &format!("Nowa wiadomość od „{}” (czat trener–zawodnik).", sender_login),
         Some(serde_json::json!({ "thread_id": thread_id, "target_user_id": target_user }).to_string()),
     );
     let _ = write_audit_log(
@@ -424,4 +430,67 @@ pub async fn delete_thread(
     .await;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Query param dla ręcznego pruna: `?days=14` pozwala adminowi wymusić agresywniejsze cięcie
+/// niż domyślne 30 dni. Walidacja: 1..=365 (poniżej ryzyko pomyłki, powyżej i tak nic by nie usunęło).
+#[derive(Debug, Deserialize, Default)]
+pub struct ManualPruneQuery {
+    #[serde(default)]
+    pub days: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ManualPruneResponse {
+    pub deleted: usize,
+    pub inactivity_days: i64,
+    pub triggered_by: String,
+}
+
+/// `POST /api/chat/admin/prune` — natychmiastowe wywołanie czyszczenia bezczynnych wątków.
+///
+/// Tło: na co dzień pruner-em zajmuje się background task w `chat_cleanup`, ale gdy admin
+/// chce reaktywniej posprzątać (np. przed migracją albo po incydencie spamu), endpoint
+/// uruchamia tę samą funkcję ręcznie i zwraca liczbę usuniętych wątków.
+pub async fn admin_prune_threads(
+    State(state): State<AppState>,
+    auth: RequireAdminOrSuperAdmin,
+    Query(q): Query<ManualPruneQuery>,
+) -> Result<Json<ManualPruneResponse>, ApiError> {
+    let inactivity_days = q.days.unwrap_or(CHAT_INACTIVITY_DAYS);
+    if !(1..=365).contains(&inactivity_days) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Pole `days` musi być w zakresie 1..=365",
+        ));
+    }
+
+    let deleted = prune_inactive_chat_threads(state.db.as_ref(), inactivity_days)
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let details = serde_json::json!({
+        "deleted": deleted,
+        "inactivity_days": inactivity_days,
+        "triggered_by": auth.0.sub,
+        "reason": "manual_admin_prune",
+    })
+    .to_string();
+    let _ = write_audit_log(
+        state.db.as_ref(),
+        Some(&auth.0.sub),
+        Some("chat"),
+        "chat",
+        "manual_prune_invoked",
+        None,
+        None,
+        Some(&details),
+    )
+    .await;
+
+    Ok(Json(ManualPruneResponse {
+        deleted,
+        inactivity_days,
+        triggered_by: auth.0.sub,
+    }))
 }

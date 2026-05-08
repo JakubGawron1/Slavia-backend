@@ -138,11 +138,18 @@ pub async fn upsert_attendance(
     .await;
 
     if !is_staff {
+        let athlete_label = notifications::athlete_display_for_notification(state.db.as_ref(), &payload.athlete_id)
+            .await
+            .unwrap_or_else(|_| "Zawodnik".to_string());
         notifications::notify_admin_broadcast(
             &state,
             "attendance_pending",
             "Nowe zgłoszenie obecności",
-            "Zawodnik zgłosił obecność wymagającą weryfikacji.",
+            &format!(
+                "{} — obecność do weryfikacji ({}).",
+                athlete_label,
+                payload.session_date.trim()
+            ),
             Some(
                 serde_json::json!({
                     "athlete_id": payload.athlete_id,

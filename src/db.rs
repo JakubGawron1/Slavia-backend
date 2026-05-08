@@ -85,7 +85,7 @@ pub async fn sync_athlete_bests_from_approved_conn(
     let mut rows = conn
         .query(
             "SELECT snatch, clean_and_jerk, total FROM results \
-             WHERE athlete_id = ?1 AND status = 'Approved' \
+             WHERE athlete_id = ?1 AND status = 'Approved' AND kind = 'competition' \
              ORDER BY total DESC, date DESC LIMIT 1",
             [athlete_id.to_string()],
         )
@@ -121,17 +121,17 @@ pub async fn sync_all_athletes_bests_from_results(conn: &Connection) -> Result<u
         "UPDATE athletes SET \
            best_snatch_kg = ( \
              SELECT r.snatch FROM results r \
-             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' \
+             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' AND r.kind = 'competition' \
              ORDER BY r.total DESC, r.date DESC LIMIT 1 \
            ), \
            best_clean_jerk_kg = ( \
              SELECT r.clean_and_jerk FROM results r \
-             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' \
+             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' AND r.kind = 'competition' \
              ORDER BY r.total DESC, r.date DESC LIMIT 1 \
            ), \
            total_kg = ( \
              SELECT r.total FROM results r \
-             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' \
+             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' AND r.kind = 'competition' \
              ORDER BY r.total DESC, r.date DESC LIMIT 1 \
            )",
         (),
@@ -179,7 +179,8 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             notes TEXT,
             profile_tagline TEXT,
             public_bio TEXT,
-            is_active BOOLEAN DEFAULT 1
+            is_active BOOLEAN DEFAULT 1,
+            has_standing_order INTEGER NOT NULL DEFAULT 0
         )",
         "CREATE TABLE IF NOT EXISTS competitions (
             id TEXT PRIMARY KEY,
@@ -214,7 +215,9 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             date TEXT NOT NULL,
             squat_kg REAL,
             bench_kg REAL,
-            deadlift_kg REAL
+            deadlift_kg REAL,
+            kind TEXT NOT NULL DEFAULT 'competition',
+            location TEXT
         )",
         "CREATE TABLE IF NOT EXISTS posts (
             id TEXT PRIMARY KEY,
@@ -449,6 +452,14 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
     let _ = conn
         .execute("ALTER TABLE athletes ADD COLUMN public_bio TEXT", ())
         .await;
+    // „Przelew stały" — flaga: czy zawodnik ma zlecenie stałe na składkę i automatycznie przy
+    // pierwszej okazji każdego miesiąca system zapisze mu Approved-payment.
+    let _ = conn
+        .execute(
+            "ALTER TABLE athletes ADD COLUMN has_standing_order INTEGER NOT NULL DEFAULT 0",
+            (),
+        )
+        .await;
 
     let _ = conn
         .execute("ALTER TABLE users ADD COLUMN avatar_url TEXT", ())
@@ -517,6 +528,30 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
     let _ = conn.execute("ALTER TABLE results ADD COLUMN squat_kg REAL", ()).await;
     let _ = conn.execute("ALTER TABLE results ADD COLUMN bench_kg REAL", ()).await;
     let _ = conn.execute("ALTER TABLE results ADD COLUMN deadlift_kg REAL", ()).await;
+    // Rozróżnienie wpisów: 'competition' (publiczne, ranking, public-board) vs 'training' (tylko po zalogowaniu).
+    let _ = conn
+        .execute(
+            "ALTER TABLE results ADD COLUMN kind TEXT NOT NULL DEFAULT 'competition'",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
+            "UPDATE results SET kind = 'competition' WHERE kind IS NULL OR kind = ''",
+            (),
+        )
+        .await;
+    // Miejsce zawodów / treningu. Dla `kind='training'` zawsze 'Slavia' (sala klubowa).
+    let _ = conn
+        .execute("ALTER TABLE results ADD COLUMN location TEXT", ())
+        .await;
+    // Backfill: starsze wpisy treningowe mogły mieć `location IS NULL` lub puste — uzupełnij.
+    let _ = conn
+        .execute(
+            "UPDATE results SET location = 'Slavia' WHERE kind = 'training' AND (location IS NULL OR trim(location) = '')",
+            (),
+        )
+        .await;
     let _ = conn.execute("ALTER TABLE chat_threads ADD COLUMN title TEXT", ()).await;
     let _ = conn
         .execute(
@@ -827,7 +862,8 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             notes TEXT,
             profile_tagline TEXT,
             public_bio TEXT,
-            is_active BOOLEAN DEFAULT 1
+            is_active BOOLEAN DEFAULT 1,
+            has_standing_order INTEGER NOT NULL DEFAULT 0
         )",
         "CREATE TABLE IF NOT EXISTS competitions (
             id TEXT PRIMARY KEY,
@@ -862,7 +898,9 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             date TEXT NOT NULL,
             squat_kg REAL,
             bench_kg REAL,
-            deadlift_kg REAL
+            deadlift_kg REAL,
+            kind TEXT NOT NULL DEFAULT 'competition',
+            location TEXT
         )",
         "CREATE TABLE IF NOT EXISTS posts (
             id TEXT PRIMARY KEY,
@@ -1067,6 +1105,12 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
     let _ = conn.execute("ALTER TABLE athletes ADD COLUMN gender TEXT", ()).await;
     let _ = conn.execute("ALTER TABLE athletes ADD COLUMN profile_tagline TEXT", ()).await;
     let _ = conn.execute("ALTER TABLE athletes ADD COLUMN public_bio TEXT", ()).await;
+    let _ = conn
+        .execute(
+            "ALTER TABLE athletes ADD COLUMN has_standing_order INTEGER NOT NULL DEFAULT 0",
+            (),
+        )
+        .await;
 
     seed_data(conn).await?;
     println!("✅ Baza danych zrekonstruowana i zasilona danymi!");
@@ -1116,7 +1160,7 @@ async fn seed_data(conn: &Connection) -> Result<(), Box<dyn std::error::Error + 
             "Jakub Gawron",
             2000,
             "male",
-            "81kg",
+            "Senior M — 85 kg",
             80.5,
             110.0,
             140.0,
@@ -1128,11 +1172,11 @@ async fn seed_data(conn: &Connection) -> Result<(), Box<dyn std::error::Error + 
         ),
     ).await?;
 
-    // 3. Athletes seed with images
+    // 3. Athletes seed with images (kategorie wagowe wg regulaminu PZPC od 1.01.2026)
     let athletes = [
-        ("Anna Nowak", 1998, "female", "64kg", 63.5, 85.0, 105.0, 190.0, "https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/people/kitchen-bar", "Mistrzyni Polski"),
-        ("Piotr Zieliński", 2002, "male", "102kg", 101.2, 140.0, 175.0, 315.0, "https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/people/bicycle", "Rekordzista"),
-        ("Marek Przykładowy", 2005, "male", "73kg", 72.8, 90.0, 115.0, 205.0, "https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/people/boy-snow-hoodie", "Junior"),
+        ("Anna Nowak", 1998, "female", "Senior K — 69 kg", 63.5, 85.0, 105.0, 190.0, "https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/people/kitchen-bar", "Mistrzyni Polski"),
+        ("Piotr Zieliński", 2002, "male", "Senior M — 110 kg", 101.2, 140.0, 175.0, 315.0, "https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/people/bicycle", "Rekordzista"),
+        ("Marek Przykładowy", 2005, "male", "U23 M — 75 kg", 72.8, 90.0, 115.0, 205.0, "https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/people/boy-snow-hoodie", "Młodzieżowiec"),
     ];
 
     for (name, year, gender, cat, bw, snatch, cj, total, img, note) in athletes {

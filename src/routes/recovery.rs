@@ -188,11 +188,19 @@ pub async fn upsert_my_recovery_log(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    let athlete_label = crate::notifications::athlete_display_for_notification(state.db.as_ref(), &athlete_id)
+        .await
+        .unwrap_or_else(|_| "Zawodnik".to_string());
+
     crate::notifications::notify_admin_broadcast(
         &state,
         "recovery_checkin",
         "Nowy check-in regeneracji",
-        "Zawodnik zaktualizował dzienny check-in regeneracji.",
+        &format!(
+            "{} — dzienny check-in regeneracji ({}).",
+            athlete_label,
+            payload.date.trim()
+        ),
         Some(serde_json::json!({ "athlete_id": athlete_id, "date": payload.date.trim() }).to_string()),
     );
     let details = serde_json::json!({
