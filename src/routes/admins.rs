@@ -61,7 +61,6 @@ fn parse_roles_list(raw: &[String]) -> Result<Vec<Role>, ApiError> {
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateProfileRequest {
-    pub email: Option<String>,
     pub password: Option<String>,
     pub avatar_url: Option<String>,
     pub ui_theme_preset: Option<String>,
@@ -71,7 +70,6 @@ pub struct UpdateProfileRequest {
 #[derive(Deserialize)]
 pub struct UpdateUserAccountRequest {
     pub username: Option<String>,
-    pub email: Option<String>,
     pub password: Option<String>,
 }
 
@@ -148,7 +146,7 @@ pub(crate) async fn user_roles_by_id(state: &AppState, id: &str) -> Result<Optio
 async fn count_superadmin_accounts(state: &AppState) -> Result<i64, ApiError> {
     let all = collect_users_for_sql(
         state,
-        "SELECT id, username, email, avatar_url, roles FROM users ORDER BY username ASC",
+        "SELECT id, username, avatar_url, roles FROM users ORDER BY username ASC",
     )
     .await?;
     Ok(all
@@ -170,15 +168,14 @@ async fn collect_users_for_sql(state: &AppState, sql: &str) -> Result<Vec<User>,
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        let roles_json: String = row.get(4).unwrap();
+        let roles_json: String = row.get(3).unwrap();
         let roles: Vec<Role> = serde_json::from_str(&roles_json).unwrap();
-        let is_banned: i64 = row.get(5).unwrap_or(0);
-        let banned_reason: Option<String> = row.get(6).ok();
+        let is_banned: i64 = row.get(4).unwrap_or(0);
+        let banned_reason: Option<String> = row.get(5).ok();
         out.push(User {
             id: row.get(0).unwrap(),
             username: row.get(1).unwrap(),
-            email: row.get(2).ok(),
-            avatar_url: row.get(3).ok(),
+            avatar_url: row.get(2).ok(),
             is_banned: is_banned != 0,
             banned_reason,
             password_hash: "".to_string(),
@@ -192,7 +189,7 @@ pub async fn list_admins(
     State(state): State<AppState>,
     auth: RequireAdminOrSuperAdmin,
 ) -> Result<Json<Vec<User>>, ApiError> {
-    let sql = "SELECT id, username, email, avatar_url, roles, is_banned, banned_reason FROM users ORDER BY username ASC";
+    let sql = "SELECT id, username, avatar_url, roles, is_banned, banned_reason FROM users ORDER BY username ASC";
     let all_users = collect_users_for_sql(&state, sql).await?;
     let caller_super = auth.0.roles.contains(&Role::SuperAdmin);
     let admins = all_users
@@ -221,7 +218,7 @@ pub async fn list_accounts_grouped(
     State(state): State<AppState>,
     auth: RequireAdminOrSuperAdmin,
 ) -> Result<Json<GroupedAccounts>, ApiError> {
-    let sql = "SELECT id, username, email, avatar_url, roles, is_banned, banned_reason FROM users ORDER BY username ASC";
+    let sql = "SELECT id, username, avatar_url, roles, is_banned, banned_reason FROM users ORDER BY username ASC";
     let all_users = collect_users_for_sql(&state, sql).await?;
     let caller_super = auth.0.roles.contains(&Role::SuperAdmin);
 
@@ -306,7 +303,6 @@ pub async fn create_admin(
     Ok(Json(User {
         id: user_id,
         username: payload.username,
-        email: None,
         avatar_url: None,
         is_banned: false,
         banned_reason: None,
@@ -321,10 +317,10 @@ pub async fn update_user_account(
     auth: RequireAdminOrSuperAdmin,
     Json(payload): Json<UpdateUserAccountRequest>,
 ) -> Result<StatusCode, ApiError> {
-    if payload.username.is_none() && payload.email.is_none() && payload.password.is_none() {
+    if payload.username.is_none() && payload.password.is_none() {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
-            "At least one of username, email, password is required",
+            "At least one of username, password is required",
         ));
     }
 
@@ -355,26 +351,6 @@ pub async fn update_user_account(
             )
             .await
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    }
-
-    if let Some(new_email) = &payload.email {
-        let trimmed = new_email.trim();
-        if trimmed.is_empty() {
-            state
-                .db
-                .execute("UPDATE users SET email = NULL WHERE id = ?1", [id.clone()])
-                .await
-                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        } else {
-            state
-                .db
-                .execute(
-                    "UPDATE users SET email = ?1 WHERE id = ?2",
-                    (trimmed.to_string(), id.clone()),
-                )
-                .await
-                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        }
     }
 
     if let Some(new_password) = &payload.password {
@@ -683,26 +659,6 @@ pub async fn update_profile(
         }
     }
     
-    if let Some(new_email) = payload.email {
-        let trimmed = new_email.trim().to_string();
-        if trimmed.is_empty() {
-            state
-                .db
-                .execute("UPDATE users SET email = NULL WHERE id = ?1", [claims.sub.clone()])
-                .await
-                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        } else {
-            state
-                .db
-                .execute(
-                    "UPDATE users SET email = ?1 WHERE id = ?2",
-                    (trimmed, claims.sub.clone()),
-                )
-                .await
-                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        }
-    }
-
     if let Some(url) = &payload.avatar_url {
         state
             .db

@@ -18,7 +18,7 @@ fn row_to_msg(row: &Row) -> Result<ContactMessage, libsql::Error> {
     Ok(ContactMessage {
         id: sql_row::flex_string(row, 0)?,
         name: sql_row::flex_string(row, 1)?,
-        email: sql_row::flex_string(row, 2)?,
+        email: sql_row::flex_opt_string(row, 2)?,
         phone: sql_row::flex_opt_string(row, 3)?,
         message: sql_row::flex_string(row, 4)?,
         created_at: sql_row::flex_string(row, 5)?,
@@ -31,7 +31,7 @@ const COLS: &str = "id, name, email, phone, message, created_at, is_read";
 #[derive(Deserialize)]
 pub struct SubmitContactRequest {
     pub name: String,
-    pub email: String,
+    pub email: Option<String>,
     pub phone: Option<String>,
     pub message: String,
 }
@@ -47,23 +47,26 @@ pub async fn submit_contact_message(
     Json(payload): Json<SubmitContactRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let name = payload.name.trim();
-    let email = payload.email.trim();
     let message = payload.message.trim();
-    if name.is_empty() || email.is_empty() || message.is_empty() {
+    if name.is_empty() || message.is_empty() {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
-            "name, email and message are required",
+            "name and message are required",
         ));
     }
     if message.len() > 8000 {
         return Err(api_error(StatusCode::BAD_REQUEST, "message too long"));
     }
-    if !email.contains('@') || email.len() < 3 {
-        return Err(api_error(StatusCode::BAD_REQUEST, "invalid email"));
-    }
-
     let id = Uuid::new_v4().to_string();
     let created_at = Utc::now().to_rfc3339();
+    let email = payload.email.and_then(|e| {
+        let t = e.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        }
+    });
     let phone = payload.phone.and_then(|p| {
         let t = p.trim();
         if t.is_empty() {
@@ -80,7 +83,7 @@ pub async fn submit_contact_message(
             (
                 id.clone(),
                 name.to_string(),
-                email.to_string(),
+                email.clone(),
                 phone.clone(),
                 message.to_string(),
                 created_at,

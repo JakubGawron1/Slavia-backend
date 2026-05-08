@@ -154,7 +154,6 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         "CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
             username TEXT UNIQUE NOT NULL,
-            email TEXT UNIQUE,
             password_hash TEXT NOT NULL,
             roles TEXT NOT NULL,
             avatar_url TEXT,
@@ -395,7 +394,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         "CREATE TABLE IF NOT EXISTS contact_messages (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
-            email TEXT NOT NULL,
+            email TEXT,
             phone TEXT,
             message TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -616,12 +615,15 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             "CREATE TABLE users__new (
                 id TEXT PRIMARY KEY,
                 username TEXT UNIQUE NOT NULL,
-                email TEXT UNIQUE,
                 password_hash TEXT NOT NULL,
                 roles TEXT NOT NULL,
                 avatar_url TEXT,
                 ui_theme_preset TEXT,
-                ui_color_mode TEXT
+                ui_color_mode TEXT,
+                is_banned INTEGER NOT NULL DEFAULT 0,
+                banned_at TEXT,
+                banned_by_user_id TEXT,
+                banned_reason TEXT
             )",
             "CREATE TABLE users__new",
         )
@@ -630,11 +632,13 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         // Kopiowanie danych: roles -> roles; jeśli roles brak, to role -> JSON; ostatecznie fallback.
         exec0_retry(
             conn,
-            "INSERT INTO users__new (id, username, email, password_hash, roles, avatar_url, ui_theme_preset, ui_color_mode)
+            "INSERT INTO users__new (
+                id, username, password_hash, roles, avatar_url, ui_theme_preset, ui_color_mode,
+                is_banned, banned_at, banned_by_user_id, banned_reason
+             )
              SELECT
                 id,
                 username,
-                email,
                 password_hash,
                 COALESCE(
                     roles,
@@ -645,7 +649,11 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
                 ) AS roles,
                 avatar_url,
                 ui_theme_preset,
-                ui_color_mode
+                ui_color_mode,
+                COALESCE(is_banned, 0),
+                banned_at,
+                banned_by_user_id,
+                banned_reason
              FROM users",
             "INSERT users__new",
         )
@@ -666,6 +674,96 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         "🔄 Migracja: TrainerAdmin → Admin + Trainer w JSON roles (zaktualizowano {} kont).",
         trainer_admin_fix
     );
+
+    // Migracja: usunięcie users.email (nie używamy maili) — zachowaj wszystkie inne dane kont.
+    {
+        let mut pragma = conn
+            .query(
+                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'email'",
+                (),
+            )
+            .await
+            .map_err(|e| format!("pragma_table_info(users) email: {e}"))?;
+        let email_column_exists: i64 = pragma
+            .next()
+            .await
+            .map_err(|e| format!("pragma users email row: {e}"))?
+            .map(|row| row.get::<i64>(0))
+            .transpose()
+            .map_err(|e| format!("pragma users email get: {e}"))?
+            .unwrap_or(0);
+        drop(pragma);
+
+        if email_column_exists > 0 {
+            println!("🧱 Migracja: usuwanie users.email (rekonstrukcja tabeli users)...");
+            let _ = conn.execute("PRAGMA foreign_keys = OFF", ()).await;
+            exec0_retry(conn, "BEGIN IMMEDIATE", "BEGIN IMMEDIATE drop users.email migration").await?;
+
+            exec0_retry(
+                conn,
+                "CREATE TABLE users__new (
+                    id TEXT PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    roles TEXT NOT NULL,
+                    avatar_url TEXT,
+                    ui_theme_preset TEXT,
+                    ui_color_mode TEXT,
+                    is_banned INTEGER NOT NULL DEFAULT 0,
+                    banned_at TEXT,
+                    banned_by_user_id TEXT,
+                    banned_reason TEXT
+                )",
+                "CREATE TABLE users__new (no email)",
+            )
+            .await?;
+
+            exec0_retry(
+                conn,
+                "INSERT INTO users__new (
+                    id, username, password_hash, roles, avatar_url, ui_theme_preset, ui_color_mode,
+                    is_banned, banned_at, banned_by_user_id, banned_reason
+                 )
+                 SELECT
+                    id, username, password_hash, roles, avatar_url, ui_theme_preset, ui_color_mode,
+                    COALESCE(is_banned, 0), banned_at, banned_by_user_id, banned_reason
+                 FROM users",
+                "INSERT users__new (no email)",
+            )
+            .await?;
+
+            exec0_retry(conn, "DROP TABLE users", "DROP TABLE users (no email)").await?;
+            exec0_retry(conn, "ALTER TABLE users__new RENAME TO users", "RENAME users__new").await?;
+            exec0_retry(conn, "COMMIT", "COMMIT drop users.email migration").await?;
+            let _ = conn.execute("PRAGMA foreign_keys = ON", ()).await;
+            println!("✅ Migracja: users.email usunięta (pozostałe dane zachowane).");
+        }
+    }
+
+    // Migracja: przywrócenie contact_messages.email (formularz publiczny — przydatne do odpowiedzi).
+    {
+        let mut pragma = conn
+            .query(
+                "SELECT COUNT(*) FROM pragma_table_info('contact_messages') WHERE name = 'email'",
+                (),
+            )
+            .await
+            .map_err(|e| format!("pragma_table_info(contact_messages) email: {e}"))?;
+        let email_column_exists: i64 = pragma
+            .next()
+            .await
+            .map_err(|e| format!("pragma contact_messages email row: {e}"))?
+            .map(|row| row.get::<i64>(0))
+            .transpose()
+            .map_err(|e| format!("pragma contact_messages email get: {e}"))?
+            .unwrap_or(0);
+        drop(pragma);
+
+        if email_column_exists == 0 {
+            println!("🧱 Migracja: dodawanie contact_messages.email...");
+            let _ = conn.execute("ALTER TABLE contact_messages ADD COLUMN email TEXT", ()).await;
+        }
+    }
 
     Ok(())
 }
@@ -704,12 +802,15 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
         "CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
             username TEXT UNIQUE NOT NULL,
-            email TEXT UNIQUE,
             password_hash TEXT NOT NULL,
             roles TEXT NOT NULL,
             avatar_url TEXT,
             ui_theme_preset TEXT,
-            ui_color_mode TEXT
+            ui_color_mode TEXT,
+            is_banned INTEGER NOT NULL DEFAULT 0,
+            banned_at TEXT,
+            banned_by_user_id TEXT,
+            banned_reason TEXT
         )",
         "CREATE TABLE IF NOT EXISTS athletes (
             id TEXT PRIMARY KEY,
@@ -941,7 +1042,7 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
         "CREATE TABLE IF NOT EXISTS contact_messages (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
-            email TEXT NOT NULL,
+            email TEXT,
             phone TEXT,
             message TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -981,11 +1082,10 @@ async fn seed_data(conn: &Connection) -> Result<(), Box<dyn std::error::Error + 
     let super_hash = argon2.hash_password(super_pass.as_bytes(), &salt).map_err(|e| e.to_string())?.to_string();
     let super_id = Uuid::new_v4().to_string();
     conn.execute(
-        "INSERT INTO users (id, username, email, password_hash, roles) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO users (id, username, password_hash, roles) VALUES (?1, ?2, ?3, ?4)",
         (
             super_id.clone(),
             "Slavia",
-            Some("biuro@slavia.pl".to_string()),
             super_hash,
             "[\"SuperAdmin\"]",
         ),
@@ -997,11 +1097,10 @@ async fn seed_data(conn: &Connection) -> Result<(), Box<dyn std::error::Error + 
     let jakub_hash = argon2.hash_password(jakub_pass.as_bytes(), &salt).map_err(|e| e.to_string())?.to_string();
     let jakub_id = Uuid::new_v4().to_string();
     conn.execute(
-        "INSERT INTO users (id, username, email, password_hash, roles) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO users (id, username, password_hash, roles) VALUES (?1, ?2, ?3, ?4)",
         (
             jakub_id.clone(),
             "JakubGawron",
-            Some("jakubgawron.dev.pl@gmail.com".to_string()),
             jakub_hash,
             "[\"SuperAdmin\"]",
         ),
