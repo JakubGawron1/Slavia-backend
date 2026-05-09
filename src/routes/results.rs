@@ -48,7 +48,8 @@ pub(crate) async fn sync_athlete_bests_from_approved(
     state: &AppState,
     athlete_id: &str,
 ) -> Result<(), ApiError> {
-    db::sync_athlete_bests_from_approved_conn(state.db.as_ref(), athlete_id)
+    let conn_arc = state.db.raw().await;
+    db::sync_athlete_bests_from_approved_conn(conn_arc.as_ref(), athlete_id)
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
@@ -511,7 +512,8 @@ pub async fn create_result(
     sync_athlete_bests_from_approved(&state, &payload.athlete_id).await?;
 
     if status == ResultStatus::Pending {
-        let name = crate::notifications::athlete_full_name(state.db.as_ref(), &payload.athlete_id)
+        let conn_arc = state.db.raw().await;
+        let name = crate::notifications::athlete_full_name(conn_arc.as_ref(), &payload.athlete_id)
             .await
             .ok()
             .flatten()

@@ -145,7 +145,8 @@ pub async fn delete_competition(
         ));
     }
 
-    let title_for_notify = notifications::competition_title(state.db.as_ref(), &id)
+    let conn_arc = state.db.raw().await;
+    let title_for_notify = notifications::competition_title(conn_arc.as_ref(), &id)
         .await
         .ok()
         .flatten()
@@ -233,7 +234,8 @@ pub async fn sync_external_competitions(
     State(state): State<AppState>,
     _auth: RequireAdminOrSuperAdmin,
 ) -> Result<Json<external_calendar_sync::SyncExternalResponse>, ApiError> {
-    let r = external_calendar_sync::run_sync(state.db.as_ref()).await?;
+    let conn_arc = state.db.raw().await;
+    let r = external_calendar_sync::run_sync(conn_arc.as_ref()).await?;
     notifications::notify_competitions_synced(
         &state,
         r.pzpc_imported,

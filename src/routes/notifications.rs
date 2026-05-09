@@ -14,7 +14,8 @@ pub async fn list_my_notifications(
     State(state): State<AppState>,
     claims: Claims,
 ) -> Result<Json<Vec<NotificationDto>>, ApiError> {
-    let list = repos::notifications::list_for_user(state.db.as_ref(), &claims.sub)
+    let conn_arc = state.db.raw().await;
+    let list = repos::notifications::list_for_user(conn_arc.as_ref(), &claims.sub)
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -27,7 +28,8 @@ pub async fn delete_my_notification(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let user_id = claims.sub.clone();
-    let n = repos::notifications::delete_one(state.db.as_ref(), &id, &user_id)
+    let conn_arc = state.db.raw().await;
+    let n = repos::notifications::delete_one(conn_arc.as_ref(), &id, &user_id)
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -44,7 +46,8 @@ pub async fn mark_my_notification_read(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let user_id = claims.sub.clone();
-    let n = repos::notifications::mark_one_read(state.db.as_ref(), &id, &user_id)
+    let conn_arc = state.db.raw().await;
+    let n = repos::notifications::mark_one_read(conn_arc.as_ref(), &id, &user_id)
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -59,7 +62,8 @@ pub async fn mark_all_my_notifications_read(
     State(state): State<AppState>,
     claims: Claims,
 ) -> Result<StatusCode, ApiError> {
-    repos::notifications::mark_all_read(state.db.as_ref(), &claims.sub)
+    let conn_arc = state.db.raw().await;
+    repos::notifications::mark_all_read(conn_arc.as_ref(), &claims.sub)
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::OK)
@@ -69,7 +73,8 @@ pub async fn delete_all_my_notifications(
     State(state): State<AppState>,
     claims: Claims,
 ) -> Result<StatusCode, ApiError> {
-    repos::notifications::delete_all_for_user(state.db.as_ref(), &claims.sub)
+    let conn_arc = state.db.raw().await;
+    repos::notifications::delete_all_for_user(conn_arc.as_ref(), &claims.sub)
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)

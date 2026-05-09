@@ -118,8 +118,9 @@ pub async fn upsert_attendance(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    let conn_arc = state.db.raw().await;
     let _ = write_audit_log(
-        state.db.as_ref(),
+        conn_arc.as_ref(),
         Some(&claims.sub),
         Some(&actor_role),
         "attendance",
@@ -138,7 +139,7 @@ pub async fn upsert_attendance(
     .await;
 
     if !is_staff {
-        let athlete_label = notifications::athlete_display_for_notification(state.db.as_ref(), &payload.athlete_id)
+        let athlete_label = notifications::athlete_display_for_notification(conn_arc.as_ref(), &payload.athlete_id)
             .await
             .unwrap_or_else(|_| "Zawodnik".to_string());
         notifications::notify_admin_broadcast(

@@ -143,8 +143,9 @@ pub async fn upsert_my_recovery_log(
             "readiness_level": readiness
         })
         .to_string();
+        let conn_arc = state.db.raw().await;
         let _ = write_audit_log(
-            state.db.as_ref(),
+            conn_arc.as_ref(),
             Some(&claims.sub),
             Some(actor_role_label(&claims)),
             "recovery",
@@ -188,7 +189,8 @@ pub async fn upsert_my_recovery_log(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let athlete_label = crate::notifications::athlete_display_for_notification(state.db.as_ref(), &athlete_id)
+    let conn_arc = state.db.raw().await;
+    let athlete_label = crate::notifications::athlete_display_for_notification(conn_arc.as_ref(), &athlete_id)
         .await
         .unwrap_or_else(|_| "Zawodnik".to_string());
 
@@ -212,7 +214,7 @@ pub async fn upsert_my_recovery_log(
     })
     .to_string();
     let _ = write_audit_log(
-        state.db.as_ref(),
+        conn_arc.as_ref(),
         Some(&claims.sub),
         Some(actor_role_label(&claims)),
         "recovery",

@@ -109,8 +109,9 @@ pub async fn create_comment(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    let conn_arc = state.db.raw().await;
     let _ = write_audit_log(
-        state.db.as_ref(),
+        conn_arc.as_ref(),
         Some(&claims.sub),
         Some("staff"),
         "comments",

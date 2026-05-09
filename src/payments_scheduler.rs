@@ -8,15 +8,14 @@
 //! kolejne uruchomienia nie generują duplikatów. Bezpiecznie więc uruchamiać scheduler
 //! kilka razy dziennie.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{Datelike, Utc};
-use libsql::Connection;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::audit::write_audit_log;
+use crate::state::Db;
 
 /// Składka miesięczna w PLN (musi być spójna z `routes::payments::MONTHLY_FEE_PLN`).
 const MONTHLY_FEE_PLN: f64 = 50.0;
@@ -38,7 +37,7 @@ struct PendingAthlete {
 /// Pobiera zawodników z włączonym przelewem stałym, którzy nie mają jeszcze
 /// Approved-wpisu w `membership_payments` dla wskazanego miesiąca.
 async fn select_athletes_needing_auto_payment(
-    conn: &Connection,
+    conn: &Db,
     month: &str,
 ) -> Result<Vec<PendingAthlete>, libsql::Error> {
     let mut rows = conn
@@ -67,7 +66,7 @@ async fn select_athletes_needing_auto_payment(
 }
 
 async fn insert_auto_approved_payment(
-    conn: &Connection,
+    conn: &Db,
     athlete_id: &str,
     month: &str,
 ) -> Result<(), libsql::Error> {
@@ -95,7 +94,7 @@ async fn insert_auto_approved_payment(
 /// Zwraca liczbę utworzonych Approved-wpisów. Bezpieczne do wywołania ręcznego
 /// (np. ze skryptu admin / endpointu diagnostycznego).
 pub async fn run_standing_orders_for_current_month(
-    conn: &Connection,
+    conn: &Db,
 ) -> Result<usize, libsql::Error> {
     let month = current_month_yyyy_mm();
     let pending = select_athletes_needing_auto_payment(conn, &month).await?;
@@ -121,8 +120,9 @@ pub async fn run_standing_orders_for_current_month(
             "reason": "standing_order_auto",
         })
         .to_string();
+        let audit_conn = conn.raw().await;
         let _ = write_audit_log(
-            conn,
+            audit_conn.as_ref(),
             None,
             Some("system"),
             "payments",
@@ -142,12 +142,12 @@ pub async fn run_standing_orders_for_current_month(
 ///
 /// Pierwszy przebieg jest opóźniony o 30 sekund (żeby aplikacja zdążyła wstać i
 /// migracje były na pewno dokończone), a kolejne — co `RUN_INTERVAL_HOURS` godzin.
-pub fn spawn_standing_order_task(conn: Arc<Connection>) -> JoinHandle<()> {
+pub fn spawn_standing_order_task(db: Db) -> JoinHandle<()> {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(30)).await;
         let interval = Duration::from_secs(RUN_INTERVAL_HOURS * 3600);
         loop {
-            match run_standing_orders_for_current_month(conn.as_ref()).await {
+            match run_standing_orders_for_current_month(&db).await {
                 Ok(0) => {
                     // cisza — nic do roboty
                 }

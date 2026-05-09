@@ -298,8 +298,9 @@ pub async fn upload_handler(
     }
 
     if let Some(secure_url) = json.get("secure_url").and_then(|v| v.as_str()) {
+        let conn_arc = state.db.raw().await;
         let _ = write_audit_log(
-            state.db.as_ref(),
+            conn_arc.as_ref(),
             Some(&claims.sub),
             Some("upload"),
             "upload",
