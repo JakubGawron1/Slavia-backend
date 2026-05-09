@@ -302,6 +302,11 @@ pub async fn create_my_payment(
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let note = payload.note.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if let Some(a) = payload.amount_pln {
+        if !a.is_finite() || a <= 0.0 {
+            return Err(api_error(StatusCode::BAD_REQUEST, "Nieprawidłowa kwota płatności."));
+        }
+    }
 
     state
         .db
