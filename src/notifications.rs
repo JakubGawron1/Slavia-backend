@@ -176,7 +176,8 @@ async fn athlete_plus_superadmins(
     body_staff: &str,
     payload: Option<&str>,
 ) -> Result<(), libsql::Error> {
-    let conn = state.db.as_ref();
+    let conn_arc = state.db.raw().await;
+    let conn = conn_arc.as_ref();
     let uid_opt = athlete_user_id(conn, athlete_id).await?;
     if let Some(ref uid) = uid_opt {
         insert_notification(conn, uid, kind_athlete, title_athlete, body_athlete, payload).await?;
@@ -195,7 +196,8 @@ pub fn notify_result_approved(state: &AppState, athlete_id: &str, total: f64, da
     let aid = athlete_id.to_string();
     let date = date.to_string();
     spawn_notify(async move {
-        let conn = st.db.as_ref();
+        let conn_arc = st.db.raw().await;
+        let conn = conn_arc.as_ref();
         let name = athlete_display_for_notification(conn, &aid).await?;
         let title_a = "Wynik zatwierdzony";
         let body_a = format!(
@@ -239,7 +241,8 @@ pub fn notify_result_pending(
     let name = athlete_name.to_string();
     let date = date.to_string();
     spawn_notify(async move {
-        let conn = st.db.as_ref();
+        let conn_arc = st.db.raw().await;
+        let conn = conn_arc.as_ref();
         let title = "Nowy wynik do zatwierdzenia";
         let body = if strength_only {
             format!(
@@ -274,7 +277,7 @@ pub fn notify_competition_assigned_to_athlete(state: &AppState, athlete_id: &str
         let title_s = "Przypisanie zawodnika";
         let body_s = format!(
             "{} — zapis na „{}”.",
-            athlete_display_for_notification(st.db.as_ref(), &aid).await?,
+            athlete_display_for_notification(st.db.raw().await.as_ref(), &aid).await?,
             ct_h
         );
         let payload = serde_json::json!({
@@ -315,7 +318,7 @@ pub fn notify_competition_unassigned_from_athlete(
         let title_s = "Usunięto przypisanie zawodnika";
         let body_s = format!(
             "{} — usunięto z „{}”.",
-            athlete_display_for_notification(st.db.as_ref(), &aid).await?,
+            athlete_display_for_notification(st.db.raw().await.as_ref(), &aid).await?,
             ct_h
         );
         let payload = serde_json::json!({
@@ -357,7 +360,7 @@ pub fn notify_training_log_trainer_note(
         let title_s = "Dziennik: notatka kadry";
         let body_s = format!(
             "{} — {} dodał(a) wpis ({})",
-            athlete_display_for_notification(st.db.as_ref(), &aid).await?,
+            athlete_display_for_notification(st.db.raw().await.as_ref(), &aid).await?,
             au,
             sd
         );
@@ -406,7 +409,8 @@ pub fn notify_training_log_athlete_note(
     let sd = session_date.to_string();
     let pv = truncate_preview(preview);
     spawn_notify(async move {
-        let conn = st.db.as_ref();
+        let conn_arc = st.db.raw().await;
+        let conn = conn_arc.as_ref();
         let title = "Nowy wpis zawodnika w dzienniku";
         let body = format!("{} — {} ({})", adn, pv, sd);
         let payload = serde_json::json!({
@@ -432,7 +436,8 @@ pub fn notify_competition_created(state: &AppState, title_ev: &str, date: &str, 
     let loc = location.to_string();
     let cid = competition_id.to_string();
     spawn_notify(async move {
-        let conn = st.db.as_ref();
+        let conn_arc = st.db.raw().await;
+        let conn = conn_arc.as_ref();
         let title = "Nowe wydarzenie w kalendarzu";
         let ev = competition_title_for_notification(&title_ev);
         let body = format!("{} — {} ({})", ev, date, loc);
@@ -449,7 +454,8 @@ pub fn notify_competition_updated(state: &AppState, title_ev: &str, competition_
     let title_ev = title_ev.to_string();
     let cid = competition_id.to_string();
     spawn_notify(async move {
-        let conn = st.db.as_ref();
+        let conn_arc = st.db.raw().await;
+        let conn = conn_arc.as_ref();
         let title = "Zaktualizowano zawody";
         let ev = competition_title_for_notification(&title_ev);
         let body = format!("„{}” — zmieniono szczegóły.", ev);
@@ -466,7 +472,8 @@ pub fn notify_competition_deleted(state: &AppState, title_ev: &str, competition_
     let title_ev = title_ev.to_string();
     let cid = competition_id.to_string();
     spawn_notify(async move {
-        let conn = st.db.as_ref();
+        let conn_arc = st.db.raw().await;
+        let conn = conn_arc.as_ref();
         let title = "Usunięto zawody z kalendarza";
         let ev = competition_title_for_notification(&title_ev);
         let body = format!("„{}” zostało usunięte.", ev);
@@ -484,7 +491,8 @@ pub fn notify_admin_broadcast(state: &AppState, kind: &str, title: &str, body: &
     let title = title.to_string();
     let body = body.to_string();
     spawn_notify(async move {
-        let conn = st.db.as_ref();
+        let conn_arc = st.db.raw().await;
+        let conn = conn_arc.as_ref();
         let payload_ref = payload.as_deref();
         for uid in admin_staff_ids(conn).await? {
             insert_notification(conn, &uid, &kind, &title, &body, payload_ref).await?;
@@ -498,7 +506,8 @@ pub fn notify_announcement_published(state: &AppState, announcement_id: &str, an
     let aid = announcement_id.to_string();
     let at = announcement_title.trim().to_string();
     spawn_notify(async move {
-        let conn = st.db.as_ref();
+        let conn_arc = st.db.raw().await;
+        let conn = conn_arc.as_ref();
         let title = "Nowe ogłoszenie";
         let body = if at.is_empty() {
             "Dodano nowe ogłoszenie w systemie.".to_string()
@@ -526,7 +535,8 @@ pub fn notify_competition_roster_updated(state: &AppState, competition_id: &str,
     let cid = competition_id.to_string();
     let ct = competition_title_str.to_string();
     spawn_notify(async move {
-        let conn = st.db.as_ref();
+        let conn_arc = st.db.raw().await;
+        let conn = conn_arc.as_ref();
         let title = "Lista zapisów na zawody";
         let ev = competition_title_for_notification(&ct);
         let body = format!("Zaktualizowano zapisy na „{}”.", ev);
@@ -557,7 +567,8 @@ pub fn notify_competitions_synced(
 ) {
     let st = state.clone();
     spawn_notify(async move {
-        let conn = st.db.as_ref();
+        let conn_arc = st.db.raw().await;
+        let conn = conn_arc.as_ref();
         let title = "Synchronizacja kalendarza";
         let body = format!(
             "Zsynchronizowano zawody zewnętrzne (PZPC: {}, PC: {}, merge w bazie: {}). \
@@ -587,7 +598,7 @@ pub fn notify_training_plan_assigned(
         let title_s = "Plan treningowy przypisany";
         let body_s = format!(
             "{} — plan „{}”, tydzień {}.",
-            athlete_display_for_notification(st.db.as_ref(), &aid).await?,
+            athlete_display_for_notification(st.db.raw().await.as_ref(), &aid).await?,
             title,
             week
         );
@@ -618,7 +629,8 @@ pub fn notify_training_plan_progress_updated(
     let aid = athlete_id.to_string();
     let title = plan_title.to_string();
     spawn_notify(async move {
-        let conn = st.db.as_ref();
+        let conn_arc = st.db.raw().await;
+        let conn = conn_arc.as_ref();
         let n_title = "Aktualizacja progresu planu";
         let n_body = format!(
             "{}: {}% — plan „{}”.",
@@ -648,7 +660,8 @@ pub async fn diff_notify_athlete_competition_assignments(
     old_competition_ids: HashSet<String>,
     new_competition_ids: HashSet<String>,
 ) {
-    let conn = state.db.as_ref();
+    let conn_arc = state.db.raw().await;
+    let conn = conn_arc.as_ref();
     let mut titles: HashMap<String, String> = HashMap::new();
     let all_ids: HashSet<String> = old_competition_ids.union(&new_competition_ids).cloned().collect();
     for cid in all_ids {

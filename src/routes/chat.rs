@@ -357,7 +357,8 @@ pub async fn send_message(
     } else {
         athlete_uid
     };
-    let sender_login = notifications::username_by_id(state.db.as_ref(), &claims.sub)
+    let conn_arc = state.db.raw().await;
+    let sender_login = notifications::username_by_id(conn_arc.as_ref(), &claims.sub)
         .await
         .ok()
         .flatten()
@@ -370,7 +371,7 @@ pub async fn send_message(
         Some(serde_json::json!({ "thread_id": thread_id, "target_user_id": target_user }).to_string()),
     );
     let _ = write_audit_log(
-        state.db.as_ref(),
+        conn_arc.as_ref(),
         Some(&claims.sub),
         Some("chat"),
         "chat",
@@ -417,8 +418,9 @@ pub async fn delete_thread(
         return Err(api_error(StatusCode::FORBIDDEN, "Brak dostępu do wątku"));
     }
 
+    let conn_arc = state.db.raw().await;
     let _ = write_audit_log(
-        state.db.as_ref(),
+        conn_arc.as_ref(),
         Some(&claims.sub),
         Some("chat"),
         "chat",
@@ -465,7 +467,7 @@ pub async fn admin_prune_threads(
         ));
     }
 
-    let deleted = prune_inactive_chat_threads(state.db.as_ref(), inactivity_days)
+    let deleted = prune_inactive_chat_threads(&state.db, inactivity_days)
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -476,8 +478,9 @@ pub async fn admin_prune_threads(
         "reason": "manual_admin_prune",
     })
     .to_string();
+    let conn_arc = state.db.raw().await;
     let _ = write_audit_log(
-        state.db.as_ref(),
+        conn_arc.as_ref(),
         Some(&auth.0.sub),
         Some("chat"),
         "chat",

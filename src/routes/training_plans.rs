@@ -229,8 +229,9 @@ pub async fn create_training_plan(
         "status": status
     })
     .to_string();
+    let conn_arc = state.db.raw().await;
     let _ = write_audit_log(
-        state.db.as_ref(),
+        conn_arc.as_ref(),
         Some(&claims.sub),
         Some(actor_role_label(&claims)),
         "training_plan",
@@ -298,8 +299,9 @@ pub async fn update_training_plan(
         "status": payload.status
     })
     .to_string();
+    let conn_arc = state.db.raw().await;
     let _ = write_audit_log(
-        state.db.as_ref(),
+        conn_arc.as_ref(),
         Some(&claims.sub),
         Some(actor_role_label(&claims)),
         "training_plan",
@@ -376,8 +378,9 @@ pub async fn update_my_plan_progress(
         "athlete_note": payload.athlete_note
     })
     .to_string();
+    let conn_arc = state.db.raw().await;
     let _ = write_audit_log(
-        state.db.as_ref(),
+        conn_arc.as_ref(),
         Some(&claims.sub),
         Some(actor_role_label(&claims)),
         "training_plan",
@@ -406,8 +409,9 @@ pub async fn delete_training_plan(
     if n == 0 {
         return Err(api_error(StatusCode::NOT_FOUND, "Plan not found"));
     }
+    let conn_arc = state.db.raw().await;
     let _ = write_audit_log(
-        state.db.as_ref(),
+        conn_arc.as_ref(),
         Some(&claims.sub),
         Some(actor_role_label(&claims)),
         "training_plan",

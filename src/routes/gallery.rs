@@ -140,8 +140,9 @@ pub async fn create_gallery_photo(
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let conn_arc = state.db.raw().await;
     let _ = write_audit_log(
-        state.db.as_ref(),
+        conn_arc.as_ref(),
         Some(&claims.sub),
         Some("admin"),
         "gallery",
@@ -220,8 +221,9 @@ pub async fn update_gallery_photo(
         )
         .await;
     }
+    let conn_arc = state.db.raw().await;
     let _ = write_audit_log(
-        state.db.as_ref(),
+        conn_arc.as_ref(),
         None,
         Some("admin"),
         "gallery",
@@ -280,8 +282,9 @@ pub async fn delete_gallery_photo(
         infer_resource_type(&existing.media_type),
     )
     .await;
+    let conn_arc = state.db.raw().await;
     let _ = write_audit_log(
-        state.db.as_ref(),
+        conn_arc.as_ref(),
         None,
         Some("admin"),
         "gallery",

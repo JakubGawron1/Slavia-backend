@@ -665,8 +665,9 @@ pub async fn set_standing_order(
         ));
     }
 
+    let conn_arc = state.db.raw().await;
     let _ = write_audit_log(
-        state.db.as_ref(),
+        conn_arc.as_ref(),
         Some(&auth.0.sub),
         Some("trainer"),
         "payments",

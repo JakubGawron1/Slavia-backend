@@ -9,14 +9,13 @@
 //! Zadanie wykonuje się okresowo w tle (`spawn_chat_pruner_task`) oraz raz przy
 //! starcie aplikacji (przyszły scheduler nie potrzebuje persistent state).
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use libsql::Connection;
 use tokio::task::JoinHandle;
 
 use crate::audit::write_audit_log;
+use crate::state::Db;
 
 /// Po ilu dniach bezczynności (od ostatniej wiadomości) wątek jest usuwany.
 /// Każda nowa wiadomość resetuje liczenie — to ona aktualizuje `MAX(created_at)`.
@@ -34,7 +33,7 @@ struct StaleThread {
 
 /// Pobiera wątki, które nie miały aktywności od `cutoff` (RFC3339 UTC).
 async fn select_stale_threads(
-    conn: &Connection,
+    conn: &Db,
     cutoff: &str,
 ) -> Result<Vec<StaleThread>, libsql::Error> {
     // COALESCE: wątki bez żadnych wiadomości fallbackują do `created_at`.
@@ -71,7 +70,7 @@ async fn select_stale_threads(
 /// Bezpieczne do wywołania ręcznie (np. z testów lub komendy diagnostycznej).
 /// FK z `ON DELETE CASCADE` zadba o wyczyszczenie `chat_messages` i `chat_reads`.
 pub async fn prune_inactive_chat_threads(
-    conn: &Connection,
+    conn: &Db,
     inactivity_days: i64,
 ) -> Result<usize, libsql::Error> {
     let cutoff_dt: DateTime<Utc> = Utc::now() - chrono::Duration::days(inactivity_days);
@@ -100,8 +99,9 @@ pub async fn prune_inactive_chat_threads(
             })
             .to_string();
             // Audit zapisujemy „best-effort"; brak audytu nie powinien blokować czyszczenia.
+            let audit_conn = conn.raw().await;
             let _ = write_audit_log(
-                conn,
+                audit_conn.as_ref(),
                 None,
                 Some("system"),
                 "chat",
@@ -122,13 +122,13 @@ pub async fn prune_inactive_chat_threads(
 /// Pierwszy przebieg następuje krótko po starcie (po 60 s — żeby nie obciążać uruchomienia),
 /// kolejne co `PRUNE_INTERVAL_HOURS` godzin. Niepowodzenia są logowane na stderr,
 /// ale pętla biegnie dalej (chwilowy błąd DB nie powinien zatrzymywać pruner-a).
-pub fn spawn_chat_pruner_task(conn: Arc<Connection>) -> JoinHandle<()> {
+pub fn spawn_chat_pruner_task(db: Db) -> JoinHandle<()> {
     tokio::spawn(async move {
         // Drobny delay startowy — aplikacja zdąży wstać, migracje już są skończone.
         tokio::time::sleep(Duration::from_secs(60)).await;
         let interval = Duration::from_secs(PRUNE_INTERVAL_HOURS * 3600);
         loop {
-            match prune_inactive_chat_threads(conn.as_ref(), CHAT_INACTIVITY_DAYS).await {
+            match prune_inactive_chat_threads(&db, CHAT_INACTIVITY_DAYS).await {
                 Ok(0) => {
                     // cisza w logach gdy nic do roboty
                 }

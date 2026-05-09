@@ -1,7 +1,6 @@
 //! Współdzielona logika HTTP — używana przez `main` (Axum/Tokio) i testy.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
 pub mod chat_cleanup;
@@ -26,6 +25,7 @@ mod external_calendar_sync;
 mod import_http_integration_test;
 
 use state::AppState;
+use state::Db;
 
 /// Skąd brać bazę: lokalny plik SQLite (dev) albo Turso przez HTTP (`new_remote`).
 #[derive(Debug, Clone)]
@@ -37,24 +37,6 @@ pub enum DatabaseBackend {
     },
 }
 
-async fn connect_database(
-    backend: DatabaseBackend,
-) -> Result<libsql::Connection, Box<dyn std::error::Error + Send + Sync>> {
-    match backend {
-        DatabaseBackend::Local(path) => {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)?;
-            }
-            let db = libsql::Builder::new_local(path).build().await?;
-            Ok(db.connect()?)
-        }
-        DatabaseBackend::Remote { url, auth_token } => {
-            let db = libsql::Builder::new_remote(url, auth_token).build().await?;
-            Ok(db.connect()?)
-        }
-    }
-}
-
 /// Buduje router Axum (libsql: SQLite lokalnie lub Turso zdalnie + JWT).
 pub async fn create_app(
     database: DatabaseBackend,
@@ -63,18 +45,16 @@ pub async fn create_app(
     cloudinary_api_key: String,
     cloudinary_api_secret: String,
 ) -> Result<axum::Router, Box<dyn std::error::Error + Send + Sync>> {
-    let conn = connect_database(database).await?;
-
-    db::init_db(&conn).await?;
-
-    let db_arc = Arc::new(conn);
+    let db = Db::new(database).await?;
+    let init_conn = db.raw().await;
+    db::init_db(init_conn.as_ref()).await?;
 
     // Uruchom „best-effort" jednorazowe czyszczenie wątków na starcie (nie blokuje startu).
     {
-        let db_for_initial = db_arc.clone();
+        let db_for_initial = db.clone();
         tokio::spawn(async move {
             match chat_cleanup::prune_inactive_chat_threads(
-                db_for_initial.as_ref(),
+                &db_for_initial,
                 chat_cleanup::CHAT_INACTIVITY_DAYS,
             )
             .await
@@ -90,16 +70,16 @@ pub async fn create_app(
     }
 
     // Stałe zadanie w tle — co kilka godzin przegląda i usuwa nieaktywne wątki.
-    let _pruner_handle = chat_cleanup::spawn_chat_pruner_task(db_arc.clone());
+    let _pruner_handle = chat_cleanup::spawn_chat_pruner_task(db.clone());
 
     // Auto-składki dla zawodników z przelewem stałym — sprawdzaj raz dziennie i
     // dla bieżącego miesiąca twórz Approved-wpisy, jeśli ich brakuje. Catch-up
     // przy starcie (gdyby backend był wyłączony 1-go).
     {
-        let db_for_initial = db_arc.clone();
+        let db_for_initial = db.clone();
         tokio::spawn(async move {
             match payments_scheduler::run_standing_orders_for_current_month(
-                db_for_initial.as_ref(),
+                &db_for_initial,
             )
             .await
             {
@@ -111,10 +91,10 @@ pub async fn create_app(
             }
         });
     }
-    let _standing_order_handle = payments_scheduler::spawn_standing_order_task(db_arc.clone());
+    let _standing_order_handle = payments_scheduler::spawn_standing_order_task(db.clone());
 
     let state = AppState {
-        db: db_arc,
+        db,
         jwt_secret,
         cloudinary_cloud_name,
         cloudinary_api_key,

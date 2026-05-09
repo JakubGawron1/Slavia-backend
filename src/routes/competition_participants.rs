@@ -238,7 +238,8 @@ pub async fn set_participants(
         return Err(api_error(StatusCode::NOT_FOUND, "Competition not found"));
     }
 
-    let comp_title = crate::notifications::competition_title(state.db.as_ref(), &competition_id)
+    let conn_arc = state.db.raw().await;
+    let comp_title = crate::notifications::competition_title(conn_arc.as_ref(), &competition_id)
         .await
         .ok()
         .flatten()

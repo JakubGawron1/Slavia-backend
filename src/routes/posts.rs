@@ -127,7 +127,8 @@ pub async fn create_post(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if published {
-        let author = notifications::username_by_id(state.db.as_ref(), &claims.sub)
+        let conn_arc = state.db.raw().await;
+        let author = notifications::username_by_id(conn_arc.as_ref(), &claims.sub)
             .await
             .ok()
             .flatten()
@@ -197,7 +198,8 @@ pub async fn update_post(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let title_old = existing.title.clone();
-    let editor = notifications::username_by_id(state.db.as_ref(), &claims.sub)
+    let conn_arc = state.db.raw().await;
+    let editor = notifications::username_by_id(conn_arc.as_ref(), &claims.sub)
         .await
         .ok()
         .flatten()

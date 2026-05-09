@@ -153,8 +153,9 @@ pub async fn upsert_feature_flag(
         "user_id": target_user
     })
     .to_string();
+    let conn_arc = state.db.raw().await;
     let _ = write_audit_log(
-        state.db.as_ref(),
+        conn_arc.as_ref(),
         Some(&claims.sub),
         Some("staff"),
         "feature_flags",
