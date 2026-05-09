@@ -35,11 +35,25 @@ pub struct MonthQuery {
     pub month: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct YearQuery {
+    pub year: Option<i32>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AthletePaymentStatusRow {
     pub athlete_id: String,
     pub full_name: String,
     pub is_paid: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PaymentMonthStatusRow {
+    pub month: String,    // YYYY-MM
+    pub due_date: String, // YYYY-MM-10
+    pub is_paid: bool,
+    pub has_pending: bool,
+    pub is_overdue: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -335,6 +349,103 @@ pub async fn my_payment_status(
         is_paid,
         is_overdue,
     }))
+}
+
+async fn athlete_exists(state: &AppState, athlete_id: &str) -> Result<(), ApiError> {
+    let mut rows = state
+        .db
+        .query("SELECT id FROM athletes WHERE id = ?1", [athlete_id.to_string()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .is_none()
+    {
+        return Err(api_error(StatusCode::NOT_FOUND, "Athlete not found"));
+    }
+    Ok(())
+}
+
+async fn year_status_for_athlete(
+    state: &AppState,
+    athlete_id: &str,
+    year: i32,
+) -> Result<Vec<PaymentMonthStatusRow>, ApiError> {
+    let year_prefix = format!("{:04}-", year);
+
+    // Jedno zapytanie do zbudowania mapy miesiąc -> (approved/pending).
+    let mut rows = state
+        .db
+        .query(
+            "SELECT month, \
+                (SELECT COUNT(*) FROM membership_payments p2 WHERE p2.athlete_id = ?1 AND p2.month = p.month AND p2.status = 'Approved') AS approved_count, \
+                (SELECT COUNT(*) FROM membership_payments p3 WHERE p3.athlete_id = ?1 AND p3.month = p.month AND p3.status = 'Pending')  AS pending_count \
+             FROM membership_payments p \
+             WHERE p.athlete_id = ?1 AND p.month LIKE ?2 \
+             GROUP BY month",
+            (athlete_id.to_string(), format!("{}%", year_prefix)),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    use std::collections::HashMap;
+    let mut map: HashMap<String, (i64, i64)> = HashMap::new();
+    while let Some(r) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let m: String = r.get(0).unwrap_or_default();
+        let approved_count: i64 = r.get(1).unwrap_or(0);
+        let pending_count: i64 = r.get(2).unwrap_or(0);
+        if !m.trim().is_empty() {
+            map.insert(m, (approved_count, pending_count));
+        }
+    }
+
+    let today = Utc::now().date_naive();
+    let mut out: Vec<PaymentMonthStatusRow> = Vec::with_capacity(12);
+    for mm in 1..=12 {
+        let month = format!("{:04}-{:02}", year, mm);
+        let due = due_date_yyyy_mm_10(&month)?;
+        let (approved_count, pending_count) = map.get(&month).copied().unwrap_or((0, 0));
+        let is_paid = approved_count > 0;
+        let has_pending = pending_count > 0;
+        let is_overdue = today >= due && today.day() >= 10 && !is_paid;
+        out.push(PaymentMonthStatusRow {
+            month,
+            due_date: due.format("%Y-%m-%d").to_string(),
+            is_paid,
+            has_pending,
+            is_overdue,
+        });
+    }
+    Ok(out)
+}
+
+pub async fn my_payments_year(
+    State(state): State<AppState>,
+    claims: Claims,
+    Query(q): Query<YearQuery>,
+) -> Result<Json<Vec<PaymentMonthStatusRow>>, ApiError> {
+    let athlete_id = my_athlete_id(&state, &claims).await?;
+    let year = q.year.unwrap_or_else(|| Utc::now().year());
+    let rows = year_status_for_athlete(&state, &athlete_id, year).await?;
+    Ok(Json(rows))
+}
+
+pub async fn athlete_payments_year(
+    State(state): State<AppState>,
+    _auth: RequireTrainerOrHigher,
+    Path(athlete_id): Path<String>,
+    Query(q): Query<YearQuery>,
+) -> Result<Json<Vec<PaymentMonthStatusRow>>, ApiError> {
+    athlete_exists(&state, &athlete_id).await?;
+    let year = q.year.unwrap_or_else(|| Utc::now().year());
+    let rows = year_status_for_athlete(&state, &athlete_id, year).await?;
+    Ok(Json(rows))
 }
 
 pub async fn list_athletes_payment_status(

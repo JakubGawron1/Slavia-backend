@@ -213,6 +213,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             total REAL NOT NULL,
             status TEXT NOT NULL,
             date TEXT NOT NULL,
+            bodyweight_kg REAL,
             squat_kg REAL,
             bench_kg REAL,
             deadlift_kg REAL,
@@ -528,6 +529,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
     let _ = conn.execute("ALTER TABLE results ADD COLUMN squat_kg REAL", ()).await;
     let _ = conn.execute("ALTER TABLE results ADD COLUMN bench_kg REAL", ()).await;
     let _ = conn.execute("ALTER TABLE results ADD COLUMN deadlift_kg REAL", ()).await;
+    let _ = conn.execute("ALTER TABLE results ADD COLUMN bodyweight_kg REAL", ()).await;
     // Rozróżnienie wpisów: 'competition' (publiczne, ranking, public-board) vs 'training' (tylko po zalogowaniu).
     let _ = conn
         .execute(

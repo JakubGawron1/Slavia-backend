@@ -173,6 +173,9 @@ pub struct CompetitionResult {
     /// Miejsce zawodów — wypełniane tylko dla `kind = Competition`.
     #[serde(default)]
     pub location: Option<String>,
+    /// Waga ciała na starcie (kg) — opcjonalna; używana do obliczeń (np. Sinclair) per start.
+    #[serde(default)]
+    pub bodyweight_kg: Option<f64>,
     #[serde(default)]
     pub squat_kg: Option<f64>,
     #[serde(default)]

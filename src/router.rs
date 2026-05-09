@@ -187,6 +187,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
     let payments_routes = Router::new()
         .route("/my", post(routes::payments::create_my_payment))
         .route("/my/status", get(routes::payments::my_payment_status))
+        .route("/my/year", get(routes::payments::my_payments_year))
         .route("/status", get(routes::payments::list_athletes_payment_status))
         .route("/overview", get(routes::payments::payments_overview_for_month))
         .route("/pending", get(routes::payments::list_pending_payments))
@@ -195,6 +196,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route(
             "/athlete/{athlete_id}/approved",
             post(routes::payments::create_approved_payment_for_athlete),
+        )
+        .route(
+            "/athlete/{athlete_id}/year",
+            get(routes::payments::athlete_payments_year),
         )
         .route(
             "/athlete/{athlete_id}/standing-order",
