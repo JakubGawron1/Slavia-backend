@@ -121,7 +121,7 @@ async fn ensure_can_view_athlete_submissions(
 }
 
 /// Wiersz oczekuje kolumn:
-/// `id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location`
+/// `id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location, bodyweight_kg`
 fn competition_result_from_row(row: &Row) -> Result<CompetitionResult, String> {
     let status_str = sql_row::required_string(row, 5)?;
     let status = status_str
@@ -143,6 +143,7 @@ fn competition_result_from_row(row: &Row) -> Result<CompetitionResult, String> {
         date: sql_row::required_string(row, 6)?,
         kind,
         location: sql_row::opt_string(row, 11).map_err(|e| e.to_string())?,
+        bodyweight_kg: sql_row::opt_f64(row, 12).map_err(|e| e.to_string())?,
         squat_kg: sql_row::opt_f64(row, 7).map_err(|e| e.to_string())?,
         bench_kg: sql_row::opt_f64(row, 8).map_err(|e| e.to_string())?,
         deadlift_kg: sql_row::opt_f64(row, 9).map_err(|e| e.to_string())?,
@@ -172,6 +173,9 @@ pub struct CreateResultRequest {
     /// Miejsce zawodów — wypełniane tylko dla `kind = 'competition'`.
     #[serde(default)]
     pub location: Option<String>,
+    /// Waga ciała na starcie (kg) — opcjonalna; do Sinclaira i statystyk.
+    #[serde(default)]
+    pub bodyweight_kg: Option<f64>,
 }
 
 async fn athlete_oly_baseline(
@@ -291,7 +295,7 @@ pub async fn list_approved_results(
 ) -> Result<Json<Vec<CompetitionResult>>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location FROM results WHERE status = 'Approved' AND kind = 'competition'", ())
+        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location, bodyweight_kg FROM results WHERE status = 'Approved' AND kind = 'competition'", ())
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -311,7 +315,7 @@ pub async fn list_pending_results(
 ) -> Result<Json<Vec<CompetitionResult>>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location FROM results WHERE status = 'Pending'", ())
+        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location, bodyweight_kg FROM results WHERE status = 'Pending'", ())
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -350,7 +354,7 @@ pub async fn list_athlete_results(
     };
 
     let sql = format!(
-        "SELECT r.id, r.athlete_id, r.snatch, r.clean_and_jerk, r.total, r.status, r.date, r.squat_kg, r.bench_kg, r.deadlift_kg, r.kind, r.location \
+        "SELECT r.id, r.athlete_id, r.snatch, r.clean_and_jerk, r.total, r.status, r.date, r.squat_kg, r.bench_kg, r.deadlift_kg, r.kind, r.location, r.bodyweight_kg \
          FROM results r \
          INNER JOIN athletes a ON a.id = r.athlete_id AND (a.is_active IS NULL OR a.is_active = 1) \
          WHERE r.athlete_id = ?1 AND r.status = 'Approved'{kind_clause} ORDER BY r.date ASC"
@@ -394,7 +398,7 @@ pub async fn list_athlete_result_submissions(
     };
 
     let sql = format!(
-        "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location FROM results \
+        "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location, bodyweight_kg FROM results \
          WHERE athlete_id = ?1{kind_clause} ORDER BY date DESC, id DESC"
     );
 
@@ -464,10 +468,25 @@ pub async fn create_result(
         .total
         .unwrap_or_else(|| snatch + clean_and_jerk);
 
+     if snatch < 0.0 || clean_and_jerk < 0.0 || total < 0.0 {
+         return Err(api_error(
+             StatusCode::BAD_REQUEST,
+             "Ciężary nie mogą być ujemne",
+         ));
+     }
+     let oly_positive = snatch > 0.0 || clean_and_jerk > 0.0;
+     if !oly_positive && !raw_sent_sbd {
+         return Err(api_error(
+             StatusCode::BAD_REQUEST,
+             "Podaj dodatnie rwanie i/lub podrzut (0 dozwolone przy kontuzji/jednoboju) albo przynajmniej jedno ćwiczenie siłowe",
+         ));
+     }
+
     let id = Uuid::new_v4().to_string();
     let squat_kg = payload.squat_kg.filter(|x| *x > 0.0);
     let bench_kg = payload.bench_kg.filter(|x| *x > 0.0);
     let deadlift_kg = payload.deadlift_kg.filter(|x| *x > 0.0);
+    let bodyweight_kg = payload.bodyweight_kg.filter(|x| *x > 0.0);
 
     let strength_only_notify = !raw_sent_oly && raw_sent_sbd;
 
@@ -492,7 +511,7 @@ pub async fn create_result(
     };
 
     state.db.execute(
-        "INSERT INTO results (id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        "INSERT INTO results (id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location, bodyweight_kg) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         (
             id.clone(),
             payload.athlete_id.clone(),
@@ -506,6 +525,7 @@ pub async fn create_result(
             deadlift_kg,
             kind.to_string(),
             location.clone(),
+            bodyweight_kg,
         ),
     ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -538,6 +558,7 @@ pub async fn create_result(
         date: payload.date,
         kind,
         location,
+        bodyweight_kg,
         squat_kg,
         bench_kg,
         deadlift_kg,
@@ -616,6 +637,9 @@ pub struct UpdateResultRequest {
     /// Ignorowane dla wpisów typu `training`.
     #[serde(default)]
     pub location: Option<Option<String>>,
+    /// Brak pola — bez zmiany; `null` — wyczyść w bazie; liczba — ustaw.
+    #[serde(default)]
+    pub bodyweight_kg: Option<Option<f64>>,
 }
 
 pub async fn list_all_results_staff(
@@ -633,7 +657,7 @@ pub async fn list_all_results_staff(
         KindFilter::All => "",
     };
     let sql = format!(
-        "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location FROM results{kind_clause} ORDER BY date DESC"
+        "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location, bodyweight_kg FROM results{kind_clause} ORDER BY date DESC"
     );
     let mut rows = state
         .db
@@ -667,6 +691,7 @@ pub async fn update_result(
         && payload.deadlift_kg.is_none()
         && payload.kind.is_none()
         && payload.location.is_none()
+        && payload.bodyweight_kg.is_none()
     {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
@@ -677,7 +702,7 @@ pub async fn update_result(
     let mut rows = state
         .db
         .query(
-            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location FROM results WHERE id = ?1",
+            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location, bodyweight_kg FROM results WHERE id = ?1",
             [id.clone()],
         )
         .await
@@ -693,12 +718,21 @@ pub async fn update_result(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     if let Some(v) = payload.snatch {
+        if v < 0.0 {
+            return Err(api_error(StatusCode::BAD_REQUEST, "Rwanie nie może być ujemne"));
+        }
         cr.snatch = v;
     }
     if let Some(v) = payload.clean_and_jerk {
+        if v < 0.0 {
+            return Err(api_error(StatusCode::BAD_REQUEST, "Podrzut nie może być ujemny"));
+        }
         cr.clean_and_jerk = v;
     }
     if let Some(v) = payload.total {
+        if v < 0.0 {
+            return Err(api_error(StatusCode::BAD_REQUEST, "Suma nie może być ujemna"));
+        }
         cr.total = v;
     } else if payload.snatch.is_some() || payload.clean_and_jerk.is_some() {
         cr.total = cr.snatch + cr.clean_and_jerk;
@@ -732,6 +766,9 @@ pub async fn update_result(
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
     }
+    if let Some(inner) = payload.bodyweight_kg {
+        cr.bodyweight_kg = inner.filter(|x| *x > 0.0);
+    }
     // Trening jest zawsze oznaczany jako sala klubowa „Slavia" — niezależnie od inputu.
     if matches!(cr.kind, ResultKind::Training) {
         cr.location = Some(TRAINING_DEFAULT_LOCATION.to_string());
@@ -740,7 +777,7 @@ pub async fn update_result(
     state
         .db
         .execute(
-            "UPDATE results SET snatch = ?1, clean_and_jerk = ?2, total = ?3, status = ?4, date = ?5, squat_kg = ?6, bench_kg = ?7, deadlift_kg = ?8, kind = ?9, location = ?10 WHERE id = ?11",
+            "UPDATE results SET snatch = ?1, clean_and_jerk = ?2, total = ?3, status = ?4, date = ?5, squat_kg = ?6, bench_kg = ?7, deadlift_kg = ?8, kind = ?9, location = ?10, bodyweight_kg = ?11 WHERE id = ?12",
             (
                 cr.snatch,
                 cr.clean_and_jerk,
@@ -752,6 +789,7 @@ pub async fn update_result(
                 cr.deadlift_kg,
                 cr.kind.to_string(),
                 cr.location.clone(),
+                cr.bodyweight_kg,
                 id,
             ),
         )
