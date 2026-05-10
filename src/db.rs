@@ -85,7 +85,8 @@ pub async fn sync_athlete_bests_from_approved_conn(
     let mut rows = conn
         .query(
             "SELECT snatch, clean_and_jerk, total FROM results \
-             WHERE athlete_id = ?1 AND status = 'Approved' AND kind = 'competition' \
+             WHERE athlete_id = ?1 AND status = 'Approved' \
+               AND (kind IS NULL OR kind = 'competition') \
              ORDER BY total DESC, date DESC LIMIT 1",
             [athlete_id.to_string()],
         )
@@ -121,17 +122,20 @@ pub async fn sync_all_athletes_bests_from_results(conn: &Connection) -> Result<u
         "UPDATE athletes SET \
            best_snatch_kg = ( \
              SELECT r.snatch FROM results r \
-             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' AND r.kind = 'competition' \
+             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' \
+               AND (r.kind IS NULL OR r.kind = 'competition') \
              ORDER BY r.total DESC, r.date DESC LIMIT 1 \
            ), \
            best_clean_jerk_kg = ( \
              SELECT r.clean_and_jerk FROM results r \
-             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' AND r.kind = 'competition' \
+             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' \
+               AND (r.kind IS NULL OR r.kind = 'competition') \
              ORDER BY r.total DESC, r.date DESC LIMIT 1 \
            ), \
            total_kg = ( \
              SELECT r.total FROM results r \
-             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' AND r.kind = 'competition' \
+             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' \
+               AND (r.kind IS NULL OR r.kind = 'competition') \
              ORDER BY r.total DESC, r.date DESC LIMIT 1 \
            )",
         (),
@@ -488,6 +492,15 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         .await;
     let _ = conn
         .execute("ALTER TABLE users ADD COLUMN banned_reason TEXT", ())
+        .await;
+
+    // TOTP (2FA opcjonalne) — sekret Base32 w plaintext (DB musi być chroniona); włączenie po weryfikacji kodu.
+    let _ = conn.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT", ()).await;
+    let _ = conn
+        .execute(
+            "ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0",
+            (),
+        )
         .await;
 
     let _ = conn

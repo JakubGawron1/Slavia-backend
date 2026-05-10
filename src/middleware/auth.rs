@@ -69,7 +69,7 @@ pub(crate) fn claims_has_staff_access(claims: &Claims) -> bool {
     claims
         .roles
         .iter()
-        .any(|r| matches!(r, Role::Trainer | Role::SuperAdmin))
+        .any(|r| matches!(r, Role::Trainer | Role::Admin | Role::SuperAdmin))
 }
 
 /// Zawodnik bez uprawnień kadrowych — np. własne zgłoszenia wyniku jako Pending.

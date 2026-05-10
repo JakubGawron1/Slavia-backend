@@ -3,7 +3,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use libsql::Row;
@@ -12,7 +12,9 @@ use crate::api_error::{api_error, ApiError};
 use crate::db;
 use crate::state::AppState;
 use crate::models::{CompetitionResult, PublicResultBoardRow, ResultKind, ResultStatus, Role};
-use crate::middleware::auth::{claims_has_staff_access, claims_is_pure_athlete, Claims, RequireTrainerOrHigher};
+use crate::middleware::auth::{
+    claims_has_staff_access, claims_is_pure_athlete, Claims, RequireTrainerOrHigher,
+};
 use crate::sql_row;
 
 /// Domyślne „miejsce" dla wyników treningowych — wszystkie treningi odbywają się na sali klubowej.
@@ -331,8 +333,8 @@ pub async fn list_pending_results(
 
 /// Publiczne karty / ranking / wykresy.
 /// Domyślnie tylko `kind = 'competition'` (publiczne, bez auth).
-/// Dla `?kind=training` lub `?kind=all` wymagana sesja zalogowanego użytkownika
-/// (dane treningowe są niepubliczne).
+/// Dla `?kind=training` lub `?kind=all` wymaga sesji oraz uprawnień jak przy podglądzie zgłoszeń zawodnika:
+/// kadra lub zalogowany zawodnik powiązany z tym rekordem `athlete_id` (niepubliczny trening nie „wycieknie” przy skanowaniu cudzych profili).
 pub async fn list_athlete_results(
     State(state): State<AppState>,
     Path(athlete_id): Path<String>,
@@ -340,11 +342,14 @@ pub async fn list_athlete_results(
     claims: Option<Claims>,
 ) -> Result<Json<Vec<CompetitionResult>>, ApiError> {
     let kind_filter = parse_kind_filter(q.kind.as_deref())?;
-    if matches!(kind_filter, KindFilter::Training | KindFilter::All) && claims.is_none() {
-        return Err(api_error(
-            StatusCode::UNAUTHORIZED,
-            "Dane treningowe wymagają zalogowanego konta",
-        ));
+    if matches!(kind_filter, KindFilter::Training | KindFilter::All) {
+        let Some(c) = claims.as_ref() else {
+            return Err(api_error(
+                StatusCode::UNAUTHORIZED,
+                "Dane treningowe wymagają zalogowanego konta",
+            ));
+        };
+        ensure_can_view_athlete_submissions(&state, c, &athlete_id).await?;
     }
 
     let kind_clause = match kind_filter {
@@ -423,6 +428,13 @@ pub async fn create_result(
     claims: Claims, // Must be authenticated
     Json(payload): Json<CreateResultRequest>,
 ) -> Result<Json<CompetitionResult>, ApiError> {
+    if let Err(()) = crate::post_throttle::record_user_post_attempt(&claims.sub, "results_create") {
+        return Err(api_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Zbyt wiele zgłoszeń wyników w krótkim czasie. Odczekaj chwilę i spróbuj ponownie.",
+        ));
+    }
+
     let status = if claims_has_staff_access(&claims) {
         ResultStatus::Approved
     } else if claims.roles.contains(&Role::Athlete) {
@@ -822,4 +834,105 @@ pub async fn delete_result(
     sync_athlete_bests_from_approved(&state, &athlete_id).await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct BatchApproveRequest {
+    pub ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct BatchApproveResponse {
+    pub approved: u64,
+    pub skipped: u64,
+}
+
+/// Zatwierdza wiele wyników oczekujących (`Pending`) jednym żądaniem — synchronizacja PB per zawodnik na końcu.
+pub async fn batch_approve_results(
+    State(state): State<AppState>,
+    RequireTrainerOrHigher(claims): RequireTrainerOrHigher,
+    Json(body): Json<BatchApproveRequest>,
+) -> Result<Json<BatchApproveResponse>, ApiError> {
+    if let Err(()) = crate::post_throttle::record_user_post_attempt(&claims.sub, "results_batch_approve") {
+        return Err(api_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Zbyt wiele masowych akceptacji w krótkim czasie. Odczekaj chwilę i spróbuj ponownie.",
+        ));
+    }
+
+    let ids: Vec<String> = body
+        .ids
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .take(100)
+        .collect();
+    if ids.is_empty() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Podaj co najmniej jeden identyfikator wyniku (ids).",
+        ));
+    }
+
+    let conn = state.db.raw().await;
+    let mut approved: u64 = 0;
+    let mut skipped: u64 = 0;
+    let mut athlete_ids = std::collections::HashSet::<String>::new();
+
+    for id in &ids {
+        let n = conn
+            .execute(
+                "UPDATE results SET status = 'Approved' WHERE id = ?1 AND status = 'Pending'",
+                [id.clone()],
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if n == 0 {
+            skipped += 1;
+            continue;
+        }
+        approved += n;
+
+        let mut rows = conn
+            .query(
+                "SELECT athlete_id, total, date FROM results WHERE id = ?1",
+                [id.clone()],
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or_else(|| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Brak wiersza po zatwierdzeniu"))?;
+        let athlete_id: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let total: f64 = row.get(1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let date: String = row.get(2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        athlete_ids.insert(athlete_id.clone());
+        crate::notifications::notify_result_approved(&state, &athlete_id, total, &date);
+    }
+
+    for aid in &athlete_ids {
+        sync_athlete_bests_from_approved(&state, aid).await?;
+    }
+
+    let details = serde_json::json!({
+        "count": approved,
+        "skipped": skipped,
+        "sample_ids": ids.iter().take(12).collect::<Vec<_>>()
+    })
+    .to_string();
+    let _ = crate::audit::write_audit_log(
+        conn.as_ref(),
+        Some(claims.sub.as_str()),
+        Some("Trainer"),
+        "results",
+        "batch_approve",
+        Some("results"),
+        None,
+        Some(details.as_str()),
+    )
+    .await;
+
+    Ok(Json(BatchApproveResponse { approved, skipped }))
 }

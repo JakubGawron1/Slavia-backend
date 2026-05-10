@@ -89,6 +89,38 @@ fn location_from_title(title: &str) -> String {
     "Polska".to_string()
 }
 
+/// Heurystyka po tytule zawodów (PL) — gdy zewnętrzne API nie podaje koloru / typu.
+fn infer_category_from_title(title: &str) -> Option<&'static str> {
+    let t = title.to_lowercase();
+    let is_champ_word = t.contains("mistrzostw")
+        || t.contains("mistrzów")
+        || t.contains("mistrz.")
+        || t.contains("(mp)")
+        || t.contains(" mp ")
+        || t.ends_with(" mp")
+        || t.contains(" mp,")
+        || t.contains("mpp")
+        || (t.contains("mistrzyni") && (t.contains("polsk") || t.contains("ślą") || t.contains("slask")));
+    if is_champ_word {
+        return Some("championship");
+    }
+    if t.contains("puchar") {
+        return Some("championship");
+    }
+    let league_hint = t.contains(" ligi ")
+        || t.contains("ligi ")
+        || t.contains("ligi,")
+        || t.contains("ligi.")
+        || t.contains("etap ligi")
+        || t.contains("baraż")
+        || t.contains("baraz")
+        || t.contains("eliminacj") && t.contains("lig");
+    if league_hint {
+        return Some("league");
+    }
+    None
+}
+
 fn parse_pzpc(html: &str) -> Result<Vec<UpsertRow>, ApiError> {
     let item_re = Regex::new(
         r#"href='/strefa-sportowa/kalendarz-imprez/(centralne|okregowe)/(\d+)'[\s\S]*?<div class='kalendarz-item--date'>[\s\S]*?<span(?: class='small')?>([^<]*)</span>\s*([^<]*?)\s*</div>[\s\S]*?<h3>([^<]+)</h3>"#,
@@ -122,11 +154,12 @@ fn parse_pzpc(html: &str) -> Result<Vec<UpsertRow>, ApiError> {
             let Some(day) = first_day_from_span(day_inner) else {
                 continue;
             };
-            let category = if scope == "centralne" {
+            let scope_default = if scope == "centralne" {
                 "championship"
             } else {
                 "league"
             };
+            let category = infer_category_from_title(h3).unwrap_or(scope_default);
             let url = format!(
                 "https://pzpc.pl/strefa-sportowa/kalendarz-imprez/{}/{}",
                 scope, id_num
@@ -152,14 +185,24 @@ fn parse_pzpc(html: &str) -> Result<Vec<UpsertRow>, ApiError> {
     Ok(out)
 }
 
-fn pc_category(color: &str) -> &'static str {
-    match color {
-        "red" => "championship",
-        "blue" => "championship",
-        "green" => "league",
-        "yellow" => "club_event",
-        _ => "club_event",
+fn pc_category(color: &str, title: &str) -> &'static str {
+    let c = color.trim().to_lowercase();
+    let from_palette = match c.as_str() {
+        "red" => Some("championship"),
+        "blue" => Some("championship"),
+        "green" => Some("league"),
+        "yellow" => Some("club_event"),
+        "orange" => Some("league"),
+        "purple" | "violet" => Some("championship"),
+        "cyan" | "teal" => Some("league"),
+        "pink" | "magenta" => Some("championship"),
+        "" => None,
+        _ => None,
+    };
+    if let Some(cat) = from_palette {
+        return cat;
     }
+    infer_category_from_title(title).unwrap_or("club_event")
 }
 
 fn parse_pc_json(body: &str) -> Result<Vec<UpsertRow>, ApiError> {
@@ -189,7 +232,7 @@ fn parse_pc_json(body: &str) -> Result<Vec<UpsertRow>, ApiError> {
             continue;
         }
         let color = v.get("color").and_then(|x| x.as_str()).unwrap_or("");
-        let cat = pc_category(color);
+        let cat = pc_category(color, &title);
         let external_ref = format!("pc:{}", id);
         let url = Some("https://podnoszenieciezarow.pl/kalendarz".to_string());
         let description = Some(format!(
