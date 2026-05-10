@@ -214,7 +214,17 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
 
     let import_routes = Router::new()
         .route("/data", post(routes::import::import_data_handler));
-    let exercises_routes = Router::new().route("/board", get(routes::exercises::list_exercises_board));
+    let exercises_routes = Router::new()
+        .route("/board", get(routes::exercises::list_exercises_board))
+        .route("/", get(routes::exercises::list_exercises).post(routes::exercises::create_exercise))
+        .route("/{id}", delete(routes::exercises::delete_exercise));
+    let exercise_submissions_routes = Router::new()
+        .route("/", post(routes::exercise_submissions::create_exercise_submission))
+        .route("/my", get(routes::exercise_submissions::list_my_exercise_submissions))
+        .route("/pending", get(routes::exercise_submissions::list_pending_exercise_submissions))
+        .route("/{id}/approve", patch(routes::exercise_submissions::approve_exercise_submission))
+        .route("/{id}/reject", patch(routes::exercise_submissions::reject_exercise_submission))
+        .route("/board", get(routes::exercise_submissions::exercise_board_for_exercise));
     let attendance_routes = Router::new()
         .route("/", get(routes::attendance::list_attendance).post(routes::attendance::upsert_attendance))
         .route("/summary/{athlete_id}", get(routes::attendance::attendance_summary_for_athlete))
@@ -243,6 +253,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             patch(routes::training_plans::update_training_plan)
                 .delete(routes::training_plans::delete_training_plan),
         )
+        .route("/{id}/items", get(routes::training_plans::list_plan_items).put(routes::training_plans::update_plan_items))
         .route("/{id}/my-progress", patch(routes::training_plans::update_my_plan_progress));
     let recovery_routes = Router::new()
         .route("/", get(routes::recovery::list_recovery_logs).post(routes::recovery::upsert_my_recovery_log))
@@ -275,6 +286,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .nest("/api/payments", payments_routes)
         .nest("/api/import", import_routes)
         .nest("/api/exercises", exercises_routes)
+        .nest("/api/exercise-submissions", exercise_submissions_routes)
         .nest("/api/attendance", attendance_routes)
         .nest("/api/chat", chat_routes)
         .nest("/api/comments", comments_routes)
