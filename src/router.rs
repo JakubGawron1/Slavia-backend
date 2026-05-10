@@ -1,11 +1,13 @@
 //! Składanie drzewa tras Axum — rozdzielone od bootstrapu bazy (`create_app` w `lib.rs`).
 
 use axum::{
+    http::{HeaderName, HeaderValue},
     response::Html,
     routing::{delete, get, patch, post},
     Router,
 };
 use tower_http::cors::CorsLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::{routes, state::AppState};
 
@@ -17,7 +19,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
     let auth_routes = Router::new()
         .route("/login", post(routes::auth::login_handler))
         .route("/me", get(routes::auth::me_handler))
-        .route("/profile", patch(routes::admins::update_profile));
+        .route("/profile", patch(routes::admins::update_profile))
+        .route("/totp/setup", post(routes::totp::totp_setup_handler))
+        .route("/totp/enable", post(routes::totp::totp_enable_handler))
+        .route("/totp/disable", post(routes::totp::totp_disable_handler));
 
     let upload_routes = Router::new()
         .route("/", post(routes::upload::upload_handler));
@@ -79,6 +84,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/{id}", delete(routes::submissions::delete_result));
 
     let results_routes = Router::new()
+        .route("/batch-approve", post(routes::results::batch_approve_results))
         .route("/public-board", get(routes::results::list_public_results_board))
         .route("/public-board-olympic", get(routes::results::list_public_olympic_board))
         .route("/all", get(routes::results::list_all_results_staff))
@@ -275,6 +281,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .nest("/api/training-plans", training_plans_routes)
         .nest("/api/recovery", recovery_routes)
         .nest("/api/system", system_routes)
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("x-api-version"),
+            HeaderValue::from_static("1"),
+        ))
         .layer(cors)
         .with_state(state)
 }

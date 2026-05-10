@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod totp;
 pub mod athletes;
 pub mod admins;
 pub mod submissions;

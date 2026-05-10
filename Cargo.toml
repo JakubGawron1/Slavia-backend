@@ -1,6 +1,6 @@
 [package]
 name = "Slavia-backend"
-version = "2.9.8-beta"
+version = "3.0.0-dev"
 edition = "2024"
 
 [lib]
@@ -18,13 +18,15 @@ serde_json = "1.0.149"
 dotenvy = "0.15.7"
 toml = "1.1.2"
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "net"] }
-tower-http = { version = "0.6.10", features = ["cors"] }
+tower-http = { version = "0.6.10", features = ["cors", "set-header"] }
 uuid = { version = "1.23.1", features = ["v4"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 sha1 = "0.11.0"
 hex = "0.4.3"
+totp-lite = "2.0.1"
 regex = "1.11"
 scraper = "0.26.0"
+urlencoding = "2.1"
 
 [dev-dependencies]
 http-body-util = "0.1"

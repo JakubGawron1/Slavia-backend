@@ -28,6 +28,9 @@ pub struct PaymentStatusResponse {
     pub due_date: String, // YYYY-MM-10
     pub is_paid: bool,
     pub is_overdue: bool,
+    /// Z profilu zawodnika — UI może pokazać „przelew stały” zamiast mylącego „nieopłacona”, zanim auto-składka się zaksięguje.
+    #[serde(default)]
+    pub has_standing_order: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -261,6 +264,13 @@ pub async fn create_my_payment(
     claims: Claims,
     Json(payload): Json<CreateMyPaymentRequest>,
 ) -> Result<StatusCode, ApiError> {
+    if let Err(()) = crate::post_throttle::record_user_post_attempt(&claims.sub, "payments_my_create") {
+        return Err(api_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Zbyt wiele zgłoszeń składki w krótkim czasie. Odczekaj chwilę i spróbuj ponownie.",
+        ));
+    }
+
     let athlete_id = my_athlete_id(&state, &claims).await?;
     let month = payload
         .month
@@ -345,6 +355,23 @@ pub async fn my_payment_status(
 
     let is_paid = is_month_paid_approved(&state, &athlete_id, &month).await?;
 
+    let mut standing_rows = state
+        .db
+        .query(
+            "SELECT COALESCE(has_standing_order, 0) FROM athletes WHERE id = ?1",
+            [athlete_id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let standing_row = standing_rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let has_standing_order: bool = standing_row
+        .and_then(|r| r.get::<i64>(0).ok())
+        .unwrap_or(0)
+        != 0;
+
     let today = Utc::now().date_naive();
     let is_overdue = today >= due && today.day() >= 10 && !is_paid;
 
@@ -353,6 +380,7 @@ pub async fn my_payment_status(
         due_date: due.format("%Y-%m-%d").to_string(),
         is_paid,
         is_overdue,
+        has_standing_order,
     }))
 }
 
