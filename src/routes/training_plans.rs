@@ -12,6 +12,40 @@ use crate::audit::write_audit_log;
 use crate::middleware::auth::{claims_has_staff_access, Claims};
 use crate::state::AppState;
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TrainingPlanItemDto {
+    pub id: String,
+    pub plan_id: String,
+    pub day_of_week: i32,
+    pub exercise_id: Option<String>,
+    pub custom_exercise_name: Option<String>,
+    pub sets: Option<i32>,
+    pub reps: Option<i32>,
+    pub intensity_percent: Option<f64>,
+    pub weight_kg: Option<f64>,
+    pub notes: Option<String>,
+    pub sort_order: i32,
+    pub exercise_name: Option<String>, // z JOINa
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PlanItemPayload {
+    pub day_of_week: i32,
+    pub exercise_id: Option<String>,
+    pub custom_exercise_name: Option<String>,
+    pub sets: Option<i32>,
+    pub reps: Option<i32>,
+    pub intensity_percent: Option<f64>,
+    pub weight_kg: Option<f64>,
+    pub notes: Option<String>,
+    pub sort_order: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdatePlanItemsRequest {
+    pub items: Vec<PlanItemPayload>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct TrainingPlanDto {
     pub id: String,
@@ -422,4 +456,148 @@ pub async fn delete_training_plan(
     )
     .await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn list_plan_items(
+    State(state): State<AppState>,
+    Path(plan_id): Path<String>,
+    claims: Claims,
+) -> Result<Json<Vec<TrainingPlanItemDto>>, ApiError> {
+    // Bez tego checka każdy zalogowany mógłby odczytać plan po samym ID.
+    // Zawodnik może czytać tylko własne plany; kadra (staff) może czytać wszystkie.
+    if !claims_has_staff_access(&claims) {
+        let my_athlete_id = athlete_id_for_user(&state, &claims.sub)
+            .await?
+            .ok_or_else(|| api_error(StatusCode::FORBIDDEN, "Brak profilu zawodnika"))?;
+
+        let mut rows = state
+            .db
+            .query(
+                "SELECT athlete_id FROM training_plans WHERE id = ?1",
+                [plan_id.clone()],
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Plan not found"))?;
+        let owner_athlete_id: String = row.get(0).unwrap_or_default();
+        if owner_athlete_id != my_athlete_id {
+            return Err(api_error(StatusCode::FORBIDDEN, "Brak dostępu do planu"));
+        }
+    }
+
+    let mut rows = state
+        .db
+        .query(
+            "SELECT i.id, i.plan_id, i.day_of_week, i.exercise_id, i.custom_exercise_name, i.sets, i.reps, i.intensity_percent, i.weight_kg, i.notes, i.sort_order, e.name \
+             FROM training_plan_items i \
+             LEFT JOIN exercises e ON i.exercise_id = e.id \
+             WHERE i.plan_id = ?1 ORDER BY i.day_of_week ASC, i.sort_order ASC",
+            [plan_id],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        out.push(TrainingPlanItemDto {
+            id: row.get(0).unwrap(),
+            plan_id: row.get(1).unwrap(),
+            day_of_week: row.get(2).unwrap(),
+            exercise_id: row.get(3).ok(),
+            custom_exercise_name: row.get(4).ok(),
+            sets: row.get(5).ok(),
+            reps: row.get(6).ok(),
+            intensity_percent: row.get(7).ok(),
+            weight_kg: row.get(8).ok(),
+            notes: row.get(9).ok(),
+            sort_order: row.get(10).unwrap(),
+            exercise_name: row.get(11).ok(),
+        });
+    }
+    Ok(Json(out))
+}
+
+pub async fn update_plan_items(
+    State(state): State<AppState>,
+    Path(plan_id): Path<String>,
+    claims: Claims,
+    Json(payload): Json<UpdatePlanItemsRequest>,
+) -> Result<StatusCode, ApiError> {
+    if !claims_has_staff_access(&claims) {
+        return Err(api_error(StatusCode::FORBIDDEN, "Brak uprawnień"));
+    }
+
+    // Upewnij się, że plan istnieje (czytelniejszy błąd niż ciche zapisanie pustej listy).
+    let mut plan_rows = state
+        .db
+        .query("SELECT athlete_id, title FROM training_plans WHERE id = ?1", [plan_id.clone()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let plan_row = plan_rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Plan not found"))?;
+    let athlete_id: String = plan_row.get(0).unwrap_or_default();
+    let plan_title: String = plan_row.get(1).unwrap_or_else(|_| "Plan treningowy".to_string());
+
+    state
+        .db
+        .execute("DELETE FROM training_plan_items WHERE plan_id = ?1", [plan_id.clone()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+
+    let items_count = payload.items.len();
+    for item in payload.items {
+        let id = Uuid::new_v4().to_string();
+        state.db.execute(
+            "INSERT INTO training_plan_items (id, plan_id, day_of_week, exercise_id, custom_exercise_name, sets, reps, intensity_percent, weight_kg, notes, sort_order, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            (
+                id,
+                plan_id.clone(),
+                item.day_of_week,
+                item.exercise_id,
+                item.custom_exercise_name,
+                item.sets,
+                item.reps,
+                item.intensity_percent,
+                item.weight_kg,
+                item.notes,
+                item.sort_order,
+                now.clone(),
+            )
+        ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+
+    let details = serde_json::json!({
+        "plan_id": plan_id,
+        "title": plan_title,
+        "items_count": items_count
+    })
+    .to_string();
+    let conn_arc = state.db.raw().await;
+    let _ = write_audit_log(
+        conn_arc.as_ref(),
+        Some(&claims.sub),
+        Some(actor_role_label(&claims)),
+        "training_plan_items",
+        "update",
+        Some("athlete"),
+        Some(&athlete_id),
+        Some(&details),
+    )
+    .await;
+
+    Ok(StatusCode::OK)
 }

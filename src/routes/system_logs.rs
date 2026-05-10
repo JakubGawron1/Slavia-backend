@@ -9,6 +9,7 @@ use crate::state::AppState;
 pub struct AuditLogRow {
     pub id: String,
     pub actor_user_id: Option<String>,
+    pub actor_username: Option<String>,
     pub actor_role: Option<String>,
     pub category: String,
     pub action: String,
@@ -68,9 +69,10 @@ pub async fn list_audit_logs(
     let mut rows = state
         .db
         .query(
-            "SELECT id, actor_user_id, actor_role, category, action, target_type, target_id, details, created_at
-             FROM system_audit_logs
-             ORDER BY created_at DESC
+            "SELECT l.id, l.actor_user_id, l.actor_role, l.category, l.action, l.target_type, l.target_id, l.details, l.created_at, u.username
+             FROM system_audit_logs l
+             LEFT JOIN users u ON l.actor_user_id = u.id
+             ORDER BY l.created_at DESC
              LIMIT 300",
             (),
         )
@@ -85,6 +87,7 @@ pub async fn list_audit_logs(
         out.push(AuditLogRow {
             id: row.get(0).unwrap_or_default(),
             actor_user_id: row.get(1).ok(),
+            actor_username: row.get(9).ok(),
             actor_role: row.get(2).ok(),
             category: row.get(3).unwrap_or_else(|_| "system".to_string()),
             action: row.get(4).unwrap_or_else(|_| "unknown".to_string()),
@@ -173,9 +176,10 @@ pub async fn system_metrics(
     let mut rows = state
         .db
         .query(
-            "SELECT id, actor_user_id, actor_role, category, action, target_type, target_id, details, created_at
-             FROM system_audit_logs
-             ORDER BY created_at DESC
+            "SELECT l.id, l.actor_user_id, l.actor_role, l.category, l.action, l.target_type, l.target_id, l.details, l.created_at, u.username
+             FROM system_audit_logs l
+             LEFT JOIN users u ON l.actor_user_id = u.id
+             ORDER BY l.created_at DESC
              LIMIT 20",
             (),
         )
@@ -190,6 +194,7 @@ pub async fn system_metrics(
         recent_events.push(AuditLogRow {
             id: row.get(0).unwrap_or_default(),
             actor_user_id: row.get(1).ok(),
+            actor_username: row.get(9).ok(),
             actor_role: row.get(2).ok(),
             category: row.get(3).unwrap_or_else(|_| "system".to_string()),
             action: row.get(4).unwrap_or_else(|_| "unknown".to_string()),

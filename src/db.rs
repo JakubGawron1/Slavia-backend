@@ -387,6 +387,63 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             updated_at TEXT NOT NULL
         )",
         "CREATE INDEX IF NOT EXISTS idx_training_plans_athlete_week ON training_plans(athlete_id, week_start DESC)",
+        "CREATE TABLE IF NOT EXISTS exercises (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            category TEXT,
+            description TEXT,
+            video_url TEXT,
+            created_at TEXT NOT NULL
+        )",
+        // Osobny system „Inne ćwiczenia” — zgłoszenia + historia (nie dotyka tabeli `results`)
+        "CREATE TABLE IF NOT EXISTS exercise_submissions (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            exercise_id TEXT NOT NULL REFERENCES exercises(id) ON DELETE RESTRICT,
+            value REAL NOT NULL,
+            unit TEXT NOT NULL DEFAULT 'kg',
+            performed_at TEXT NOT NULL,
+            notes TEXT,
+            status TEXT NOT NULL DEFAULT 'Pending',
+            reviewed_by_user_id TEXT REFERENCES users(id),
+            reviewed_at TEXT,
+            review_note TEXT,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_exercise_submissions_athlete_created ON exercise_submissions(athlete_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_exercise_submissions_status_created ON exercise_submissions(status, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_exercise_submissions_exercise_created ON exercise_submissions(exercise_id, created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS exercise_results_history (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            exercise_id TEXT NOT NULL REFERENCES exercises(id) ON DELETE RESTRICT,
+            value REAL NOT NULL,
+            unit TEXT NOT NULL DEFAULT 'kg',
+            performed_at TEXT NOT NULL,
+            submission_id TEXT REFERENCES exercise_submissions(id) ON DELETE SET NULL,
+            approved_by_user_id TEXT REFERENCES users(id),
+            approved_at TEXT NOT NULL,
+            notes TEXT,
+            review_note TEXT,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_exercise_history_exercise_value ON exercise_results_history(exercise_id, value DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_exercise_history_athlete_exercise ON exercise_results_history(athlete_id, exercise_id, value DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_exercise_history_created ON exercise_results_history(created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS training_plan_items (
+            id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL REFERENCES training_plans(id) ON DELETE CASCADE,
+            day_of_week INTEGER NOT NULL,
+            exercise_id TEXT REFERENCES exercises(id),
+            custom_exercise_name TEXT,
+            sets INTEGER,
+            reps INTEGER,
+            intensity_percent REAL,
+            weight_kg REAL,
+            notes TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )",
         "CREATE TABLE IF NOT EXISTS recovery_logs (
             id TEXT PRIMARY KEY,
             athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
@@ -820,6 +877,8 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
 
 pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let drop_tables = [
+        "DROP TABLE IF EXISTS exercise_results_history",
+        "DROP TABLE IF EXISTS exercise_submissions",
         "DROP TABLE IF EXISTS membership_payments",
         "DROP TABLE IF EXISTS notifications",
         "DROP TABLE IF EXISTS chat_reads",
@@ -836,6 +895,8 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
         "DROP TABLE IF EXISTS contact_messages",
         "DROP TABLE IF EXISTS gallery_photos",
         "DROP TABLE IF EXISTS coach_comments",
+        "DROP TABLE IF EXISTS training_plan_items",
+        "DROP TABLE IF EXISTS exercises",
         "DROP TABLE IF EXISTS training_plans",
         "DROP TABLE IF EXISTS recovery_logs",
         "DROP TABLE IF EXISTS announcements",
@@ -1080,6 +1141,49 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
             updated_at TEXT NOT NULL
         )",
         "CREATE INDEX IF NOT EXISTS idx_training_plans_athlete_week ON training_plans(athlete_id, week_start DESC)",
+        "CREATE TABLE IF NOT EXISTS exercises (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            category TEXT,
+            description TEXT,
+            video_url TEXT,
+            created_at TEXT NOT NULL
+        )",
+        // Osobny system „Inne ćwiczenia” — zgłoszenia + historia (nie dotyka tabeli `results`)
+        "CREATE TABLE IF NOT EXISTS exercise_submissions (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            exercise_id TEXT NOT NULL REFERENCES exercises(id) ON DELETE RESTRICT,
+            value REAL NOT NULL,
+            unit TEXT NOT NULL DEFAULT 'kg',
+            performed_at TEXT NOT NULL,
+            notes TEXT,
+            status TEXT NOT NULL DEFAULT 'Pending',
+            reviewed_by_user_id TEXT REFERENCES users(id),
+            reviewed_at TEXT,
+            review_note TEXT,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_exercise_submissions_athlete_created ON exercise_submissions(athlete_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_exercise_submissions_status_created ON exercise_submissions(status, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_exercise_submissions_exercise_created ON exercise_submissions(exercise_id, created_at DESC)",
+        "CREATE TABLE IF NOT EXISTS exercise_results_history (
+            id TEXT PRIMARY KEY,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            exercise_id TEXT NOT NULL REFERENCES exercises(id) ON DELETE RESTRICT,
+            value REAL NOT NULL,
+            unit TEXT NOT NULL DEFAULT 'kg',
+            performed_at TEXT NOT NULL,
+            submission_id TEXT REFERENCES exercise_submissions(id) ON DELETE SET NULL,
+            approved_by_user_id TEXT REFERENCES users(id),
+            approved_at TEXT NOT NULL,
+            notes TEXT,
+            review_note TEXT,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_exercise_history_exercise_value ON exercise_results_history(exercise_id, value DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_exercise_history_athlete_exercise ON exercise_results_history(athlete_id, exercise_id, value DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_exercise_history_created ON exercise_results_history(created_at DESC)",
         "CREATE TABLE IF NOT EXISTS recovery_logs (
             id TEXT PRIMARY KEY,
             athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
