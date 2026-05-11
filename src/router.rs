@@ -1,10 +1,10 @@
 //! Składanie drzewa tras Axum — rozdzielone od bootstrapu bazy (`create_app` w `lib.rs`).
 
 use axum::{
+    Router,
     http::{HeaderName, HeaderValue},
     response::Html,
     routing::{delete, get, patch, post},
-    Router,
 };
 use tower_http::cors::CorsLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -24,11 +24,13 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/totp/enable", post(routes::totp::totp_enable_handler))
         .route("/totp/disable", post(routes::totp::totp_disable_handler));
 
-    let upload_routes = Router::new()
-        .route("/", post(routes::upload::upload_handler));
+    let upload_routes = Router::new().route("/", post(routes::upload::upload_handler));
 
     let athletes_routes = Router::new()
-        .route("/", get(routes::athletes::list_athletes_public).post(routes::athletes::create_athlete))
+        .route(
+            "/",
+            get(routes::athletes::list_athletes_public).post(routes::athletes::create_athlete),
+        )
         .route("/me", get(routes::athletes::me_athlete_handler))
         .route(
             "/my-calendar",
@@ -37,9 +39,8 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/admin", get(routes::athletes::list_athletes))
         .route(
             "/{id}/competitions",
-            get(routes::competition_participants::list_competitions_for_athlete).put(
-                routes::competition_participants::sync_competitions_for_athlete,
-            ),
+            get(routes::competition_participants::list_competitions_for_athlete)
+                .put(routes::competition_participants::sync_competitions_for_athlete),
         )
         .route(
             "/{id}/training-log/{entry_id}",
@@ -48,7 +49,8 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         )
         .route(
             "/{id}/training-log",
-            get(routes::training_log::list_training_log).post(routes::training_log::create_training_log),
+            get(routes::training_log::list_training_log)
+                .post(routes::training_log::create_training_log),
         )
         .route("/{id}/timeline", get(routes::athletes::athlete_timeline))
         .route("/{id}/link", post(routes::athletes::link_athlete_to_user))
@@ -69,7 +71,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
 
     let admins_routes = Router::new()
         .route("/grouped", get(routes::admins::list_accounts_grouped))
-        .route("/", get(routes::admins::list_admins).post(routes::admins::create_admin))
+        .route(
+            "/",
+            get(routes::admins::list_admins).post(routes::admins::create_admin),
+        )
         .route("/{id}", delete(routes::admins::delete_admin))
         .route("/{id}/account", patch(routes::admins::update_user_account))
         .route("/{id}/role", patch(routes::admins::update_user_role))
@@ -84,9 +89,18 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/{id}", delete(routes::submissions::delete_result));
 
     let results_routes = Router::new()
-        .route("/batch-approve", post(routes::results::batch_approve_results))
-        .route("/public-board", get(routes::results::list_public_results_board))
-        .route("/public-board-olympic", get(routes::results::list_public_olympic_board))
+        .route(
+            "/batch-approve",
+            post(routes::results::batch_approve_results),
+        )
+        .route(
+            "/public-board",
+            get(routes::results::list_public_results_board),
+        )
+        .route(
+            "/public-board-olympic",
+            get(routes::results::list_public_olympic_board),
+        )
         .route("/all", get(routes::results::list_all_results_staff))
         .route("/pending", get(routes::results::list_pending_results))
         .route(
@@ -100,7 +114,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             "/{id}",
             patch(routes::results::update_result).delete(routes::results::delete_result),
         )
-        .route("/", get(routes::results::list_approved_results).post(routes::results::create_result));
+        .route(
+            "/",
+            get(routes::results::list_approved_results).post(routes::results::create_result),
+        );
 
     let competitions_routes = Router::new()
         .route(
@@ -131,14 +148,19 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/{id}", delete(routes::competitions::delete_competition).patch(routes::competitions::update_competition));
 
     let announcements_routes = Router::new()
-        .route("/manage", get(routes::announcements::list_announcements_manage))
+        .route(
+            "/manage",
+            get(routes::announcements::list_announcements_manage),
+        )
         .route(
             "/",
-            get(routes::announcements::list_announcements_public).post(routes::announcements::create_announcement),
+            get(routes::announcements::list_announcements_public)
+                .post(routes::announcements::create_announcement),
         )
         .route(
             "/{id}",
-            patch(routes::announcements::update_announcement).delete(routes::announcements::delete_announcement),
+            patch(routes::announcements::update_announcement)
+                .delete(routes::announcements::delete_announcement),
         );
 
     let gallery_routes = Router::new()
@@ -149,26 +171,25 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         )
         .route(
             "/{id}",
-            patch(routes::gallery::update_gallery_photo).delete(routes::gallery::delete_gallery_photo),
+            patch(routes::gallery::update_gallery_photo)
+                .delete(routes::gallery::delete_gallery_photo),
         );
 
     let contact_routes = Router::new()
-        .route("/manage", get(routes::contact::list_contact_messages_manage))
+        .route(
+            "/manage",
+            get(routes::contact::list_contact_messages_manage),
+        )
         .route("/", post(routes::contact::submit_contact_message))
         .route(
             "/manage/{id}",
-            patch(routes::contact::patch_contact_message).delete(routes::contact::delete_contact_message),
+            patch(routes::contact::patch_contact_message)
+                .delete(routes::contact::delete_contact_message),
         );
 
     let posts_routes = Router::new()
-        .route(
-            "/manage",
-            get(routes::posts::list_posts_manage),
-        )
-        .route(
-            "/manage/{id}",
-            get(routes::posts::get_post_manage),
-        )
+        .route("/manage", get(routes::posts::list_posts_manage))
+        .route("/manage/{id}", get(routes::posts::get_post_manage))
         .route(
             "/",
             get(routes::posts::list_posts_public).post(routes::posts::create_post),
@@ -181,9 +202,18 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         );
 
     let notifications_routes = Router::new()
-        .route("/read-all", patch(routes::notifications::mark_all_my_notifications_read))
-        .route("/{id}/read", patch(routes::notifications::mark_my_notification_read))
-        .route("/{id}", delete(routes::notifications::delete_my_notification))
+        .route(
+            "/read-all",
+            patch(routes::notifications::mark_all_my_notifications_read),
+        )
+        .route(
+            "/{id}/read",
+            patch(routes::notifications::mark_my_notification_read),
+        )
+        .route(
+            "/{id}",
+            delete(routes::notifications::delete_my_notification),
+        )
         .route(
             "/",
             get(routes::notifications::list_my_notifications)
@@ -194,8 +224,14 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/my", post(routes::payments::create_my_payment))
         .route("/my/status", get(routes::payments::my_payment_status))
         .route("/my/year", get(routes::payments::my_payments_year))
-        .route("/status", get(routes::payments::list_athletes_payment_status))
-        .route("/overview", get(routes::payments::payments_overview_for_month))
+        .route(
+            "/status",
+            get(routes::payments::list_athletes_payment_status),
+        )
+        .route(
+            "/overview",
+            get(routes::payments::payments_overview_for_month),
+        )
         .route("/pending", get(routes::payments::list_pending_payments))
         .route("/{id}/approve", patch(routes::payments::approve_payment))
         .route("/{id}/reject", patch(routes::payments::reject_payment))
@@ -212,35 +248,76 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             patch(routes::payments::set_standing_order),
         );
 
-    let import_routes = Router::new()
-        .route("/data", post(routes::import::import_data_handler));
+    let import_routes = Router::new().route("/data", post(routes::import::import_data_handler));
     let exercises_routes = Router::new()
         .route("/board", get(routes::exercises::list_exercises_board))
-        .route("/", get(routes::exercises::list_exercises).post(routes::exercises::create_exercise))
+        .route(
+            "/",
+            get(routes::exercises::list_exercises).post(routes::exercises::create_exercise),
+        )
         .route("/{id}", delete(routes::exercises::delete_exercise));
     let exercise_submissions_routes = Router::new()
-        .route("/", post(routes::exercise_submissions::create_exercise_submission))
-        .route("/my", get(routes::exercise_submissions::list_my_exercise_submissions))
-        .route("/pending", get(routes::exercise_submissions::list_pending_exercise_submissions))
-        .route("/{id}/approve", patch(routes::exercise_submissions::approve_exercise_submission))
-        .route("/{id}/reject", patch(routes::exercise_submissions::reject_exercise_submission))
-        .route("/board", get(routes::exercise_submissions::exercise_board_for_exercise));
+        .route(
+            "/",
+            post(routes::exercise_submissions::create_exercise_submission),
+        )
+        .route(
+            "/my",
+            get(routes::exercise_submissions::list_my_exercise_submissions),
+        )
+        .route(
+            "/pending",
+            get(routes::exercise_submissions::list_pending_exercise_submissions),
+        )
+        .route(
+            "/{id}/approve",
+            patch(routes::exercise_submissions::approve_exercise_submission),
+        )
+        .route(
+            "/{id}/reject",
+            patch(routes::exercise_submissions::reject_exercise_submission),
+        )
+        .route(
+            "/board",
+            get(routes::exercise_submissions::exercise_board_for_exercise),
+        );
     let attendance_routes = Router::new()
-        .route("/", get(routes::attendance::list_attendance).post(routes::attendance::upsert_attendance))
-        .route("/summary/{athlete_id}", get(routes::attendance::attendance_summary_for_athlete))
-        .route("/{athlete_id}", get(routes::attendance::list_attendance_for_athlete));
+        .route(
+            "/",
+            get(routes::attendance::list_attendance).post(routes::attendance::upsert_attendance),
+        )
+        .route(
+            "/summary/{athlete_id}",
+            get(routes::attendance::attendance_summary_for_athlete),
+        )
+        .route(
+            "/record/{id}/verify",
+            post(routes::attendance::verify_attendance_record),
+        )
+        .route(
+            "/{athlete_id}",
+            get(routes::attendance::list_attendance_for_athlete),
+        );
     let chat_routes = Router::new()
-        .route("/threads", get(routes::chat::list_my_threads).post(routes::chat::open_thread))
+        .route(
+            "/threads",
+            get(routes::chat::list_my_threads).post(routes::chat::open_thread),
+        )
         .route(
             "/threads/{thread_id}",
             patch(routes::chat::update_thread).delete(routes::chat::delete_thread),
         )
-        .route("/threads/{thread_id}/messages", get(routes::chat::list_messages).post(routes::chat::send_message))
+        .route(
+            "/threads/{thread_id}/messages",
+            get(routes::chat::list_messages).post(routes::chat::send_message),
+        )
         // Ręczne czyszczenie bezczynnych wątków (Admin+). Domyślnie używa progu z `chat_cleanup::CHAT_INACTIVITY_DAYS`,
         // można go nadpisać query paramem `?days=N` (1..=365) — np. by ręcznie posprzątać po incydencie.
         .route("/admin/prune", post(routes::chat::admin_prune_threads));
-    let comments_routes = Router::new()
-        .route("/", get(routes::comments::list_comments).post(routes::comments::create_comment));
+    let comments_routes = Router::new().route(
+        "/",
+        get(routes::comments::list_comments).post(routes::comments::create_comment),
+    );
     let training_plans_routes = Router::new()
         .route("/my", get(routes::training_plans::list_my_training_plans))
         .route(
@@ -253,10 +330,21 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             patch(routes::training_plans::update_training_plan)
                 .delete(routes::training_plans::delete_training_plan),
         )
-        .route("/{id}/items", get(routes::training_plans::list_plan_items).put(routes::training_plans::update_plan_items))
-        .route("/{id}/my-progress", patch(routes::training_plans::update_my_plan_progress));
+        .route(
+            "/{id}/items",
+            get(routes::training_plans::list_plan_items)
+                .put(routes::training_plans::update_plan_items),
+        )
+        .route(
+            "/{id}/my-progress",
+            patch(routes::training_plans::update_my_plan_progress),
+        );
     let recovery_routes = Router::new()
-        .route("/", get(routes::recovery::list_recovery_logs).post(routes::recovery::upsert_my_recovery_log))
+        .route(
+            "/",
+            get(routes::recovery::list_recovery_logs)
+                .post(routes::recovery::upsert_my_recovery_log),
+        )
         .route(
             "/athlete/{athlete_id}",
             get(routes::recovery::list_recovery_logs_for_athlete),
@@ -266,8 +354,14 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/audit-logs", get(routes::system_logs::list_audit_logs))
         .route("/metrics", get(routes::system_logs::system_metrics))
         .route("/event-feed", get(routes::system_logs::event_feed))
-        .route("/feature-flags", get(routes::feature_flags::list_feature_flags))
-        .route("/feature-flags/{name}", post(routes::feature_flags::upsert_feature_flag));
+        .route(
+            "/feature-flags",
+            get(routes::feature_flags::list_feature_flags),
+        )
+        .route(
+            "/feature-flags/{name}",
+            post(routes::feature_flags::upsert_feature_flag),
+        );
 
     Router::new()
         .route("/", get(backend_root_page))

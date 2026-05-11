@@ -1,15 +1,15 @@
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::audit::write_audit_log;
-use crate::middleware::auth::{claims_has_staff_access, Claims};
+use crate::middleware::auth::{Claims, claims_has_staff_access};
 use crate::notifications;
 use crate::state::AppState;
 
@@ -68,14 +68,61 @@ fn normalize_status(raw: &str) -> Result<String, ApiError> {
     }
 }
 
+async fn load_attendance_record_by_id(
+    state: &AppState,
+    id: &str,
+) -> Result<Option<AttendanceRecord>, ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT id, athlete_id, session_date, status, source_role, created_by, verified_by, verification_state, note, created_at, updated_at
+             FROM attendance_records WHERE id = ?1 LIMIT 1",
+            [id.to_string()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    Ok(Some(AttendanceRecord {
+        id: row.get(0).unwrap_or_default(),
+        athlete_id: row.get(1).unwrap_or_default(),
+        session_date: row.get(2).unwrap_or_default(),
+        status: row.get(3).unwrap_or_default(),
+        source_role: row.get(4).unwrap_or_default(),
+        created_by: row.get(5).ok(),
+        verified_by: row.get(6).ok(),
+        verification_state: row.get(7).unwrap_or_else(|_| "verified".to_string()),
+        note: row.get(8).ok(),
+        created_at: row.get(9).unwrap_or_default(),
+        updated_at: row.get(10).unwrap_or_default(),
+    }))
+}
+
 fn actor_role_label(claims: &Claims) -> String {
-    if claims.roles.iter().any(|r| matches!(r, crate::models::Role::SuperAdmin)) {
+    if claims
+        .roles
+        .iter()
+        .any(|r| matches!(r, crate::models::Role::SuperAdmin))
+    {
         return "superadmin".to_string();
     }
-    if claims.roles.iter().any(|r| matches!(r, crate::models::Role::Admin)) {
+    if claims
+        .roles
+        .iter()
+        .any(|r| matches!(r, crate::models::Role::Admin))
+    {
         return "admin".to_string();
     }
-    if claims.roles.iter().any(|r| matches!(r, crate::models::Role::Trainer)) {
+    if claims
+        .roles
+        .iter()
+        .any(|r| matches!(r, crate::models::Role::Trainer))
+    {
         return "trainer".to_string();
     }
     "athlete".to_string()
@@ -91,7 +138,11 @@ pub async fn upsert_attendance(
     let is_staff = claims_has_staff_access(&claims);
     let verification_state = if is_staff { "verified" } else { "pending" };
     let created_by = claims.sub.clone();
-    let verified_by = if is_staff { Some(claims.sub.clone()) } else { None };
+    let verified_by = if is_staff {
+        Some(claims.sub.clone())
+    } else {
+        None
+    };
     let now = Utc::now().to_rfc3339();
     let id = Uuid::new_v4().to_string();
 
@@ -139,9 +190,10 @@ pub async fn upsert_attendance(
     .await;
 
     if !is_staff {
-        let athlete_label = notifications::athlete_display_for_notification(conn_arc.as_ref(), &payload.athlete_id)
-            .await
-            .unwrap_or_else(|_| "Zawodnik".to_string());
+        let athlete_label =
+            notifications::athlete_display_for_notification(conn_arc.as_ref(), &payload.athlete_id)
+                .await
+                .unwrap_or_else(|_| "Zawodnik".to_string());
         notifications::notify_admin_broadcast(
             &state,
             "attendance_pending",
@@ -176,6 +228,70 @@ pub async fn upsert_attendance(
     }))
 }
 
+/// Zatwierdzenie obecności zgłoszonej przez zawodnika (`verification_state`: pending → verified).
+pub async fn verify_attendance_record(
+    State(state): State<AppState>,
+    claims: Claims,
+    Path(id): Path<String>,
+) -> Result<Json<AttendanceRecord>, ApiError> {
+    if !claims_has_staff_access(&claims) {
+        return Err(api_error(StatusCode::FORBIDDEN, "Brak uprawnień"));
+    }
+
+    let Some(mut rec) = load_attendance_record_by_id(&state, &id).await? else {
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            "Nie znaleziono wpisu obecności",
+        ));
+    };
+
+    if rec.verification_state == "verified" {
+        return Ok(Json(rec));
+    }
+    if rec.verification_state != "pending" {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "Można zatwierdzić tylko wpisy oczekujące na weryfikację",
+        ));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    state
+        .db
+        .execute(
+            "UPDATE attendance_records SET verification_state = 'verified', verified_by = ?1, updated_at = ?2 WHERE id = ?3",
+            (claims.sub.clone(), now.clone(), id.clone()),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    rec.verification_state = "verified".to_string();
+    rec.verified_by = Some(claims.sub.clone());
+    rec.updated_at = now.clone();
+
+    let conn_arc = state.db.raw().await;
+    let actor_role = actor_role_label(&claims);
+    let _ = write_audit_log(
+        conn_arc.as_ref(),
+        Some(&claims.sub),
+        Some(&actor_role),
+        "attendance",
+        "attendance_verify",
+        Some("athlete"),
+        Some(&rec.athlete_id),
+        Some(
+            &serde_json::json!({
+                "record_id": id,
+                "session_date": rec.session_date,
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    Ok(Json(rec))
+}
+
 pub async fn list_attendance_for_athlete(
     State(state): State<AppState>,
     claims: Claims,
@@ -196,7 +312,10 @@ pub async fn list_attendance_for_athlete(
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
             .is_none()
         {
-            return Err(api_error(StatusCode::FORBIDDEN, "Brak dostępu do tej historii"));
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "Brak dostępu do tej historii",
+            ));
         }
     }
 
@@ -329,7 +448,10 @@ pub async fn attendance_summary_for_athlete(
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
             .is_none()
         {
-            return Err(api_error(StatusCode::FORBIDDEN, "Brak dostępu do tej historii"));
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "Brak dostępu do tej historii",
+            ));
         }
     }
 
