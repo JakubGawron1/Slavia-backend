@@ -1,17 +1,13 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
-use serde::{Deserialize, Serialize};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
-use jsonwebtoken::{encode, EncodingKey, Header};
-use chrono::{Utc, Duration};
+use axum::{Json, extract::State, http::StatusCode};
+use chrono::{Duration, Utc};
+use jsonwebtoken::{EncodingKey, Header, encode};
+use serde::{Deserialize, Serialize};
 
-use crate::api_error::{api_error, ApiError};
-use crate::state::AppState;
-use crate::models::Role;
+use crate::api_error::{ApiError, api_error};
 use crate::middleware::auth::Claims;
+use crate::models::Role;
+use crate::state::AppState;
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -50,7 +46,10 @@ pub async fn login_handler(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let row = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let row = match row {
         Some(r) => r,
@@ -62,19 +61,46 @@ pub async fn login_handler(
         }
     };
 
-    let user_id: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("id error: {}", e)))?;
-    let _username: String = row.get(1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("username error: {}", e)))?;
-    let password_hash: String = row.get(2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("hash error: {}", e)))?;
-    let roles_json: String = row.get(3).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("roles error: {}", e)))?;
+    let user_id: String = row.get(0).map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("id error: {}", e),
+        )
+    })?;
+    let _username: String = row.get(1).map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("username error: {}", e),
+        )
+    })?;
+    let password_hash: String = row.get(2).map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("hash error: {}", e),
+        )
+    })?;
+    let roles_json: String = row.get(3).map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("roles error: {}", e),
+        )
+    })?;
     let totp_secret: Option<String> = row.get(4).ok();
     let totp_enabled: i64 = row.get(5).unwrap_or(0);
-    let roles: Vec<Role> = serde_json::from_str(&roles_json).map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Invalid roles in db"))?;
+    let roles: Vec<Role> = serde_json::from_str(&roles_json)
+        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Invalid roles in db"))?;
 
     let parsed_hash = PasswordHash::new(&password_hash)
         .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error parsing hash"))?;
 
-    if Argon2::default().verify_password(payload.password.as_bytes(), &parsed_hash).is_err() {
-        return Err(api_error(StatusCode::UNAUTHORIZED, "Invalid username or password"));
+    if Argon2::default()
+        .verify_password(payload.password.as_bytes(), &parsed_hash)
+        .is_err()
+    {
+        return Err(api_error(
+            StatusCode::UNAUTHORIZED,
+            "Invalid username or password",
+        ));
     }
 
     if totp_enabled != 0 {
@@ -94,13 +120,13 @@ pub async fn login_handler(
             .map(str::trim)
             .filter(|s| !s.is_empty());
         let Some(code) = code else {
-            return Err(api_error(
-                StatusCode::BAD_REQUEST,
-                "totp_required",
-            ));
+            return Err(api_error(StatusCode::BAD_REQUEST, "totp_required"));
         };
         if !crate::routes::totp::totp_verify(&raw, code) {
-            return Err(api_error(StatusCode::UNAUTHORIZED, "Invalid username or password"));
+            return Err(api_error(
+                StatusCode::UNAUTHORIZED,
+                "Invalid username or password",
+            ));
         }
     }
 
@@ -176,10 +202,15 @@ pub async fn me_handler(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let row = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let row = row.ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "User not found"))?;
-    
-    let username: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let username: String = row
+        .get(0)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let avatar_url: Option<String> = row.get(1).ok();
     let ui_theme_preset: Option<String> = row.get(2).ok();
     let ui_color_mode: Option<String> = row.get(3).ok();

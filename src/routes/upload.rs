@@ -1,11 +1,11 @@
 use axum::{
+    Json,
     extract::{Multipart, State},
     http::StatusCode,
-    Json,
 };
 use serde::Serialize;
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::audit::write_audit_log;
 use crate::cloudinary::cloudinary_signature;
 use crate::middleware::auth::Claims;
@@ -37,9 +37,7 @@ impl UploadPurpose {
             Some("avatar") | Some("user-avatar") | Some("profile") => Self::Avatar,
             Some("blog") | Some("post") | Some("article") => Self::Blog,
             Some("gallery") | Some("media") => Self::Gallery,
-            Some("athletes") | Some("athlete") | Some("player") | Some("players") => {
-                Self::Athletes
-            }
+            Some("athletes") | Some("athlete") | Some("player") | Some("players") => Self::Athletes,
             _ => Self::Misc,
         }
     }
@@ -247,8 +245,10 @@ pub async fn upload_handler(
         let timestamp = chrono::Utc::now().timestamp().to_string();
         // Każdy parametr poza `file`, `api_key`, `signature`, `resource_type`, `cloud_name`
         // musi być uwzględniony w podpisie (alfabetycznie, key=value, połączone `&`).
-        let mut sign_params: Vec<(String, String)> =
-            vec![("folder".to_string(), folder.clone()), ("timestamp".to_string(), timestamp.clone())];
+        let mut sign_params: Vec<(String, String)> = vec![
+            ("folder".to_string(), folder.clone()),
+            ("timestamp".to_string(), timestamp.clone()),
+        ];
         if purpose.deterministic_public_id() {
             sign_params.push(("overwrite".to_string(), "true".to_string()));
             if let Some(pid) = username_slug.as_ref() {
@@ -286,8 +286,7 @@ pub async fn upload_handler(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        let looks_like_time_issue =
-            msg_lc.contains("timestamp") || msg_lc.contains("signature");
+        let looks_like_time_issue = msg_lc.contains("timestamp") || msg_lc.contains("signature");
         if looks_like_time_issue {
             let fallback_form = reqwest::multipart::Form::new()
                 .part("file", make_file_part())

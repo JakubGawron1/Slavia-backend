@@ -1,19 +1,19 @@
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
+use chrono::Utc;
 use libsql::Row;
 use serde::Deserialize;
 use uuid::Uuid;
-use chrono::Utc;
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
+use crate::middleware::auth::{Claims, RequireAdminOrSuperAdmin};
 use crate::models::Post;
 use crate::notifications;
-use crate::state::AppState;
-use crate::middleware::auth::{Claims, RequireAdminOrSuperAdmin};
 use crate::sql_row;
+use crate::state::AppState;
 
 fn post_from_row(row: &Row) -> Result<Post, libsql::Error> {
     Ok(Post {
@@ -46,13 +46,10 @@ pub struct UpdatePostRequest {
     pub published: Option<bool>,
 }
 
-const POST_COLUMNS: &str =
-    "id, title, content, author_id, image_url, created_at, published";
+const POST_COLUMNS: &str = "id, title, content, author_id, image_url, created_at, published";
 
 /// Lista publiczna — tylko opublikowane wpisy.
-pub async fn list_posts_public(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<Post>>, ApiError> {
+pub async fn list_posts_public(State(state): State<AppState>) -> Result<Json<Vec<Post>>, ApiError> {
     let mut rows = state
         .db
         .query(
@@ -65,8 +62,13 @@ pub async fn list_posts_public(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut posts = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
-        let p = post_from_row(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let p = post_from_row(&row)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         posts.push(p);
     }
 
@@ -88,8 +90,13 @@ pub async fn list_posts_manage(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut posts = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
-        let p = post_from_row(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let p = post_from_row(&row)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         posts.push(p);
     }
 
@@ -110,9 +117,7 @@ pub async fn create_post(
     state
         .db
         .execute(
-            &format!(
-                "INSERT INTO posts ({POST_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
-            ),
+            &format!("INSERT INTO posts ({POST_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"),
             (
                 id.clone(),
                 payload.title.clone(),
@@ -174,7 +179,8 @@ pub async fn update_post(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        post_from_row(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        post_from_row(&row)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     } else {
         return Err(api_error(StatusCode::NOT_FOUND, "Post not found"));
     };
@@ -278,8 +284,13 @@ pub async fn get_post_public(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    if let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
-        let p = post_from_row(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let p = post_from_row(&row)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         Ok(Json(p))
     } else {
         Err(api_error(StatusCode::NOT_FOUND, "Post not found"))
@@ -301,8 +312,13 @@ pub async fn get_post_manage(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    if let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
-        let p = post_from_row(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let p = post_from_row(&row)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         Ok(Json(p))
     } else {
         Err(api_error(StatusCode::NOT_FOUND, "Post not found"))

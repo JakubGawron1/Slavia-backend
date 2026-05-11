@@ -1,14 +1,14 @@
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api_error::{api_error, ApiError};
-use crate::middleware::auth::{claims_has_staff_access, Claims};
+use crate::api_error::{ApiError, api_error};
+use crate::middleware::auth::{Claims, claims_has_staff_access};
 use crate::models::{ResultStatus, Role};
 use crate::sql_row;
 use crate::state::AppState;
@@ -74,8 +74,7 @@ async fn my_athlete_id_for_claims(state: &AppState, claims: &Claims) -> Result<S
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Brak profilu zawodnika"))?;
-    sql_row::required_string(&row, 0)
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))
+    sql_row::required_string(&row, 0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
 pub async fn create_exercise_submission(
@@ -84,16 +83,25 @@ pub async fn create_exercise_submission(
     Json(payload): Json<CreateExerciseSubmissionRequest>,
 ) -> Result<Json<ExerciseSubmissionDto>, ApiError> {
     if !claims.roles.contains(&Role::Athlete) {
-        return Err(api_error(StatusCode::FORBIDDEN, "Tylko zawodnik może zgłaszać wyniki"));
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Tylko zawodnik może zgłaszać wyniki",
+        ));
     }
     if payload.exercise_id.trim().is_empty() {
-        return Err(api_error(StatusCode::BAD_REQUEST, "exercise_id is required"));
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "exercise_id is required",
+        ));
     }
     if !payload.value.is_finite() || payload.value <= 0.0 {
         return Err(api_error(StatusCode::BAD_REQUEST, "value must be > 0"));
     }
     if payload.performed_at.trim().is_empty() {
-        return Err(api_error(StatusCode::BAD_REQUEST, "performed_at is required"));
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "performed_at is required",
+        ));
     }
 
     // Ensure athlete exists and is linked to this user.
@@ -195,19 +203,30 @@ pub async fn list_my_exercise_submissions(
             .parse::<ResultStatus>()
             .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Invalid status"))?;
         out.push(ExerciseSubmissionDto {
-            id: sql_row::required_string(&row, 0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            athlete_id: sql_row::required_string(&row, 1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            id: sql_row::required_string(&row, 0)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_id: sql_row::required_string(&row, 1)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
             athlete_name: None,
-            exercise_id: sql_row::required_string(&row, 2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            exercise_name: sql_row::required_string(&row, 3).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            value: sql_row::required_f64(&row, 4).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            unit: sql_row::required_string(&row, 5).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            performed_at: sql_row::required_string(&row, 6).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            notes: sql_row::opt_string(&row, 7).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            exercise_id: sql_row::required_string(&row, 2)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            exercise_name: sql_row::required_string(&row, 3)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            value: sql_row::required_f64(&row, 4)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            unit: sql_row::required_string(&row, 5)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            performed_at: sql_row::required_string(&row, 6)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            notes: sql_row::opt_string(&row, 7)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
             status,
-            reviewed_at: sql_row::opt_string(&row, 9).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-            review_note: sql_row::opt_string(&row, 10).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-            created_at: sql_row::required_string(&row, 11).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            reviewed_at: sql_row::opt_string(&row, 9)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            review_note: sql_row::opt_string(&row, 10)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            created_at: sql_row::required_string(&row, 11)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
         });
     }
     Ok(Json(out))
@@ -242,19 +261,33 @@ pub async fn list_pending_exercise_submissions(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
         out.push(ExerciseSubmissionDto {
-            id: sql_row::required_string(&row, 0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            athlete_id: sql_row::required_string(&row, 1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            athlete_name: Some(sql_row::required_string(&row, 2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?),
-            exercise_id: sql_row::required_string(&row, 3).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            exercise_name: sql_row::required_string(&row, 4).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            value: sql_row::required_f64(&row, 5).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            unit: sql_row::required_string(&row, 6).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            performed_at: sql_row::required_string(&row, 7).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            notes: sql_row::opt_string(&row, 8).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            id: sql_row::required_string(&row, 0)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_id: sql_row::required_string(&row, 1)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_name: Some(
+                sql_row::required_string(&row, 2)
+                    .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            ),
+            exercise_id: sql_row::required_string(&row, 3)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            exercise_name: sql_row::required_string(&row, 4)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            value: sql_row::required_f64(&row, 5)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            unit: sql_row::required_string(&row, 6)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            performed_at: sql_row::required_string(&row, 7)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            notes: sql_row::opt_string(&row, 8)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
             status: ResultStatus::Pending,
-            reviewed_at: sql_row::opt_string(&row, 10).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-            review_note: sql_row::opt_string(&row, 11).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-            created_at: sql_row::required_string(&row, 12).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            reviewed_at: sql_row::opt_string(&row, 10)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            review_note: sql_row::opt_string(&row, 11)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            created_at: sql_row::required_string(&row, 12)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
         });
     }
     Ok(Json(out))
@@ -263,7 +296,18 @@ pub async fn list_pending_exercise_submissions(
 async fn load_submission_for_review(
     state: &AppState,
     id: &str,
-) -> Result<(String, String, f64, String, String, Option<String>, ResultStatus), ApiError> {
+) -> Result<
+    (
+        String,
+        String,
+        f64,
+        String,
+        String,
+        Option<String>,
+        ResultStatus,
+    ),
+    ApiError,
+> {
     let mut rows = state
         .db
         .query(
@@ -286,12 +330,18 @@ async fn load_submission_for_review(
         .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Invalid status"))?;
 
     Ok((
-        sql_row::required_string(&row, 0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-        sql_row::required_string(&row, 1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-        sql_row::required_f64(&row, 2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-        sql_row::required_string(&row, 3).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-        sql_row::required_string(&row, 4).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-        sql_row::opt_string(&row, 5).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        sql_row::required_string(&row, 0)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+        sql_row::required_string(&row, 1)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+        sql_row::required_f64(&row, 2)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+        sql_row::required_string(&row, 3)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+        sql_row::required_string(&row, 4)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+        sql_row::opt_string(&row, 5)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
         status,
     ))
 }
@@ -402,12 +452,7 @@ pub async fn reject_exercise_submission(
             "UPDATE exercise_submissions
              SET status = 'Rejected', reviewed_by_user_id = ?1, reviewed_at = ?2, review_note = ?3
              WHERE id = ?4",
-            (
-                claims.sub,
-                now,
-                review_note,
-                id,
-            ),
+            (claims.sub, now, review_note, id),
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -421,7 +466,10 @@ pub async fn exercise_board_for_exercise(
     Query(q): Query<ExerciseBoardQuery>,
 ) -> Result<Json<Vec<ExerciseBoardRowDto>>, ApiError> {
     if q.exercise_id.trim().is_empty() {
-        return Err(api_error(StatusCode::BAD_REQUEST, "exercise_id is required"));
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "exercise_id is required",
+        ));
     }
     let ex_id = q.exercise_id.trim().to_string();
 
@@ -451,14 +499,18 @@ pub async fn exercise_board_for_exercise(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
         out.push(ExerciseBoardRowDto {
-            athlete_id: sql_row::required_string(&row, 0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            athlete_name: sql_row::required_string(&row, 1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            best_value: sql_row::required_f64(&row, 2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            unit: sql_row::required_string(&row, 3).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_id: sql_row::required_string(&row, 0)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_name: sql_row::required_string(&row, 1)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            best_value: sql_row::required_f64(&row, 2)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            unit: sql_row::required_string(&row, 3)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
             entries: row.get::<i64>(4).unwrap_or(0),
-            last_performed_at: sql_row::opt_string(&row, 5).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            last_performed_at: sql_row::opt_string(&row, 5)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
         });
     }
     Ok(Json(out))
 }
-

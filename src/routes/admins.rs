@@ -1,19 +1,19 @@
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
+};
 use axum::{
-    extract::{State, Path},
-    http::StatusCode,
     Json,
+    extract::{Path, State},
+    http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
-    Argon2,
-};
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::db;
 use crate::middleware::auth::{
-    forbid_mutating_superadmin_user_record, Claims, RequireAdminOrSuperAdmin, RequireSuperAdmin,
+    Claims, RequireAdminOrSuperAdmin, RequireSuperAdmin, forbid_mutating_superadmin_user_record,
 };
 use crate::models::{Role, User};
 use crate::notifications;
@@ -117,7 +117,10 @@ fn classify_user_bucket(roles: &[Role]) -> Option<AccountListKind> {
     None
 }
 
-pub(crate) async fn user_roles_by_id(state: &AppState, id: &str) -> Result<Option<Vec<Role>>, ApiError> {
+pub(crate) async fn user_roles_by_id(
+    state: &AppState,
+    id: &str,
+) -> Result<Option<Vec<Role>>, ApiError> {
     let mut rows = state
         .db
         .query("SELECT roles FROM users WHERE id = ?1", [id.to_string()])
@@ -195,9 +198,12 @@ pub async fn list_admins(
     let admins = all_users
         .into_iter()
         .filter(|u| {
-            u.roles
-                .iter()
-                .any(|r| matches!(r, Role::Admin | Role::SuperAdmin | Role::Trainer | Role::Athlete))
+            u.roles.iter().any(|r| {
+                matches!(
+                    r,
+                    Role::Admin | Role::SuperAdmin | Role::Trainer | Role::Athlete
+                )
+            })
         })
         .filter(|u| caller_super || !u.roles.contains(&Role::SuperAdmin))
         .collect();
@@ -260,7 +266,8 @@ pub async fn create_admin(
 ) -> Result<Json<User>, ApiError> {
     let argon2 = Argon2::default();
     let salt = SaltString::generate(&mut OsRng);
-    let hash = argon2.hash_password(payload.password.as_bytes(), &salt)
+    let hash = argon2
+        .hash_password(payload.password.as_bytes(), &salt)
         .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error hashing password"))?
         .to_string();
 
@@ -270,8 +277,8 @@ pub async fn create_admin(
         Some(rs) => parse_roles_list(rs)?,
         None => vec![Role::Admin],
     };
-    let roles_json =
-        serde_json::to_string(&roles_vec).map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error serializing roles"))?;
+    let roles_json = serde_json::to_string(&roles_vec)
+        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error serializing roles"))?;
 
     state
         .db
@@ -347,7 +354,10 @@ pub async fn update_user_account(
 
     if let Some(new_username) = &payload.username {
         if new_username.is_empty() {
-            return Err(api_error(StatusCode::BAD_REQUEST, "username cannot be empty"));
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "username cannot be empty",
+            ));
         }
         state
             .db
@@ -361,7 +371,10 @@ pub async fn update_user_account(
 
     if let Some(new_password) = &payload.password {
         if new_password.is_empty() {
-            return Err(api_error(StatusCode::BAD_REQUEST, "password cannot be empty"));
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "password cannot be empty",
+            ));
         }
         let argon2 = Argon2::default();
         let salt = SaltString::generate(&mut OsRng);
@@ -416,11 +429,19 @@ pub async fn update_user_role(
     }
 
     let roles = parse_roles_list(&payload.roles)?;
-    let roles_json = serde_json::to_string(&roles).map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error serializing roles"))?;
+    let roles_json = serde_json::to_string(&roles)
+        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error serializing roles"))?;
 
-    let mut rows = state.db.query("SELECT roles FROM users WHERE id = ?1", [id.clone()])
-        .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+    let mut rows = state
+        .db
+        .query("SELECT roles FROM users WHERE id = ?1", [id.clone()])
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
         let target_roles_json: String = row.get(0).unwrap();
         let target_roles: Vec<Role> = serde_json::from_str(&target_roles_json).unwrap();
         forbid_mutating_superadmin_user_record(claims, &target_roles)?;
@@ -457,9 +478,7 @@ pub async fn update_user_role(
         "Zmiana ról",
         &format!(
             "{} ustawił role użytkownika „{}” na: {}.",
-            actor,
-            target,
-            roles_human
+            actor, target, roles_human
         ),
         Some(
             serde_json::json!({ "target_user_id": id, "roles": payload.roles.clone() }).to_string(),
@@ -664,15 +683,24 @@ pub async fn update_profile(
         if !trimmed.is_empty() {
             let argon2 = Argon2::default();
             let salt = SaltString::generate(&mut OsRng);
-            let hash = argon2.hash_password(trimmed.as_bytes(), &salt)
-                .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error hashing password"))?
+            let hash = argon2
+                .hash_password(trimmed.as_bytes(), &salt)
+                .map_err(|_| {
+                    api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error hashing password")
+                })?
                 .to_string();
 
-            state.db.execute("UPDATE users SET password_hash = ?1 WHERE id = ?2", (hash, claims.sub.clone()))
-                .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            state
+                .db
+                .execute(
+                    "UPDATE users SET password_hash = ?1 WHERE id = ?2",
+                    (hash, claims.sub.clone()),
+                )
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         }
     }
-    
+
     if let Some(url) = &payload.avatar_url {
         state
             .db
@@ -697,15 +725,7 @@ pub async fn update_profile(
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         } else {
             const ALLOW_PRESET: &[&str] = &[
-                "pink",
-                "dark",
-                "slavia",
-                "iron",
-                "arena",
-                "platform",
-                "midnight",
-                "ruby",
-                "neon",
+                "pink", "dark", "slavia", "iron", "arena", "platform", "midnight", "ruby", "neon",
                 "blackgym",
             ];
             if !ALLOW_PRESET.contains(&trimmed) {
@@ -739,10 +759,7 @@ pub async fn update_profile(
         } else {
             const ALLOW_MODE: &[&str] = &["light", "dark", "system"];
             if !ALLOW_MODE.contains(&trimmed) {
-                return Err(api_error(
-                    StatusCode::BAD_REQUEST,
-                    "Invalid ui_color_mode",
-                ));
+                return Err(api_error(StatusCode::BAD_REQUEST, "Invalid ui_color_mode"));
             }
             state
                 .db
@@ -754,6 +771,6 @@ pub async fn update_profile(
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         }
     }
-    
+
     Ok(StatusCode::OK)
 }

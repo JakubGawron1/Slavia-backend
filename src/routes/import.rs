@@ -1,7 +1,7 @@
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::middleware::auth::Claims;
 use crate::models::Role;
 use crate::state::AppState;
@@ -42,7 +42,10 @@ pub async fn import_data_handler(
     Json(_payload): Json<ImportRequest>,
 ) -> Result<Json<Vec<ImportResult>>, ApiError> {
     if !claims.roles.contains(&Role::SuperAdmin) {
-        return Err(api_error(StatusCode::FORBIDDEN, "Only superadmin can import data"));
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Only superadmin can import data",
+        ));
     }
     Err(api_error(
         StatusCode::GONE,

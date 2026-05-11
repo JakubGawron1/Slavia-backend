@@ -1,10 +1,10 @@
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::dto::notifications::NotificationDto;
 use crate::middleware::auth::Claims;
 use crate::repos;
@@ -34,7 +34,10 @@ pub async fn delete_my_notification(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if n == 0 {
-        return Err(api_error(StatusCode::NOT_FOUND, "Powiadomienie nie znalezione"));
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            "Powiadomienie nie znalezione",
+        ));
     }
 
     Ok(StatusCode::NO_CONTENT)
@@ -52,7 +55,10 @@ pub async fn mark_my_notification_read(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if n == 0 {
-        return Err(api_error(StatusCode::NOT_FOUND, "Powiadomienie nie znalezione"));
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            "Powiadomienie nie znalezione",
+        ));
     }
 
     Ok(StatusCode::OK)

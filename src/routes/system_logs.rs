@@ -1,7 +1,7 @@
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{Json, extract::State, http::StatusCode};
 use serde::Serialize;
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::middleware::auth::{RequireSuperAdmin, RequireTrainerOrHigher};
 use crate::state::AppState;
 
@@ -56,10 +56,7 @@ pub async fn ping_backend() -> Json<PingDto> {
             .map(|s| format!(" · instance={s:?}"))
             .unwrap_or_default()
     );
-    Json(PingDto {
-        ok: true,
-        instance,
-    })
+    Json(PingDto { ok: true, instance })
 }
 
 pub async fn list_audit_logs(
@@ -291,7 +288,10 @@ pub async fn event_feed(
         out.push(OpsEventRow {
             source: "recovery".to_string(),
             at: at.clone(),
-            title: format!("Regeneracja: sen {}h, gotowość {}/10", sleep_hours, readiness_level),
+            title: format!(
+                "Regeneracja: sen {}h, gotowość {}/10",
+                sleep_hours, readiness_level
+            ),
             detail: format!("athlete_id={}", athlete_id),
         });
     }

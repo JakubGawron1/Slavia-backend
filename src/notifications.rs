@@ -86,7 +86,10 @@ pub async fn admin_staff_ids(conn: &Connection) -> Result<Vec<String>, libsql::E
         let id: String = row.get(0)?;
         let roles_json: String = row.get(1)?;
         let roles: Vec<Role> = serde_json::from_str(&roles_json).unwrap_or_default();
-        if roles.iter().any(|r| matches!(r, Role::Admin | Role::SuperAdmin)) {
+        if roles
+            .iter()
+            .any(|r| matches!(r, Role::Admin | Role::SuperAdmin))
+        {
             out.push(id);
         }
     }
@@ -103,7 +106,10 @@ pub async fn all_user_ids(conn: &Connection) -> Result<Vec<String>, libsql::Erro
     Ok(out)
 }
 
-pub async fn athlete_user_id(conn: &Connection, athlete_id: &str) -> Result<Option<String>, libsql::Error> {
+pub async fn athlete_user_id(
+    conn: &Connection,
+    athlete_id: &str,
+) -> Result<Option<String>, libsql::Error> {
     let mut rows = conn
         .query(
             "SELECT user_id FROM athletes WHERE id = ?1",
@@ -114,7 +120,10 @@ pub async fn athlete_user_id(conn: &Connection, athlete_id: &str) -> Result<Opti
     Ok(row.and_then(|r| r.get::<String>(0).ok()))
 }
 
-pub async fn athlete_full_name(conn: &Connection, athlete_id: &str) -> Result<Option<String>, libsql::Error> {
+pub async fn athlete_full_name(
+    conn: &Connection,
+    athlete_id: &str,
+) -> Result<Option<String>, libsql::Error> {
     let mut rows = conn
         .query(
             "SELECT full_name FROM athletes WHERE id = ?1",
@@ -125,15 +134,24 @@ pub async fn athlete_full_name(conn: &Connection, athlete_id: &str) -> Result<Op
     Ok(row.and_then(|r| r.get::<String>(0).ok()))
 }
 
-pub async fn username_by_id(conn: &Connection, user_id: &str) -> Result<Option<String>, libsql::Error> {
+pub async fn username_by_id(
+    conn: &Connection,
+    user_id: &str,
+) -> Result<Option<String>, libsql::Error> {
     let mut rows = conn
-        .query("SELECT username FROM users WHERE id = ?1", [user_id.to_string()])
+        .query(
+            "SELECT username FROM users WHERE id = ?1",
+            [user_id.to_string()],
+        )
         .await?;
     let row = rows.next().await?;
     Ok(row.and_then(|r| r.get::<String>(0).ok()))
 }
 
-pub async fn competition_title(conn: &Connection, competition_id: &str) -> Result<Option<String>, libsql::Error> {
+pub async fn competition_title(
+    conn: &Connection,
+    competition_id: &str,
+) -> Result<Option<String>, libsql::Error> {
     let mut rows = conn
         .query(
             "SELECT title FROM competitions WHERE id = ?1",
@@ -145,7 +163,10 @@ pub async fn competition_title(conn: &Connection, competition_id: &str) -> Resul
 }
 
 /// Imię i nazwisko do treści powiadomień — bez surowych UUID w UI.
-pub async fn athlete_display_for_notification(conn: &Connection, athlete_id: &str) -> Result<String, libsql::Error> {
+pub async fn athlete_display_for_notification(
+    conn: &Connection,
+    athlete_id: &str,
+) -> Result<String, libsql::Error> {
     Ok(athlete_full_name(conn, athlete_id)
         .await?
         .map(|s| s.trim().to_string())
@@ -180,7 +201,15 @@ async fn athlete_plus_superadmins(
     let conn = conn_arc.as_ref();
     let uid_opt = athlete_user_id(conn, athlete_id).await?;
     if let Some(ref uid) = uid_opt {
-        insert_notification(conn, uid, kind_athlete, title_athlete, body_athlete, payload).await?;
+        insert_notification(
+            conn,
+            uid,
+            kind_athlete,
+            title_athlete,
+            body_athlete,
+            payload,
+        )
+        .await?;
     }
     for sid in superadmin_ids(conn).await? {
         if uid_opt.as_ref() == Some(&sid) {
@@ -265,7 +294,12 @@ pub fn notify_result_pending(
     });
 }
 
-pub fn notify_competition_assigned_to_athlete(state: &AppState, athlete_id: &str, competition_id: &str, competition_title_str: &str) {
+pub fn notify_competition_assigned_to_athlete(
+    state: &AppState,
+    athlete_id: &str,
+    competition_id: &str,
+    competition_title_str: &str,
+) {
     let st = state.clone();
     let aid = athlete_id.to_string();
     let cid = competition_id.to_string();
@@ -422,14 +456,28 @@ pub fn notify_training_log_athlete_note(
         let mut seen = HashSet::<String>::new();
         for uid in trainer_staff_ids(conn).await? {
             if seen.insert(uid.clone()) {
-                insert_notification(conn, &uid, "training_log_athlete_note", title, &body, Some(&payload)).await?;
+                insert_notification(
+                    conn,
+                    &uid,
+                    "training_log_athlete_note",
+                    title,
+                    &body,
+                    Some(&payload),
+                )
+                .await?;
             }
         }
         Ok(())
     });
 }
 
-pub fn notify_competition_created(state: &AppState, title_ev: &str, date: &str, location: &str, competition_id: &str) {
+pub fn notify_competition_created(
+    state: &AppState,
+    title_ev: &str,
+    date: &str,
+    location: &str,
+    competition_id: &str,
+) {
     let st = state.clone();
     let title_ev = title_ev.to_string();
     let date = date.to_string();
@@ -443,7 +491,15 @@ pub fn notify_competition_created(state: &AppState, title_ev: &str, date: &str, 
         let body = format!("{} — {} ({})", ev, date, loc);
         let payload = serde_json::json!({ "competition_id": cid }).to_string();
         for uid in trainer_staff_ids(conn).await? {
-            insert_notification(conn, &uid, "competition_created", title, &body, Some(&payload)).await?;
+            insert_notification(
+                conn,
+                &uid,
+                "competition_created",
+                title,
+                &body,
+                Some(&payload),
+            )
+            .await?;
         }
         Ok(())
     });
@@ -461,7 +517,15 @@ pub fn notify_competition_updated(state: &AppState, title_ev: &str, competition_
         let body = format!("„{}” — zmieniono szczegóły.", ev);
         let payload = serde_json::json!({ "competition_id": cid }).to_string();
         for uid in trainer_staff_ids(conn).await? {
-            insert_notification(conn, &uid, "competition_updated", title, &body, Some(&payload)).await?;
+            insert_notification(
+                conn,
+                &uid,
+                "competition_updated",
+                title,
+                &body,
+                Some(&payload),
+            )
+            .await?;
         }
         Ok(())
     });
@@ -479,13 +543,27 @@ pub fn notify_competition_deleted(state: &AppState, title_ev: &str, competition_
         let body = format!("„{}” zostało usunięte.", ev);
         let payload = serde_json::json!({ "competition_id": cid }).to_string();
         for uid in trainer_staff_ids(conn).await? {
-            insert_notification(conn, &uid, "competition_deleted", title, &body, Some(&payload)).await?;
+            insert_notification(
+                conn,
+                &uid,
+                "competition_deleted",
+                title,
+                &body,
+                Some(&payload),
+            )
+            .await?;
         }
         Ok(())
     });
 }
 
-pub fn notify_admin_broadcast(state: &AppState, kind: &str, title: &str, body: &str, payload: Option<String>) {
+pub fn notify_admin_broadcast(
+    state: &AppState,
+    kind: &str,
+    title: &str,
+    body: &str,
+    payload: Option<String>,
+) {
     let st = state.clone();
     let kind = kind.to_string();
     let title = title.to_string();
@@ -501,7 +579,11 @@ pub fn notify_admin_broadcast(state: &AppState, kind: &str, title: &str, body: &
     });
 }
 
-pub fn notify_announcement_published(state: &AppState, announcement_id: &str, announcement_title: &str) {
+pub fn notify_announcement_published(
+    state: &AppState,
+    announcement_id: &str,
+    announcement_title: &str,
+) {
     let st = state.clone();
     let aid = announcement_id.to_string();
     let at = announcement_title.trim().to_string();
@@ -530,7 +612,11 @@ pub fn notify_announcement_published(state: &AppState, announcement_id: &str, an
     });
 }
 
-pub fn notify_competition_roster_updated(state: &AppState, competition_id: &str, competition_title_str: &str) {
+pub fn notify_competition_roster_updated(
+    state: &AppState,
+    competition_id: &str,
+    competition_title_str: &str,
+) {
     let st = state.clone();
     let cid = competition_id.to_string();
     let ct = competition_title_str.to_string();
@@ -638,7 +724,9 @@ pub fn notify_training_plan_progress_updated(
             progress_percent,
             title
         );
-        let payload = serde_json::json!({ "athlete_id": aid, "progress_percent": progress_percent }).to_string();
+        let payload =
+            serde_json::json!({ "athlete_id": aid, "progress_percent": progress_percent })
+                .to_string();
         for uid in trainer_staff_ids(conn).await? {
             insert_notification(
                 conn,
@@ -663,7 +751,10 @@ pub async fn diff_notify_athlete_competition_assignments(
     let conn_arc = state.db.raw().await;
     let conn = conn_arc.as_ref();
     let mut titles: HashMap<String, String> = HashMap::new();
-    let all_ids: HashSet<String> = old_competition_ids.union(&new_competition_ids).cloned().collect();
+    let all_ids: HashSet<String> = old_competition_ids
+        .union(&new_competition_ids)
+        .cloned()
+        .collect();
     for cid in all_ids {
         if let Ok(Some(t)) = competition_title(conn, &cid).await {
             titles.insert(cid, t);

@@ -1,15 +1,15 @@
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::audit::write_audit_log;
-use crate::chat_cleanup::{prune_inactive_chat_threads, CHAT_INACTIVITY_DAYS};
+use crate::chat_cleanup::{CHAT_INACTIVITY_DAYS, prune_inactive_chat_threads};
 use crate::middleware::auth::{Claims, RequireAdminOrSuperAdmin};
 use crate::models::Role;
 use crate::notifications;
@@ -96,10 +96,12 @@ async fn load_sender_display(
 }
 
 fn can_chat(claims: &Claims) -> bool {
-    claims
-        .roles
-        .iter()
-        .any(|r| matches!(r, Role::Athlete | Role::Trainer | Role::Admin | Role::SuperAdmin))
+    claims.roles.iter().any(|r| {
+        matches!(
+            r,
+            Role::Athlete | Role::Trainer | Role::Admin | Role::SuperAdmin
+        )
+    })
 }
 
 pub async fn open_thread(
@@ -315,7 +317,10 @@ pub async fn send_message(
 ) -> Result<Json<ChatMessageDto>, ApiError> {
     let body = payload.body.trim();
     if body.is_empty() {
-        return Err(api_error(StatusCode::BAD_REQUEST, "Treść wiadomości nie może być pusta"));
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Treść wiadomości nie może być pusta",
+        ));
     }
     let mut membership = state
         .db
@@ -367,8 +372,14 @@ pub async fn send_message(
         &state,
         "chat_message",
         "Nowa wiadomość na czacie",
-        &format!("Nowa wiadomość od „{}” (czat trener–zawodnik).", sender_login),
-        Some(serde_json::json!({ "thread_id": thread_id, "target_user_id": target_user }).to_string()),
+        &format!(
+            "Nowa wiadomość od „{}” (czat trener–zawodnik).",
+            sender_login
+        ),
+        Some(
+            serde_json::json!({ "thread_id": thread_id, "target_user_id": target_user })
+                .to_string(),
+        ),
     );
     let _ = write_audit_log(
         conn_arc.as_ref(),

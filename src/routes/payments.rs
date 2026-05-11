@@ -1,13 +1,13 @@
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use chrono::{Datelike, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::audit::write_audit_log;
 use crate::middleware::auth::{Claims, RequireTrainerOrHigher};
 use crate::sql_row;
@@ -134,14 +134,22 @@ fn add_months_yyyy_mm(month: &str, delta: i32) -> Result<String, ApiError> {
 async fn my_athlete_id(state: &AppState, claims: &Claims) -> Result<String, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id FROM athletes WHERE user_id = ?1", [claims.sub.clone()])
+        .query(
+            "SELECT id FROM athletes WHERE user_id = ?1",
+            [claims.sub.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let row = rows
         .next()
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Nie znaleziono profilu zawodnika dla tego konta"))?;
+        .ok_or_else(|| {
+            api_error(
+                StatusCode::NOT_FOUND,
+                "Nie znaleziono profilu zawodnika dla tego konta",
+            )
+        })?;
     let id: String = row.get(0).unwrap_or_default();
     if id.trim().is_empty() {
         return Err(api_error(
@@ -152,7 +160,11 @@ async fn my_athlete_id(state: &AppState, claims: &Claims) -> Result<String, ApiE
     Ok(id)
 }
 
-async fn is_month_paid_approved(state: &AppState, athlete_id: &str, month: &str) -> Result<bool, ApiError> {
+async fn is_month_paid_approved(
+    state: &AppState,
+    athlete_id: &str,
+    month: &str,
+) -> Result<bool, ApiError> {
     let mut rows = state
         .db
         .query(
@@ -264,7 +276,9 @@ pub async fn create_my_payment(
     claims: Claims,
     Json(payload): Json<CreateMyPaymentRequest>,
 ) -> Result<StatusCode, ApiError> {
-    if let Err(()) = crate::post_throttle::record_user_post_attempt(&claims.sub, "payments_my_create") {
+    if let Err(()) =
+        crate::post_throttle::record_user_post_attempt(&claims.sub, "payments_my_create")
+    {
         return Err(api_error(
             StatusCode::TOO_MANY_REQUESTS,
             "Zbyt wiele zgłoszeń składki w krótkim czasie. Odczekaj chwilę i spróbuj ponownie.",
@@ -311,10 +325,16 @@ pub async fn create_my_payment(
 
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
-    let note = payload.note.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let note = payload
+        .note
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     if let Some(a) = payload.amount_pln {
         if !a.is_finite() || a <= 0.0 {
-            return Err(api_error(StatusCode::BAD_REQUEST, "Nieprawidłowa kwota płatności."));
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "Nieprawidłowa kwota płatności.",
+            ));
         }
     }
 
@@ -367,10 +387,8 @@ pub async fn my_payment_status(
         .next()
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let has_standing_order: bool = standing_row
-        .and_then(|r| r.get::<i64>(0).ok())
-        .unwrap_or(0)
-        != 0;
+    let has_standing_order: bool =
+        standing_row.and_then(|r| r.get::<i64>(0).ok()).unwrap_or(0) != 0;
 
     let today = Utc::now().date_naive();
     let is_overdue = today >= due && today.day() >= 10 && !is_paid;
@@ -387,7 +405,10 @@ pub async fn my_payment_status(
 async fn athlete_exists(state: &AppState, athlete_id: &str) -> Result<(), ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id FROM athletes WHERE id = ?1", [athlete_id.to_string()])
+        .query(
+            "SELECT id FROM athletes WHERE id = ?1",
+            [athlete_id.to_string()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if rows
@@ -904,4 +925,3 @@ pub async fn create_approved_payment_for_athlete(
 
     Ok(StatusCode::CREATED)
 }
-

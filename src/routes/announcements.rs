@@ -1,14 +1,14 @@
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use chrono::Utc;
 use libsql::Row;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::middleware::auth::{Claims, RequireAdminOrSuperAdmin};
 use crate::models::Announcement;
 use crate::notifications;
@@ -70,8 +70,15 @@ pub async fn list_announcements_public(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut out = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
-        out.push(row_to_ann(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?);
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        out.push(
+            row_to_ann(&row)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        );
     }
     Ok(Json(out))
 }
@@ -90,8 +97,15 @@ pub async fn list_announcements_manage(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut out = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
-        out.push(row_to_ann(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?);
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        out.push(
+            row_to_ann(&row)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        );
     }
     Ok(Json(out))
 }
@@ -154,11 +168,18 @@ pub async fn update_announcement(
 ) -> Result<Json<Announcement>, ApiError> {
     let mut rows = state
         .db
-        .query(&format!("SELECT {COLS} FROM announcements WHERE id = ?1"), [id.clone()])
+        .query(
+            &format!("SELECT {COLS} FROM announcements WHERE id = ?1"),
+            [id.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let existing = if let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+    let existing = if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
         row_to_ann(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     } else {
         return Err(api_error(StatusCode::NOT_FOUND, "Announcement not found"));

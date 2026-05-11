@@ -1,16 +1,16 @@
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::audit::write_audit_log;
-use crate::middleware::auth::{claims_has_staff_access, Claims, RequireTrainerOrHigher};
+use crate::middleware::auth::{Claims, RequireTrainerOrHigher, claims_has_staff_access};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
@@ -43,7 +43,10 @@ pub async fn list_feature_flags(
         None
     } else {
         if !can_list_any && claims.sub != target_user {
-            return Err(api_error(StatusCode::FORBIDDEN, "Brak dostępu do flag innego użytkownika"));
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "Brak dostępu do flag innego użytkownika",
+            ));
         }
         Some(target_user)
     };
@@ -99,12 +102,18 @@ pub async fn upsert_feature_flag(
 ) -> Result<Json<FeatureFlagRecord>, ApiError> {
     let flag_name = name.trim().to_lowercase();
     if flag_name.is_empty() {
-        return Err(api_error(StatusCode::BAD_REQUEST, "Nazwa flagi nie może być pusta"));
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Nazwa flagi nie może być pusta",
+        ));
     }
     let target_user = payload.user_id.as_ref().map(|v| v.trim().to_string());
     if let Some(uid) = target_user.as_ref() {
         if uid.is_empty() {
-            return Err(api_error(StatusCode::BAD_REQUEST, "user_id nie może być pusty"));
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "user_id nie może być pusty",
+            ));
         }
     }
 

@@ -1,14 +1,14 @@
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use chrono::{SecondsFormat, Utc};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::api_error::{api_error, ApiError};
-use crate::middleware::auth::{claims_has_staff_access, claims_is_pure_athlete, Claims};
+use crate::api_error::{ApiError, api_error};
+use crate::middleware::auth::{Claims, claims_has_staff_access, claims_is_pure_athlete};
 use crate::models::{Role, TrainingLogEntry};
 use crate::state::AppState;
 
@@ -119,7 +119,10 @@ async fn ensure_can_write_training_log(
 }
 
 /// Zawodnik może zmieniać lub usuwać wyłącznie wpisy utworzone przez siebie (`author_user_id`).
-fn ensure_athlete_only_own_entries(claims: &Claims, entry: &TrainingLogEntry) -> Result<(), ApiError> {
+fn ensure_athlete_only_own_entries(
+    claims: &Claims,
+    entry: &TrainingLogEntry,
+) -> Result<(), ApiError> {
     if !claims_is_pure_athlete(claims) {
         return Ok(());
     }
@@ -188,10 +191,7 @@ pub async fn create_training_log(
 
     let notes = payload.notes.trim();
     if notes.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "notes cannot be empty",
-        ));
+        return Err(api_error(StatusCode::BAD_REQUEST, "notes cannot be empty"));
     }
 
     let session_date = payload.session_date.trim();

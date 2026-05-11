@@ -31,16 +31,10 @@ pub fn public_id_from_delivery_url(url: &str) -> Option<String> {
     if after_upload.is_empty() {
         return None;
     }
-    let parts: Vec<&str> = after_upload
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .collect();
+    let parts: Vec<&str> = after_upload.split('/').filter(|s| !s.is_empty()).collect();
     let mut start_idx = 0usize;
     for (idx, p) in parts.iter().enumerate() {
-        if p.len() > 1
-            && p.starts_with('v')
-            && p[1..].chars().all(|c| c.is_ascii_digit())
-        {
+        if p.len() > 1 && p.starts_with('v') && p[1..].chars().all(|c| c.is_ascii_digit()) {
             start_idx = idx + 1;
             break;
         }
@@ -55,11 +49,7 @@ pub fn public_id_from_delivery_url(url: &str) -> Option<String> {
             pid.truncate(dot);
         }
     }
-    if pid.is_empty() {
-        None
-    } else {
-        Some(pid)
-    }
+    if pid.is_empty() { None } else { Some(pid) }
 }
 
 /// Usuwa obraz po URL z CDN Cloudinary (np. po wgraniu nowego avatara). Błędy są ignorowane (np. już skasowany).

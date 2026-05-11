@@ -1,15 +1,15 @@
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::audit::write_audit_log;
-use crate::middleware::auth::{claims_has_staff_access, Claims};
+use crate::middleware::auth::{Claims, claims_has_staff_access};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
@@ -43,7 +43,10 @@ pub struct RecoveryQuery {
 async fn athlete_id_for_user(state: &AppState, user_id: &str) -> Result<Option<String>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id FROM athletes WHERE user_id = ?1", [user_id.to_string()])
+        .query(
+            "SELECT id FROM athletes WHERE user_id = ?1",
+            [user_id.to_string()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let row = rows
@@ -109,7 +112,11 @@ pub async fn upsert_my_recovery_log(
     let fatigue = clamp(payload.fatigue_level);
     let soreness = clamp(payload.soreness_level);
     let readiness = clamp(payload.readiness_level);
-    let note = payload.note.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let note = payload
+        .note
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     let mut exists = state
         .db
@@ -190,9 +197,10 @@ pub async fn upsert_my_recovery_log(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let conn_arc = state.db.raw().await;
-    let athlete_label = crate::notifications::athlete_display_for_notification(conn_arc.as_ref(), &athlete_id)
-        .await
-        .unwrap_or_else(|_| "Zawodnik".to_string());
+    let athlete_label =
+        crate::notifications::athlete_display_for_notification(conn_arc.as_ref(), &athlete_id)
+            .await
+            .unwrap_or_else(|_| "Zawodnik".to_string());
 
     crate::notifications::notify_admin_broadcast(
         &state,
@@ -203,7 +211,10 @@ pub async fn upsert_my_recovery_log(
             athlete_label,
             payload.date.trim()
         ),
-        Some(serde_json::json!({ "athlete_id": athlete_id, "date": payload.date.trim() }).to_string()),
+        Some(
+            serde_json::json!({ "athlete_id": athlete_id, "date": payload.date.trim() })
+                .to_string(),
+        ),
     );
     let details = serde_json::json!({
         "date": payload.date.trim(),
@@ -244,9 +255,12 @@ pub async fn list_recovery_logs(
     Query(query): Query<RecoveryQuery>,
 ) -> Result<Json<Vec<RecoveryLog>>, ApiError> {
     let athlete_id = if claims_has_staff_access(&claims) {
-        query
-            .athlete_id
-            .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "athlete_id is required for staff view"))?
+        query.athlete_id.ok_or_else(|| {
+            api_error(
+                StatusCode::BAD_REQUEST,
+                "athlete_id is required for staff view",
+            )
+        })?
     } else {
         athlete_id_for_user(&state, &claims.sub)
             .await?

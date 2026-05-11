@@ -2,15 +2,15 @@
 //! Kadra zapisuje wyjątki: status (`cancelled`, `moved`, …) — widoczne w kalendarzu klubu i u zawodników.
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use chrono::{Datelike, NaiveDate, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::middleware::auth::RequireTrainerOrHigher;
 use crate::state::AppState;
 
@@ -29,12 +29,8 @@ pub struct UpsertRecurringTrainingBody {
 }
 
 fn parse_club_training_date(raw: &str) -> Result<NaiveDate, ApiError> {
-    let d = NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d").map_err(|_| {
-        api_error(
-            StatusCode::BAD_REQUEST,
-            "session_date must be YYYY-MM-DD",
-        )
-    })?;
+    let d = NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d")
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "session_date must be YYYY-MM-DD"))?;
     match d.weekday() {
         Weekday::Mon | Weekday::Wed | Weekday::Fri => Ok(d),
         _ => Err(api_error(
@@ -74,10 +70,12 @@ pub async fn list_recurring_training_cancellations(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        let session_date: String =
-            row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        let status: String =
-            row.get(1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let session_date: String = row
+            .get(0)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let status: String = row
+            .get(1)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         out.push(RecurringTrainingSession {
             session_date,
             status,
@@ -94,9 +92,7 @@ pub async fn upsert_recurring_training_session(
     let d = parse_club_training_date(&body.session_date)?;
     let session_date = d.format("%Y-%m-%d").to_string();
 
-    let status_raw = body
-        .status
-        .unwrap_or_else(|| "cancelled".to_string());
+    let status_raw = body.status.unwrap_or_else(|| "cancelled".to_string());
     let status_norm = normalize_status(&status_raw)?;
 
     if status_norm == "scheduled" {
@@ -154,7 +150,10 @@ pub async fn restore_recurring_training_session(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if n == 0 {
-        return Err(api_error(StatusCode::NOT_FOUND, "No override for this date"));
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            "No override for this date",
+        ));
     }
     Ok(StatusCode::NO_CONTENT)
 }
