@@ -1,12 +1,12 @@
 //! Opcjonalne TOTP (np. Google Authenticator) — konfiguracja po zalogowaniu: `/api/auth/totp/*`.
 
-use axum::{extract::State, http::StatusCode, Json};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
+use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
-use totp_lite::{totp_custom, Sha1};
+use totp_lite::{Sha1, totp_custom};
 use uuid::Uuid;
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::middleware::auth::Claims;
 use crate::state::AppState;
 
@@ -131,7 +131,10 @@ pub async fn totp_setup_handler(
     .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut rows2 = conn
-        .query("SELECT username FROM users WHERE id = ?1", [claims.sub.clone()])
+        .query(
+            "SELECT username FROM users WHERE id = ?1",
+            [claims.sub.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let uname: String = rows2
@@ -145,7 +148,8 @@ pub async fn totp_setup_handler(
     let label = urlencoding::encode(&label_raw);
     let issuer = urlencoding::encode("Slavia");
     let sec = urlencoding::encode(&secret_base32);
-    let otpauth_uri = format!("otpauth://totp/{label}?secret={sec}&issuer={issuer}&period=30&digits=6");
+    let otpauth_uri =
+        format!("otpauth://totp/{label}?secret={sec}&issuer={issuer}&period=30&digits=6");
 
     Ok(Json(TotpSetupResponse {
         secret_base32,
@@ -188,9 +192,12 @@ pub async fn totp_enable_handler(
     if enabled != 0 {
         return Err(api_error(StatusCode::BAD_REQUEST, "2FA jest już włączone."));
     }
-    let secret_b32 = secret_b32
-        .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "Najpierw wywołaj POST /api/auth/totp/setup."))?;
+    let secret_b32 = secret_b32.filter(|s| !s.trim().is_empty()).ok_or_else(|| {
+        api_error(
+            StatusCode::BAD_REQUEST,
+            "Najpierw wywołaj POST /api/auth/totp/setup.",
+        )
+    })?;
 
     let raw = decode_base32(&secret_b32).ok_or_else(|| {
         api_error(
@@ -246,7 +253,9 @@ pub async fn totp_disable_handler(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Użytkownik nie istnieje"))?;
-    let hash: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let hash: String = row
+        .get(0)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let enabled: i64 = row.get(1).unwrap_or(0);
     if enabled == 0 {
         conn.execute(

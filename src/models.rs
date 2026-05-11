@@ -192,7 +192,7 @@ pub struct Competition {
     pub location: String,
     pub description: Option<String>,
     pub category: Option<String>, // "championship", "league", "club_event", "training"
-    pub status: Option<String>, // "scheduled", "cancelled", "moved"
+    pub status: Option<String>,   // "scheduled", "cancelled", "moved"
     /// np. `pzpc`, `podnoszenieciezarow` — brak = zawody utworzone w klubie
     #[serde(default)]
     pub external_source: Option<String>,

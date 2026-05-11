@@ -18,7 +18,10 @@ fn row_to_dto(row: &Row) -> Result<NotificationDto, libsql::Error> {
     })
 }
 
-pub async fn list_for_user(conn: &Connection, user_id: &str) -> Result<Vec<NotificationDto>, libsql::Error> {
+pub async fn list_for_user(
+    conn: &Connection,
+    user_id: &str,
+) -> Result<Vec<NotificationDto>, libsql::Error> {
     let mut rows = conn
         .query(
             "SELECT id, kind, title, body, payload, created_at, is_read FROM notifications \
@@ -42,7 +45,11 @@ pub async fn delete_one(conn: &Connection, id: &str, user_id: &str) -> Result<u6
     .await
 }
 
-pub async fn mark_one_read(conn: &Connection, id: &str, user_id: &str) -> Result<u64, libsql::Error> {
+pub async fn mark_one_read(
+    conn: &Connection,
+    id: &str,
+    user_id: &str,
+) -> Result<u64, libsql::Error> {
     conn.execute(
         "UPDATE notifications SET is_read = 1 WHERE id = ?1 AND user_id = ?2",
         (id.to_string(), user_id.to_string()),

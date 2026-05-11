@@ -1,14 +1,14 @@
 use std::collections::HashSet;
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
-use serde::{Deserialize, Serialize};
 use chrono::{SecondsFormat, Utc};
+use serde::{Deserialize, Serialize};
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::middleware::auth::{Claims, RequireTrainerOrHigher};
 use crate::models::{Competition, Role};
 use crate::state::AppState;
@@ -36,7 +36,10 @@ pub async fn list_competitions_for_athlete(
 ) -> Result<Json<Vec<Competition>>, ApiError> {
     let mut chk = state
         .db
-        .query("SELECT id FROM athletes WHERE id = ?1", [athlete_id.clone()])
+        .query(
+            "SELECT id FROM athletes WHERE id = ?1",
+            [athlete_id.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -95,7 +98,10 @@ pub async fn sync_competitions_for_athlete(
 
     let mut chk = state
         .db
-        .query("SELECT id FROM athletes WHERE id = ?1", [athlete_id.clone()])
+        .query(
+            "SELECT id FROM athletes WHERE id = ?1",
+            [athlete_id.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -177,7 +183,13 @@ pub async fn sync_competitions_for_athlete(
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
 
-    crate::notifications::diff_notify_athlete_competition_assignments(&state, &athlete_id, old_ids, new_ids).await;
+    crate::notifications::diff_notify_athlete_competition_assignments(
+        &state,
+        &athlete_id,
+        old_ids,
+        new_ids,
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -309,10 +321,20 @@ pub async fn set_participants(
     }
 
     for added in new_athlete_ids.difference(&old_athlete_ids) {
-        crate::notifications::notify_competition_assigned_to_athlete(&state, added, &competition_id, &comp_title);
+        crate::notifications::notify_competition_assigned_to_athlete(
+            &state,
+            added,
+            &competition_id,
+            &comp_title,
+        );
     }
     for removed in old_athlete_ids.difference(&new_athlete_ids) {
-        crate::notifications::notify_competition_unassigned_from_athlete(&state, removed, &competition_id, &comp_title);
+        crate::notifications::notify_competition_unassigned_from_athlete(
+            &state,
+            removed,
+            &competition_id,
+            &comp_title,
+        );
     }
     crate::notifications::notify_competition_roster_updated(&state, &competition_id, &comp_title);
 
@@ -356,11 +378,7 @@ pub async fn my_calendar_for_athlete(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let athlete_id: String = match athlete_row {
         Some(r) => r.get(0).unwrap(),
-        None => {
-            return Ok(Json(MyCalendarResponse {
-                entries: vec![],
-            }))
-        }
+        None => return Ok(Json(MyCalendarResponse { entries: vec![] })),
     };
 
     let mut rows = state

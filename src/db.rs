@@ -12,7 +12,7 @@
 //! tej synchronizacji — seed może zostawiać ręczne rekordy do czasu dodania wyników.
 //!
 use libsql::Connection;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 async fn exec0_retry(conn: &Connection, sql: &str, label: &str) -> Result<(), String> {
     // SQLite bywa chwilowo zablokowane (np. równoległe połączenie / statement).
@@ -72,8 +72,8 @@ async fn migrate_remove_trainer_admin_role(conn: &Connection) -> Result<u64, Str
     Ok(updated)
 }
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
     Argon2,
+    password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
 };
 use uuid::Uuid;
 
@@ -146,7 +146,7 @@ pub async fn sync_all_athletes_bests_from_results(conn: &Connection) -> Result<u
 pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Ustaw w `.env`: REBUILD_DB=true (jednorazowo, tylko dev), potem false — patrz `.env.example`
     let rebuild = std::env::var("REBUILD_DB").unwrap_or_default() == "true";
-    
+
     if rebuild {
         println!("🧹 REBUILD_DB=true: Czyszczenie bazy danych...");
         reset_database(conn).await?;
@@ -485,9 +485,24 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         .await;
 
     // Migrate: add category and status columns if missing (safe for existing DBs)
-    let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category TEXT DEFAULT 'club_event'", ()).await;
-    let _ = conn.execute("ALTER TABLE competitions ADD COLUMN status TEXT DEFAULT 'scheduled'", ()).await;
-    let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category_override TEXT", ()).await;
+    let _ = conn
+        .execute(
+            "ALTER TABLE competitions ADD COLUMN category TEXT DEFAULT 'club_event'",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
+            "ALTER TABLE competitions ADD COLUMN status TEXT DEFAULT 'scheduled'",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
+            "ALTER TABLE competitions ADD COLUMN category_override TEXT",
+            (),
+        )
+        .await;
 
     // Migrate: kolumna is_active przy starszych instancjach Turso (bez niej SELECT na liście publicznej się wywali)
     let _ = conn
@@ -552,7 +567,9 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         .await;
 
     // TOTP (2FA opcjonalne) — sekret Base32 w plaintext (DB musi być chroniona); włączenie po weryfikacji kodu.
-    let _ = conn.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT", ()).await;
+    let _ = conn
+        .execute("ALTER TABLE users ADD COLUMN totp_secret TEXT", ())
+        .await;
     let _ = conn
         .execute(
             "ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0",
@@ -568,7 +585,10 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         .await;
 
     let _ = conn
-        .execute("ALTER TABLE competitions ADD COLUMN external_source TEXT", ())
+        .execute(
+            "ALTER TABLE competitions ADD COLUMN external_source TEXT",
+            (),
+        )
         .await;
     let _ = conn
         .execute("ALTER TABLE competitions ADD COLUMN external_ref TEXT", ())
@@ -596,10 +616,18 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         )
         .await;
 
-    let _ = conn.execute("ALTER TABLE results ADD COLUMN squat_kg REAL", ()).await;
-    let _ = conn.execute("ALTER TABLE results ADD COLUMN bench_kg REAL", ()).await;
-    let _ = conn.execute("ALTER TABLE results ADD COLUMN deadlift_kg REAL", ()).await;
-    let _ = conn.execute("ALTER TABLE results ADD COLUMN bodyweight_kg REAL", ()).await;
+    let _ = conn
+        .execute("ALTER TABLE results ADD COLUMN squat_kg REAL", ())
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE results ADD COLUMN bench_kg REAL", ())
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE results ADD COLUMN deadlift_kg REAL", ())
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE results ADD COLUMN bodyweight_kg REAL", ())
+        .await;
     // Rozróżnienie wpisów: 'competition' (publiczne, ranking, public-board) vs 'training' (tylko po zalogowaniu).
     let _ = conn
         .execute(
@@ -624,7 +652,9 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             (),
         )
         .await;
-    let _ = conn.execute("ALTER TABLE chat_threads ADD COLUMN title TEXT", ()).await;
+    let _ = conn
+        .execute("ALTER TABLE chat_threads ADD COLUMN title TEXT", ())
+        .await;
     let _ = conn
         .execute(
             "ALTER TABLE notifications ADD COLUMN is_read INTEGER NOT NULL DEFAULT 0",
@@ -700,13 +730,19 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             let id: String = row.get(0).map_err(|e| format!("get id: {e}"))?;
             let role: String = row.get(1).map_err(|e| format!("get role: {e}"))?;
             let roles_json = format!("[\"{}\"]", role);
-            conn.execute("UPDATE users SET roles = ?1 WHERE id = ?2", (roles_json, id))
-                .await
-                .map_err(|e| format!("update roles: {e}"))?;
+            conn.execute(
+                "UPDATE users SET roles = ?1 WHERE id = ?2",
+                (roles_json, id),
+            )
+            .await
+            .map_err(|e| format!("update roles: {e}"))?;
             migrated += 1;
         }
     }
-    println!("🔄 Migracja: users.role → users.roles (JSON array) (migrated {} users).", migrated);
+    println!(
+        "🔄 Migracja: users.role → users.roles (JSON array) (migrated {} users).",
+        migrated
+    );
 
     // Usunięcie legacy kolumny `users.role` (SQLite nie wspiera DROP COLUMN -> rekonstrukcja tabeli)
     if role_column_exists > 0 {
@@ -714,7 +750,12 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         // Wyłącz FK na czas rekonstrukcji.
         let _ = conn.execute("PRAGMA foreign_keys = OFF", ()).await;
         // BEGIN IMMEDIATE — weź write-lock od razu (mniej szans na DROP/ALTER lock).
-        exec0_retry(conn, "BEGIN IMMEDIATE", "BEGIN IMMEDIATE drop users.role migration").await?;
+        exec0_retry(
+            conn,
+            "BEGIN IMMEDIATE",
+            "BEGIN IMMEDIATE drop users.role migration",
+        )
+        .await?;
 
         // Nowy schemat bez `role`
         exec0_retry(
@@ -767,7 +808,12 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         .await?;
 
         exec0_retry(conn, "DROP TABLE users", "DROP TABLE users").await?;
-        exec0_retry(conn, "ALTER TABLE users__new RENAME TO users", "RENAME users__new").await?;
+        exec0_retry(
+            conn,
+            "ALTER TABLE users__new RENAME TO users",
+            "RENAME users__new",
+        )
+        .await?;
 
         exec0_retry(conn, "COMMIT", "COMMIT drop users.role migration").await?;
         let _ = conn.execute("PRAGMA foreign_keys = ON", ()).await;
@@ -804,7 +850,12 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         if email_column_exists > 0 {
             println!("🧱 Migracja: usuwanie users.email (rekonstrukcja tabeli users)...");
             let _ = conn.execute("PRAGMA foreign_keys = OFF", ()).await;
-            exec0_retry(conn, "BEGIN IMMEDIATE", "BEGIN IMMEDIATE drop users.email migration").await?;
+            exec0_retry(
+                conn,
+                "BEGIN IMMEDIATE",
+                "BEGIN IMMEDIATE drop users.email migration",
+            )
+            .await?;
 
             exec0_retry(
                 conn,
@@ -840,7 +891,12 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             .await?;
 
             exec0_retry(conn, "DROP TABLE users", "DROP TABLE users (no email)").await?;
-            exec0_retry(conn, "ALTER TABLE users__new RENAME TO users", "RENAME users__new").await?;
+            exec0_retry(
+                conn,
+                "ALTER TABLE users__new RENAME TO users",
+                "RENAME users__new",
+            )
+            .await?;
             exec0_retry(conn, "COMMIT", "COMMIT drop users.email migration").await?;
             let _ = conn.execute("PRAGMA foreign_keys = ON", ()).await;
             println!("✅ Migracja: users.email usunięta (pozostałe dane zachowane).");
@@ -868,14 +924,18 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
 
         if email_column_exists == 0 {
             println!("🧱 Migracja: dodawanie contact_messages.email...");
-            let _ = conn.execute("ALTER TABLE contact_messages ADD COLUMN email TEXT", ()).await;
+            let _ = conn
+                .execute("ALTER TABLE contact_messages ADD COLUMN email TEXT", ())
+                .await;
         }
     }
 
     Ok(())
 }
 
-pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn reset_database(
+    conn: &Connection,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let drop_tables = [
         "DROP TABLE IF EXISTS exercise_results_history",
         "DROP TABLE IF EXISTS exercise_submissions",
@@ -1211,19 +1271,50 @@ pub async fn reset_database(conn: &Connection) -> Result<(), Box<dyn std::error:
         conn.execute(sql, ()).await?;
     }
 
-    let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category TEXT DEFAULT 'club_event'", ()).await;
-    let _ = conn.execute("ALTER TABLE competitions ADD COLUMN status TEXT DEFAULT 'scheduled'", ()).await;
-    let _ = conn.execute("ALTER TABLE competitions ADD COLUMN category_override TEXT", ()).await;
+    let _ = conn
+        .execute(
+            "ALTER TABLE competitions ADD COLUMN category TEXT DEFAULT 'club_event'",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
+            "ALTER TABLE competitions ADD COLUMN status TEXT DEFAULT 'scheduled'",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
+            "ALTER TABLE competitions ADD COLUMN category_override TEXT",
+            (),
+        )
+        .await;
     let _ = conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_competitions_external_ref ON competitions(external_source, external_ref) WHERE external_source IS NOT NULL AND external_ref IS NOT NULL",
         (),
     )
     .await;
-    let _ = conn.execute("ALTER TABLE athletes ADD COLUMN is_active BOOLEAN DEFAULT 1", ()).await;
-    let _ = conn.execute("UPDATE athletes SET is_active = 1 WHERE is_active IS NULL", ()).await;
-    let _ = conn.execute("ALTER TABLE athletes ADD COLUMN gender TEXT", ()).await;
-    let _ = conn.execute("ALTER TABLE athletes ADD COLUMN profile_tagline TEXT", ()).await;
-    let _ = conn.execute("ALTER TABLE athletes ADD COLUMN public_bio TEXT", ()).await;
+    let _ = conn
+        .execute(
+            "ALTER TABLE athletes ADD COLUMN is_active BOOLEAN DEFAULT 1",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
+            "UPDATE athletes SET is_active = 1 WHERE is_active IS NULL",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE athletes ADD COLUMN gender TEXT", ())
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE athletes ADD COLUMN profile_tagline TEXT", ())
+        .await;
+    let _ = conn
+        .execute("ALTER TABLE athletes ADD COLUMN public_bio TEXT", ())
+        .await;
     let _ = conn
         .execute(
             "ALTER TABLE athletes ADD COLUMN has_standing_order INTEGER NOT NULL DEFAULT 0",
@@ -1242,22 +1333,23 @@ async fn seed_data(conn: &Connection) -> Result<(), Box<dyn std::error::Error + 
 
     // 1. Superadmin (Główny)
     let super_pass = "SLAVIA2026";
-    let super_hash = argon2.hash_password(super_pass.as_bytes(), &salt).map_err(|e| e.to_string())?.to_string();
+    let super_hash = argon2
+        .hash_password(super_pass.as_bytes(), &salt)
+        .map_err(|e| e.to_string())?
+        .to_string();
     let super_id = Uuid::new_v4().to_string();
     conn.execute(
         "INSERT INTO users (id, username, password_hash, roles) VALUES (?1, ?2, ?3, ?4)",
-        (
-            super_id.clone(),
-            "Slavia",
-            super_hash,
-            "[\"SuperAdmin\"]",
-        ),
+        (super_id.clone(), "Slavia", super_hash, "[\"SuperAdmin\"]"),
     )
     .await?;
 
     // 2. Jakub Gawron
     let jakub_pass = "Jakubzofia2030?";
-    let jakub_hash = argon2.hash_password(jakub_pass.as_bytes(), &salt).map_err(|e| e.to_string())?.to_string();
+    let jakub_hash = argon2
+        .hash_password(jakub_pass.as_bytes(), &salt)
+        .map_err(|e| e.to_string())?
+        .to_string();
     let jakub_id = Uuid::new_v4().to_string();
     conn.execute(
         "INSERT INTO users (id, username, password_hash, roles) VALUES (?1, ?2, ?3, ?4)",
@@ -1293,9 +1385,42 @@ async fn seed_data(conn: &Connection) -> Result<(), Box<dyn std::error::Error + 
 
     // 3. Athletes seed with images (kategorie wagowe wg regulaminu PZPC od 1.01.2026)
     let athletes = [
-        ("Anna Nowak", 1998, "female", "Senior K — 69 kg", 63.5, 85.0, 105.0, 190.0, "https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/people/kitchen-bar", "Mistrzyni Polski"),
-        ("Piotr Zieliński", 2002, "male", "Senior M — 110 kg", 101.2, 140.0, 175.0, 315.0, "https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/people/bicycle", "Rekordzista"),
-        ("Marek Przykładowy", 2005, "male", "U23 M — 75 kg", 72.8, 90.0, 115.0, 205.0, "https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/people/boy-snow-hoodie", "Młodzieżowiec"),
+        (
+            "Anna Nowak",
+            1998,
+            "female",
+            "Senior K — 69 kg",
+            63.5,
+            85.0,
+            105.0,
+            190.0,
+            "https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/people/kitchen-bar",
+            "Mistrzyni Polski",
+        ),
+        (
+            "Piotr Zieliński",
+            2002,
+            "male",
+            "Senior M — 110 kg",
+            101.2,
+            140.0,
+            175.0,
+            315.0,
+            "https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/people/bicycle",
+            "Rekordzista",
+        ),
+        (
+            "Marek Przykładowy",
+            2005,
+            "male",
+            "U23 M — 75 kg",
+            72.8,
+            90.0,
+            115.0,
+            205.0,
+            "https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/people/boy-snow-hoodie",
+            "Młodzieżowiec",
+        ),
     ];
 
     for (name, year, gender, cat, bw, snatch, cj, total, img, note) in athletes {
@@ -1312,13 +1437,13 @@ async fn seed_data(conn: &Connection) -> Result<(), Box<dyn std::error::Error + 
         "INSERT INTO competitions (id, title, date, location, description, category) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         (comp_id.clone(), "Mistrzostwa Śląska Seniorów", "2026-06-15", "Ruda Śląska", "Główne zawody.", "championship"),
     ).await?;
-    
+
     let comp_id2 = Uuid::new_v4().to_string();
     conn.execute(
         "INSERT INTO competitions (id, title, date, location, description, category) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         (comp_id2.clone(), "Liga Śląska — Runda 1", "2026-05-20", "Katowice", "Pierwsza runda ligi.", "league"),
     ).await?;
-    
+
     conn.execute(
         "INSERT INTO competitions (id, title, date, location, description, category) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         (Uuid::new_v4().to_string(), "Obóz Letni Slavia", "2026-07-10", "Wisła", "Zgrupowanie letnie.", "club_event"),

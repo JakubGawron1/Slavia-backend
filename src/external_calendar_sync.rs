@@ -6,7 +6,7 @@ use regex::Regex;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use axum::http::StatusCode;
 
 #[derive(Serialize)]
@@ -100,7 +100,8 @@ fn infer_category_from_title(title: &str) -> Option<&'static str> {
         || t.ends_with(" mp")
         || t.contains(" mp,")
         || t.contains("mpp")
-        || (t.contains("mistrzyni") && (t.contains("polsk") || t.contains("ślą") || t.contains("slask")));
+        || (t.contains("mistrzyni")
+            && (t.contains("polsk") || t.contains("ślą") || t.contains("slask")));
     if is_champ_word {
         return Some("championship");
     }
@@ -206,8 +207,8 @@ fn pc_category(color: &str, title: &str) -> &'static str {
 }
 
 fn parse_pc_json(body: &str) -> Result<Vec<UpsertRow>, ApiError> {
-    let arr: Vec<serde_json::Value> =
-        serde_json::from_str(body).map_err(|e| api_error(StatusCode::BAD_REQUEST, e.to_string()))?;
+    let arr: Vec<serde_json::Value> = serde_json::from_str(body)
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, e.to_string()))?;
     let mut out = Vec::new();
     for v in arr {
         let Some(id) = v.get("id").and_then(|x| x.as_u64()) else {

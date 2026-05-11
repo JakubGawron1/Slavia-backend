@@ -1,13 +1,13 @@
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use libsql::Row;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::external_calendar_sync;
 use crate::middleware::auth::{RequireAdminOrSuperAdmin, RequireTrainerOrHigher};
 use crate::models::Competition;
@@ -59,7 +59,8 @@ pub async fn list_competitions(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
         competitions.push(
-            competition_from_row(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            competition_from_row(&row)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
         );
     }
 
@@ -72,8 +73,14 @@ pub async fn create_competition(
     Json(payload): Json<CreateCompetitionRequest>,
 ) -> Result<Json<Competition>, ApiError> {
     let id = Uuid::new_v4().to_string();
-    let category = payload.category.clone().unwrap_or_else(|| "club_event".to_string());
-    let status = payload.status.clone().unwrap_or_else(|| "scheduled".to_string());
+    let category = payload
+        .category
+        .clone()
+        .unwrap_or_else(|| "club_event".to_string());
+    let status = payload
+        .status
+        .clone()
+        .unwrap_or_else(|| "scheduled".to_string());
 
     state
         .db
@@ -114,7 +121,10 @@ pub async fn create_competition(
     }))
 }
 
-async fn competition_external_source(state: &AppState, id: &str) -> Result<Option<String>, ApiError> {
+async fn competition_external_source(
+    state: &AppState,
+    id: &str,
+) -> Result<Option<String>, ApiError> {
     let mut rows = state
         .db
         .query(

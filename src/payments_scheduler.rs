@@ -93,9 +93,7 @@ async fn insert_auto_approved_payment(
 ///
 /// Zwraca liczbę utworzonych Approved-wpisów. Bezpieczne do wywołania ręcznego
 /// (np. ze skryptu admin / endpointu diagnostycznego).
-pub async fn run_standing_orders_for_current_month(
-    conn: &Db,
-) -> Result<usize, libsql::Error> {
+pub async fn run_standing_orders_for_current_month(conn: &Db) -> Result<usize, libsql::Error> {
     let month = current_month_yyyy_mm();
     let pending = select_athletes_needing_auto_payment(conn, &month).await?;
     if pending.is_empty() {
@@ -152,9 +150,7 @@ pub fn spawn_standing_order_task(db: Db) -> JoinHandle<()> {
                     // cisza — nic do roboty
                 }
                 Ok(n) => {
-                    eprintln!(
-                        "[standing-order] utworzono {n} auto-składek za bieżący miesiąc."
-                    );
+                    eprintln!("[standing-order] utworzono {n} auto-składek za bieżący miesiąc.");
                 }
                 Err(e) => {
                     eprintln!("[standing-order] błąd przebiegu: {e}");

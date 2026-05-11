@@ -1,7 +1,7 @@
 //! Błędy API jako `application/json` — `(StatusCode, String)` w Axum mapuje się na `text/plain`,
 //! przez co frontend (`ofetch` / `getApiErrorMessage`) nie widzi pola `message`.
 
-use axum::{http::StatusCode, Json};
+use axum::{Json, http::StatusCode};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -13,5 +13,10 @@ pub type ApiError = (StatusCode, Json<ErrorBody>);
 
 #[must_use]
 pub fn api_error(status: StatusCode, msg: impl Into<String>) -> ApiError {
-    (status, Json(ErrorBody { message: msg.into() }))
+    (
+        status,
+        Json(ErrorBody {
+            message: msg.into(),
+        }),
+    )
 }

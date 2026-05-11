@@ -1,21 +1,21 @@
 use axum::{
-    extract::{Query, State, Path},
-    http::StatusCode,
     Json,
+    extract::{Path, Query, State},
+    http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use libsql::Row;
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::db;
-use crate::state::AppState;
-use crate::models::{CompetitionResult, PublicResultBoardRow, ResultKind, ResultStatus, Role};
 use crate::middleware::auth::{
-    claims_has_staff_access, claims_is_pure_athlete, Claims, RequireTrainerOrHigher,
+    Claims, RequireTrainerOrHigher, claims_has_staff_access, claims_is_pure_athlete,
 };
+use crate::models::{CompetitionResult, PublicResultBoardRow, ResultKind, ResultStatus, Role};
 use crate::sql_row;
+use crate::state::AppState;
 
 /// Domyślne „miejsce" dla wyników treningowych — wszystkie treningi odbywają się na sali klubowej.
 const TRAINING_DEFAULT_LOCATION: &str = "Slavia";
@@ -59,7 +59,10 @@ pub(crate) async fn sync_athlete_bests_from_approved(
 async fn result_row_athlete_id(state: &AppState, result_id: &str) -> Result<String, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT athlete_id FROM results WHERE id = ?1", [result_id.to_string()])
+        .query(
+            "SELECT athlete_id FROM results WHERE id = ?1",
+            [result_id.to_string()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -80,7 +83,10 @@ async fn ensure_can_view_athlete_submissions(
     if claims_has_staff_access(claims) {
         let mut rows = state
             .db
-            .query("SELECT id FROM athletes WHERE id = ?1", [athlete_id.to_string()])
+            .query(
+                "SELECT id FROM athletes WHERE id = ?1",
+                [athlete_id.to_string()],
+            )
             .await
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         if rows
@@ -228,23 +234,40 @@ pub async fn list_public_results_board(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut out = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
-        let competition_title = sql_row::opt_string(&row, 4).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let competition_title = sql_row::opt_string(&row, 4)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         out.push(PublicResultBoardRow {
-            id: sql_row::required_string(&row, 0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            athlete_id: sql_row::required_string(&row, 1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            athlete_name: sql_row::required_string(&row, 2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            competition_id: sql_row::opt_string(&row, 3).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            id: sql_row::required_string(&row, 0)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_id: sql_row::required_string(&row, 1)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_name: sql_row::required_string(&row, 2)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            competition_id: sql_row::opt_string(&row, 3)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
             competition_title,
-            snatch: sql_row::required_f64(&row, 5).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
-            clean_and_jerk: sql_row::required_f64(&row, 6).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
-            total: sql_row::required_f64(&row, 7).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
-            date: sql_row::required_string(&row, 8).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            snatch: sql_row::required_f64(&row, 5)
+                .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            clean_and_jerk: sql_row::required_f64(&row, 6)
+                .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            total: sql_row::required_f64(&row, 7)
+                .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            date: sql_row::required_string(&row, 8)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
             kind: ResultKind::Competition,
-            location: sql_row::opt_string(&row, 12).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-            squat_kg: sql_row::opt_f64(&row, 9).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-            bench_kg: sql_row::opt_f64(&row, 10).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-            deadlift_kg: sql_row::opt_f64(&row, 11).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            location: sql_row::opt_string(&row, 12)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            squat_kg: sql_row::opt_f64(&row, 9)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            bench_kg: sql_row::opt_f64(&row, 10)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            deadlift_kg: sql_row::opt_f64(&row, 11)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
         });
     }
 
@@ -271,22 +294,39 @@ pub async fn list_public_olympic_board(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut out = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
         out.push(PublicResultBoardRow {
-            id: sql_row::required_string(&row, 0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            athlete_id: sql_row::required_string(&row, 1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            athlete_name: sql_row::required_string(&row, 2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            competition_id: sql_row::opt_string(&row, 3).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-            competition_title: sql_row::opt_string(&row, 4).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-            snatch: sql_row::required_f64(&row, 5).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
-            clean_and_jerk: sql_row::required_f64(&row, 6).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
-            total: sql_row::required_f64(&row, 7).map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
-            date: sql_row::required_string(&row, 8).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            id: sql_row::required_string(&row, 0)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_id: sql_row::required_string(&row, 1)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_name: sql_row::required_string(&row, 2)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            competition_id: sql_row::opt_string(&row, 3)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            competition_title: sql_row::opt_string(&row, 4)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            snatch: sql_row::required_f64(&row, 5)
+                .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            clean_and_jerk: sql_row::required_f64(&row, 6)
+                .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            total: sql_row::required_f64(&row, 7)
+                .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            date: sql_row::required_string(&row, 8)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
             kind: ResultKind::Competition,
-            location: sql_row::opt_string(&row, 12).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-            squat_kg: sql_row::opt_f64(&row, 9).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-            bench_kg: sql_row::opt_f64(&row, 10).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-            deadlift_kg: sql_row::opt_f64(&row, 11).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            location: sql_row::opt_string(&row, 12)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            squat_kg: sql_row::opt_f64(&row, 9)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            bench_kg: sql_row::opt_f64(&row, 10)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            deadlift_kg: sql_row::opt_f64(&row, 11)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
         });
     }
     Ok(Json(out))
@@ -302,7 +342,11 @@ pub async fn list_approved_results(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut results = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
         let r = competition_result_from_row(&row)
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
         results.push(r);
@@ -322,7 +366,11 @@ pub async fn list_pending_results(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut results = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
         let r = competition_result_from_row(&row)
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
         results.push(r);
@@ -372,7 +420,11 @@ pub async fn list_athlete_results(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut results = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
         let r = competition_result_from_row(&row)
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
         results.push(r);
@@ -414,7 +466,11 @@ pub async fn list_athlete_result_submissions(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut results = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
         let r = competition_result_from_row(&row)
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
         results.push(r);
@@ -447,21 +503,34 @@ pub async fn create_result(
     };
 
     if claims_is_pure_athlete(&claims) {
-        let mut rows = state.db.query("SELECT id FROM athletes WHERE user_id = ?1", [claims.sub])
-            .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        if let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
-            let athlete_id = sql_row::required_string(&row, 0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        let mut rows = state
+            .db
+            .query("SELECT id FROM athletes WHERE user_id = ?1", [claims.sub])
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        {
+            let athlete_id = sql_row::required_string(&row, 0)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
             if athlete_id != payload.athlete_id {
-                return Err(api_error(StatusCode::FORBIDDEN, "Athletes can only submit their own results"));
+                return Err(api_error(
+                    StatusCode::FORBIDDEN,
+                    "Athletes can only submit their own results",
+                ));
             }
         } else {
-            return Err(api_error(StatusCode::NOT_FOUND, "Athlete profile not found"));
+            return Err(api_error(
+                StatusCode::NOT_FOUND,
+                "Athlete profile not found",
+            ));
         }
     }
 
-    let raw_sent_oly = payload.snatch.is_some()
-        || payload.clean_and_jerk.is_some()
-        || payload.total.is_some();
+    let raw_sent_oly =
+        payload.snatch.is_some() || payload.clean_and_jerk.is_some() || payload.total.is_some();
     let raw_sent_sbd = payload.squat_kg.map(|x| x > 0.0).unwrap_or(false)
         || payload.bench_kg.map(|x| x > 0.0).unwrap_or(false)
         || payload.deadlift_kg.map(|x| x > 0.0).unwrap_or(false);
@@ -476,23 +545,21 @@ pub async fn create_result(
     let baseline = athlete_oly_baseline(&state, &payload.athlete_id).await?;
     let snatch = payload.snatch.unwrap_or(baseline.0);
     let clean_and_jerk = payload.clean_and_jerk.unwrap_or(baseline.1);
-    let total = payload
-        .total
-        .unwrap_or_else(|| snatch + clean_and_jerk);
+    let total = payload.total.unwrap_or_else(|| snatch + clean_and_jerk);
 
-     if snatch < 0.0 || clean_and_jerk < 0.0 || total < 0.0 {
-         return Err(api_error(
-             StatusCode::BAD_REQUEST,
-             "Ciężary nie mogą być ujemne",
-         ));
-     }
-     let oly_positive = snatch > 0.0 || clean_and_jerk > 0.0;
-     if !oly_positive && !raw_sent_sbd {
-         return Err(api_error(
-             StatusCode::BAD_REQUEST,
-             "Podaj dodatnie rwanie i/lub podrzut (0 dozwolone przy kontuzji/jednoboju) albo przynajmniej jedno ćwiczenie siłowe",
-         ));
-     }
+    if snatch < 0.0 || clean_and_jerk < 0.0 || total < 0.0 {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Ciężary nie mogą być ujemne",
+        ));
+    }
+    let oly_positive = snatch > 0.0 || clean_and_jerk > 0.0;
+    if !oly_positive && !raw_sent_sbd {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Podaj dodatnie rwanie i/lub podrzut (0 dozwolone przy kontuzji/jednoboju) albo przynajmniej jedno ćwiczenie siłowe",
+        ));
+    }
 
     let id = Uuid::new_v4().to_string();
     let squat_kg = payload.squat_kg.filter(|x| *x > 0.0);
@@ -595,13 +662,22 @@ pub async fn approve_result(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Result not found"))?;
-    let athlete_id: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let total: f64 = row.get(1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let date: String = row.get(2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let athlete_id: String = row
+        .get(0)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let total: f64 = row
+        .get(1)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let date: String = row
+        .get(2)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let n = state
         .db
-        .execute("UPDATE results SET status = 'Approved' WHERE id = ?1", [id.clone()])
+        .execute(
+            "UPDATE results SET status = 'Approved' WHERE id = ?1",
+            [id.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if n == 0 {
@@ -619,7 +695,10 @@ pub async fn reject_result(
 ) -> Result<StatusCode, ApiError> {
     let n = state
         .db
-        .execute("UPDATE results SET status = 'Rejected' WHERE id = ?1", [id.clone()])
+        .execute(
+            "UPDATE results SET status = 'Rejected' WHERE id = ?1",
+            [id.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if n == 0 {
@@ -678,7 +757,11 @@ pub async fn list_all_results_staff(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut results = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
         let r = competition_result_from_row(&row)
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
         results.push(r);
@@ -731,19 +814,28 @@ pub async fn update_result(
 
     if let Some(v) = payload.snatch {
         if v < 0.0 {
-            return Err(api_error(StatusCode::BAD_REQUEST, "Rwanie nie może być ujemne"));
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "Rwanie nie może być ujemne",
+            ));
         }
         cr.snatch = v;
     }
     if let Some(v) = payload.clean_and_jerk {
         if v < 0.0 {
-            return Err(api_error(StatusCode::BAD_REQUEST, "Podrzut nie może być ujemny"));
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "Podrzut nie może być ujemny",
+            ));
         }
         cr.clean_and_jerk = v;
     }
     if let Some(v) = payload.total {
         if v < 0.0 {
-            return Err(api_error(StatusCode::BAD_REQUEST, "Suma nie może być ujemna"));
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "Suma nie może być ujemna",
+            ));
         }
         cr.total = v;
     } else if payload.snatch.is_some() || payload.clean_and_jerk.is_some() {
@@ -853,7 +945,9 @@ pub async fn batch_approve_results(
     RequireTrainerOrHigher(claims): RequireTrainerOrHigher,
     Json(body): Json<BatchApproveRequest>,
 ) -> Result<Json<BatchApproveResponse>, ApiError> {
-    if let Err(()) = crate::post_throttle::record_user_post_attempt(&claims.sub, "results_batch_approve") {
+    if let Err(()) =
+        crate::post_throttle::record_user_post_attempt(&claims.sub, "results_batch_approve")
+    {
         return Err(api_error(
             StatusCode::TOO_MANY_REQUESTS,
             "Zbyt wiele masowych akceptacji w krótkim czasie. Odczekaj chwilę i spróbuj ponownie.",
@@ -904,10 +998,21 @@ pub async fn batch_approve_results(
             .next()
             .await
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-            .ok_or_else(|| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Brak wiersza po zatwierdzeniu"))?;
-        let athlete_id: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        let total: f64 = row.get(1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        let date: String = row.get(2).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .ok_or_else(|| {
+                api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Brak wiersza po zatwierdzeniu",
+                )
+            })?;
+        let athlete_id: String = row
+            .get(0)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let total: f64 = row
+            .get(1)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let date: String = row
+            .get(2)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         athlete_ids.insert(athlete_id.clone());
         crate::notifications::notify_result_approved(&state, &athlete_id, total, &date);
     }

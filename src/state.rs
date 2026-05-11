@@ -17,7 +17,9 @@ pub struct Db {
 }
 
 impl Db {
-    pub async fn new(backend: DatabaseBackend) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn new(
+        backend: DatabaseBackend,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let conn = Arc::new(connect_database(backend.clone()).await?);
         Ok(Self {
             backend,

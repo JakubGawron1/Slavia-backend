@@ -1,23 +1,23 @@
-use axum::{
-    extract::{State, Path},
-    http::StatusCode,
-    Json,
+use crate::api_error::{ApiError, api_error};
+use crate::middleware::auth::{
+    Claims, RequireAdminOrSuperAdmin, RequireTrainerOrHigher, claims_has_staff_access,
+    forbid_mutating_superadmin_user_record,
 };
+use crate::models::{Athlete, AthletePublic, Role};
+use crate::notifications;
+use crate::routes::admins::user_roles_by_id;
+use crate::sql_row;
+use crate::state::AppState;
+use argon2::PasswordHasher;
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
+use chrono::DateTime;
 use libsql::Row;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use crate::api_error::{api_error, ApiError};
-use crate::models::{Athlete, AthletePublic, Role};
-use crate::notifications;
-use crate::state::AppState;
-use crate::middleware::auth::{
-    claims_has_staff_access, forbid_mutating_superadmin_user_record, Claims, RequireAdminOrSuperAdmin,
-    RequireTrainerOrHigher,
-};
-use crate::routes::admins::user_roles_by_id;
-use crate::sql_row;
-use argon2::PasswordHasher;
-use chrono::DateTime;
 
 /// Utworzenie konta (`users`) dla zawodnika — wyłącznie dla Admin / SuperAdmin (wywołanie jest wcześniej chronione).
 async fn insert_athlete_user_account(
@@ -26,15 +26,15 @@ async fn insert_athlete_user_account(
     password: String,
 ) -> Result<String, ApiError> {
     let argon2 = argon2::Argon2::default();
-    let salt = argon2::password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
+    let salt =
+        argon2::password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
     let hash = argon2
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .to_string();
     let uid = Uuid::new_v4().to_string();
-    let roles_json = serde_json::to_string(&vec![Role::Athlete]).map_err(|e| {
-        api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-    })?;
+    let roles_json = serde_json::to_string(&vec![Role::Athlete])
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     state
         .db
         .execute(
@@ -133,16 +133,14 @@ fn athlete_from_row(row: &Row) -> Result<Athlete, libsql::Error> {
     })
 }
 
-const ATHLETE_ROW_SQL: &str =
-    "SELECT id, user_id, full_name, birth_year, gender, weight_category, bodyweight, \
+const ATHLETE_ROW_SQL: &str = "SELECT id, user_id, full_name, birth_year, gender, weight_category, bodyweight, \
      best_snatch_kg, best_clean_jerk_kg, total_kg, image_url, notes, profile_tagline, public_bio, is_active, has_standing_order \
      FROM athletes";
 
 /// Jak na liście zawodników / profilu publicznym: najpierw zdjęcie konta (`users.avatar_url`), potem karta sportowa.
 /// Kolumna `has_standing_order` zostaje na pozycji 15 (po `is_active`), `avatar_url` na 16 — żeby
 /// `athlete_from_row_merge_public_photo` mogło użyć indeksu o 1 dalej niż w wariancie bez JOIN.
-const ATHLETE_ROW_JOIN_USER_AVATAR_SQL: &str =
-    "SELECT a.id, a.user_id, a.full_name, a.birth_year, a.gender, a.weight_category, a.bodyweight, \
+const ATHLETE_ROW_JOIN_USER_AVATAR_SQL: &str = "SELECT a.id, a.user_id, a.full_name, a.birth_year, a.gender, a.weight_category, a.bodyweight, \
      a.best_snatch_kg, a.best_clean_jerk_kg, a.total_kg, a.image_url, a.notes, a.profile_tagline, a.public_bio, a.is_active, a.has_standing_order, \
      u.avatar_url \
      FROM athletes a \
@@ -264,8 +262,13 @@ pub async fn list_athletes(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut athletes = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
-        let a = athlete_from_row(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let a = athlete_from_row(&row)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         athletes.push(a);
     }
 
@@ -288,7 +291,11 @@ pub async fn list_athletes_public(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut athletes = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
         let a = athlete_from_row_merge_public_photo(&row)
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         athletes.push(a);
@@ -449,7 +456,7 @@ pub async fn update_athlete(
     state
         .db
         .execute(
-        "UPDATE athletes SET 
+            "UPDATE athletes SET 
             full_name = COALESCE(?1, full_name),
             birth_year = ?2,
             gender = ?3,
@@ -465,24 +472,26 @@ pub async fn update_athlete(
             is_active = COALESCE(?13, is_active),
             user_id = COALESCE(?14, user_id)
          WHERE id = ?15",
-        (
-            payload.full_name,
-            payload.birth_year,
-            payload.gender,
-            payload.weight_category,
-            payload.bodyweight,
-            payload.best_snatch_kg,
-            payload.best_clean_jerk_kg,
-            total,
-            payload.image_url,
-            payload.notes,
-            payload.profile_tagline,
-            payload.public_bio,
-            payload.is_active.map(|v| if v { 1 } else { 0 }),
-            user_id_to_set,
-            id.clone()
-        ),
-    ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            (
+                payload.full_name,
+                payload.birth_year,
+                payload.gender,
+                payload.weight_category,
+                payload.bodyweight,
+                payload.best_snatch_kg,
+                payload.best_clean_jerk_kg,
+                total,
+                payload.image_url,
+                payload.notes,
+                payload.profile_tagline,
+                payload.public_bio,
+                payload.is_active.map(|v| if v { 1 } else { 0 }),
+                user_id_to_set,
+                id.clone(),
+            ),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     notifications::notify_admin_broadcast(
         &state,
@@ -501,10 +510,20 @@ pub async fn delete_athlete(
     auth: RequireAdminOrSuperAdmin,
 ) -> Result<StatusCode, ApiError> {
     let claims = &auth.0;
-    let mut rows = state.db.query("SELECT user_id, full_name FROM athletes WHERE id = ?1", [id.clone()])
-        .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
-    if let Some(row) = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT user_id, full_name FROM athletes WHERE id = ?1",
+            [id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
         let user_id: Option<String> = row.get(0).ok();
         let full_name: String = row.get(1).unwrap_or_else(|_| "?".to_string());
 
@@ -513,13 +532,19 @@ pub async fn delete_athlete(
                 forbid_mutating_superadmin_user_record(claims, &roles)?;
             }
         }
-        
-        state.db.execute("DELETE FROM athletes WHERE id = ?1", [id.clone()])
-            .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            
+
+        state
+            .db
+            .execute("DELETE FROM athletes WHERE id = ?1", [id.clone()])
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
         if let Some(uid) = user_id {
-            state.db.execute("DELETE FROM users WHERE id = ?1", [uid])
-                .await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            state
+                .db
+                .execute("DELETE FROM users WHERE id = ?1", [uid])
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         }
 
         notifications::notify_admin_broadcast(
@@ -529,7 +554,7 @@ pub async fn delete_athlete(
             &format!("Usunięto zawodnika: {}.", full_name),
             Some(serde_json::json!({ "athlete_id": id }).to_string()),
         );
-        
+
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(api_error(StatusCode::NOT_FOUND, "Athlete not found"))
@@ -549,11 +574,19 @@ pub async fn me_athlete_handler(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let row = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let row = row.ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Athlete profile not found for this user"))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = row.ok_or_else(|| {
+        api_error(
+            StatusCode::NOT_FOUND,
+            "Athlete profile not found for this user",
+        )
+    })?;
 
-    let athlete =
-        athlete_from_row_merge_public_photo(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let athlete = athlete_from_row_merge_public_photo(&row)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(athlete))
 }
 
@@ -578,14 +611,18 @@ pub struct AthleteTimelineItem {
 }
 
 fn parse_sort_ts(s: &str) -> i64 {
-    DateTime::parse_from_rfc3339(s).map(|d| d.timestamp()).unwrap_or(0)
+    DateTime::parse_from_rfc3339(s)
+        .map(|d| d.timestamp())
+        .unwrap_or(0)
 }
 
 fn can_view_athlete(claims: &Claims) -> bool {
-    claims
-        .roles
-        .iter()
-        .any(|r| matches!(r, Role::Athlete | Role::Trainer | Role::Admin | Role::SuperAdmin))
+    claims.roles.iter().any(|r| {
+        matches!(
+            r,
+            Role::Athlete | Role::Trainer | Role::Admin | Role::SuperAdmin
+        )
+    })
 }
 
 pub async fn athlete_timeline(
@@ -611,7 +648,10 @@ pub async fn athlete_timeline(
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
             .is_none()
         {
-            return Err(api_error(StatusCode::FORBIDDEN, "Brak dostępu do osi czasu tego zawodnika"));
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "Brak dostępu do osi czasu tego zawodnika",
+            ));
         }
     }
 
@@ -709,10 +749,7 @@ pub async fn attach_existing_user_to_athlete(
 ) -> Result<StatusCode, ApiError> {
     let user_id = payload.user_id.trim();
     if user_id.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "user_id is required",
-        ));
+        return Err(api_error(StatusCode::BAD_REQUEST, "user_id is required"));
     }
     let user_id = user_id.to_string();
 
@@ -727,7 +764,8 @@ pub async fn attach_existing_user_to_athlete(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Athlete not found"))?;
-    let athlete = athlete_from_row(&row).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let athlete = athlete_from_row(&row)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if athlete
         .user_id
@@ -782,12 +820,9 @@ pub async fn attach_existing_user_to_athlete(
         "Powiązano istniejące konto ze zawodnikiem",
         &format!(
             "Powiązano konto „{}” ze zawodnikiem {}.",
-            login,
-            athlete.full_name
+            login, athlete.full_name
         ),
-        Some(
-            serde_json::json!({ "athlete_id": athlete_id, "user_id": user_id }).to_string(),
-        ),
+        Some(serde_json::json!({ "athlete_id": athlete_id, "user_id": user_id }).to_string()),
     );
 
     Ok(StatusCode::NO_CONTENT)
@@ -800,7 +835,10 @@ pub async fn detach_user_from_athlete(
 ) -> Result<StatusCode, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT full_name FROM athletes WHERE id = ?1", [athlete_id.clone()])
+        .query(
+            "SELECT full_name FROM athletes WHERE id = ?1",
+            [athlete_id.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let athlete_name = if let Some(row) = rows
@@ -808,14 +846,18 @@ pub async fn detach_user_from_athlete(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        row.get::<String>(0).unwrap_or_else(|_| "Zawodnik".to_string())
+        row.get::<String>(0)
+            .unwrap_or_else(|_| "Zawodnik".to_string())
     } else {
         return Err(api_error(StatusCode::NOT_FOUND, "Athlete not found"));
     };
 
     let n = state
         .db
-        .execute("UPDATE athletes SET user_id = NULL WHERE id = ?1", [athlete_id.clone()])
+        .execute(
+            "UPDATE athletes SET user_id = NULL WHERE id = ?1",
+            [athlete_id.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -842,7 +884,10 @@ pub async fn link_athlete_to_user(
 ) -> Result<StatusCode, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT full_name FROM athletes WHERE id = ?1", [athlete_id.clone()])
+        .query(
+            "SELECT full_name FROM athletes WHERE id = ?1",
+            [athlete_id.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let athlete_name = if let Some(row) = rows
@@ -850,7 +895,8 @@ pub async fn link_athlete_to_user(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        row.get::<String>(0).unwrap_or_else(|_| "Zawodnik".to_string())
+        row.get::<String>(0)
+            .unwrap_or_else(|_| "Zawodnik".to_string())
     } else {
         return Err(api_error(StatusCode::NOT_FOUND, "Athlete not found"));
     };
@@ -858,12 +904,16 @@ pub async fn link_athlete_to_user(
     let password = payload.password.unwrap_or_else(|| "Slavia2026".to_string());
     let linked_username = payload.username.clone();
     let user_id = insert_athlete_user_account(&state, payload.username, password).await?;
-    
+
     // 2. Link to athlete
-    state.db.execute(
-        "UPDATE athletes SET user_id = ?1 WHERE id = ?2",
-        (user_id.clone(), athlete_id.clone()),
-    ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    state
+        .db
+        .execute(
+            "UPDATE athletes SET user_id = ?1 WHERE id = ?2",
+            (user_id.clone(), athlete_id.clone()),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     notifications::notify_admin_broadcast(
         &state,
@@ -873,9 +923,7 @@ pub async fn link_athlete_to_user(
             "Utworzono konto „{}” i powiązano z zawodnikiem {}.",
             linked_username, athlete_name
         ),
-        Some(
-            serde_json::json!({ "athlete_id": athlete_id, "user_id": user_id }).to_string(),
-        ),
+        Some(serde_json::json!({ "athlete_id": athlete_id, "user_id": user_id }).to_string()),
     );
 
     Ok(StatusCode::OK)

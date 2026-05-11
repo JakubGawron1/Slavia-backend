@@ -3,13 +3,13 @@
 use std::path::PathBuf;
 use tower_http::cors::{Any, CorsLayer};
 
+pub mod audit;
 pub mod chat_cleanup;
 pub mod db;
 pub mod dto;
 pub mod middleware;
 pub mod models;
 pub mod notifications;
-pub mod audit;
 pub mod payments_scheduler;
 pub mod repos;
 pub mod router;
@@ -17,11 +17,11 @@ pub mod routes;
 pub mod state;
 
 pub(crate) mod api_error;
+pub mod cloudinary;
+mod external_calendar_sync;
 mod login_throttle;
 mod post_throttle;
 mod sql_row;
-pub mod cloudinary;
-mod external_calendar_sync;
 
 #[cfg(test)]
 mod import_http_integration_test;
@@ -33,10 +33,7 @@ use state::Db;
 #[derive(Debug, Clone)]
 pub enum DatabaseBackend {
     Local(PathBuf),
-    Remote {
-        url: String,
-        auth_token: String,
-    },
+    Remote { url: String, auth_token: String },
 }
 
 /// Buduje router Axum (libsql: SQLite lokalnie lub Turso zdalnie + JWT).
@@ -80,11 +77,7 @@ pub async fn create_app(
     {
         let db_for_initial = db.clone();
         tokio::spawn(async move {
-            match payments_scheduler::run_standing_orders_for_current_month(
-                &db_for_initial,
-            )
-            .await
-            {
+            match payments_scheduler::run_standing_orders_for_current_month(&db_for_initial).await {
                 Ok(0) => {}
                 Ok(n) => eprintln!(
                     "[standing-order] start: utworzono {n} auto-składek za bieżący miesiąc."

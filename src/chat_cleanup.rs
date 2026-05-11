@@ -32,10 +32,7 @@ struct StaleThread {
 }
 
 /// Pobiera wątki, które nie miały aktywności od `cutoff` (RFC3339 UTC).
-async fn select_stale_threads(
-    conn: &Db,
-    cutoff: &str,
-) -> Result<Vec<StaleThread>, libsql::Error> {
+async fn select_stale_threads(conn: &Db, cutoff: &str) -> Result<Vec<StaleThread>, libsql::Error> {
     // COALESCE: wątki bez żadnych wiadomości fallbackują do `created_at`.
     // To pozwala usuwać też puste wątki, które ktoś otworzył i zostawił bez napisania słowa.
     let mut rows = conn

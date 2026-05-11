@@ -6,13 +6,13 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::{Duration, Utc};
 use http_body_util::BodyExt;
-use jsonwebtoken::{encode, EncodingKey, Header};
+use jsonwebtoken::{EncodingKey, Header, encode};
 use tempfile::tempdir;
 use tower::ServiceExt;
 
 use crate::middleware::auth::Claims;
 use crate::models::Role;
-use crate::{create_app, DatabaseBackend};
+use crate::{DatabaseBackend, create_app};
 
 static IMPORT_HTTP_LOCK: Mutex<()> = Mutex::new(());
 
@@ -29,7 +29,12 @@ fn jwt_super(secret: &[u8]) -> String {
         roles: vec![Role::SuperAdmin],
         exp,
     };
-    encode(&Header::default(), &claims, &EncodingKey::from_secret(secret)).expect("jwt encode")
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret),
+    )
+    .expect("jwt encode")
 }
 
 fn jwt_trainer(secret: &[u8]) -> String {
@@ -39,7 +44,12 @@ fn jwt_trainer(secret: &[u8]) -> String {
         roles: vec![Role::Trainer],
         exp,
     };
-    encode(&Header::default(), &claims, &EncodingKey::from_secret(secret)).expect("jwt encode")
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret),
+    )
+    .expect("jwt encode")
 }
 
 fn jwt_athlete(secret: &[u8], user_id: &str) -> String {
@@ -49,7 +59,12 @@ fn jwt_athlete(secret: &[u8], user_id: &str) -> String {
         roles: vec![Role::Athlete],
         exp,
     };
-    encode(&Header::default(), &claims, &EncodingKey::from_secret(secret)).expect("jwt encode")
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret),
+    )
+    .expect("jwt encode")
 }
 
 fn jwt_trainer_for_sub(secret: &[u8], sub: &str) -> String {
@@ -59,7 +74,12 @@ fn jwt_trainer_for_sub(secret: &[u8], sub: &str) -> String {
         roles: vec![Role::Trainer],
         exp,
     };
-    encode(&Header::default(), &claims, &EncodingKey::from_secret(secret)).expect("jwt encode")
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret),
+    )
+    .expect("jwt encode")
 }
 
 async fn response_json(response: axum::response::Response) -> serde_json::Value {
@@ -217,7 +237,10 @@ async fn trainer_plan_and_athlete_recovery_flow_works() {
         .method("POST")
         .uri("/api/training-plans")
         .header("content-type", "application/json")
-        .header("authorization", format!("Bearer {trainer_existing_user_token}"))
+        .header(
+            "authorization",
+            format!("Bearer {trainer_existing_user_token}"),
+        )
         .body(Body::from(
             serde_json::json!({
                 "athlete_id": athlete_id,
@@ -284,9 +307,6 @@ async fn trainer_plan_and_athlete_recovery_flow_works() {
         .header("authorization", format!("Bearer {trainer_token}"))
         .body(Body::empty())
         .expect("request build");
-    let resp_recovery_trainer = app
-        .oneshot(req_recovery_trainer)
-        .await
-        .expect("oneshot");
+    let resp_recovery_trainer = app.oneshot(req_recovery_trainer).await.expect("oneshot");
     assert_eq!(resp_recovery_trainer.status(), StatusCode::OK);
 }

@@ -1,15 +1,15 @@
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::audit::write_audit_log;
-use crate::middleware::auth::{claims_has_staff_access, Claims};
+use crate::middleware::auth::{Claims, claims_has_staff_access};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -142,7 +142,10 @@ fn row_to_dto(row: &libsql::Row) -> TrainingPlanDto {
 async fn athlete_id_for_user(state: &AppState, user_id: &str) -> Result<Option<String>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id FROM athletes WHERE user_id = ?1", [user_id.to_string()])
+        .query(
+            "SELECT id FROM athletes WHERE user_id = ?1",
+            [user_id.to_string()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let row = rows
@@ -219,12 +222,19 @@ pub async fn create_training_plan(
         return Err(api_error(StatusCode::FORBIDDEN, "Insufficient permissions"));
     }
     if payload.title.trim().is_empty() || payload.week_start.trim().is_empty() {
-        return Err(api_error(StatusCode::BAD_REQUEST, "title and week_start are required"));
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "title and week_start are required",
+        ));
     }
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let status = normalize_status(payload.status.as_deref());
-    let goal = payload.goal.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let goal = payload
+        .goal
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let coach_note = payload
         .coach_note
         .as_ref()
@@ -315,11 +325,27 @@ pub async fn update_training_plan(
                updated_at = ?6
              WHERE id = ?7",
             (
-                payload.title.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-                payload.goal.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-                payload.week_start.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+                payload
+                    .title
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+                payload
+                    .goal
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+                payload
+                    .week_start
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
                 status,
-                payload.coach_note.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+                payload
+                    .coach_note
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
                 now,
                 plan_id.clone(),
             ),
@@ -437,7 +463,10 @@ pub async fn delete_training_plan(
     }
     let n = state
         .db
-        .execute("DELETE FROM training_plans WHERE id = ?1", [plan_id.clone()])
+        .execute(
+            "DELETE FROM training_plans WHERE id = ?1",
+            [plan_id.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if n == 0 {
@@ -538,7 +567,10 @@ pub async fn update_plan_items(
     // Upewnij się, że plan istnieje (czytelniejszy błąd niż ciche zapisanie pustej listy).
     let mut plan_rows = state
         .db
-        .query("SELECT athlete_id, title FROM training_plans WHERE id = ?1", [plan_id.clone()])
+        .query(
+            "SELECT athlete_id, title FROM training_plans WHERE id = ?1",
+            [plan_id.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let plan_row = plan_rows
@@ -547,11 +579,16 @@ pub async fn update_plan_items(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Plan not found"))?;
     let athlete_id: String = plan_row.get(0).unwrap_or_default();
-    let plan_title: String = plan_row.get(1).unwrap_or_else(|_| "Plan treningowy".to_string());
+    let plan_title: String = plan_row
+        .get(1)
+        .unwrap_or_else(|_| "Plan treningowy".to_string());
 
     state
         .db
-        .execute("DELETE FROM training_plan_items WHERE plan_id = ?1", [plan_id.clone()])
+        .execute(
+            "DELETE FROM training_plan_items WHERE plan_id = ?1",
+            [plan_id.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

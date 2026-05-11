@@ -92,19 +92,17 @@ fn load_database_backend(secrets: Option<&toml::Table>) -> Result<DatabaseBacken
     })
 }
 
-fn load_config(
-) -> Result<(DatabaseBackend, String, String, String, String), Box<dyn std::error::Error + Send + Sync>>
-{
+fn load_config() -> Result<
+    (DatabaseBackend, String, String, String, String),
+    Box<dyn std::error::Error + Send + Sync>,
+> {
     let secrets = load_secrets_table();
 
-    let database = load_database_backend(secrets.as_ref()).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-        e.into()
-    })?;
+    let database = load_database_backend(secrets.as_ref())
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
 
-    let jwt_secret =
-        pick_cfg(secrets.as_ref(), "JWT_SECRET", "JWT_SECRET").unwrap_or_else(|| {
-            "default_secret_for_dev_only".to_string()
-        });
+    let jwt_secret = pick_cfg(secrets.as_ref(), "JWT_SECRET", "JWT_SECRET")
+        .unwrap_or_else(|| "default_secret_for_dev_only".to_string());
 
     let cn = pick_cfg(
         secrets.as_ref(),

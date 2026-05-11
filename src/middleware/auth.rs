@@ -1,11 +1,11 @@
 use axum::{
     extract::{FromRequestParts, OptionalFromRequestParts},
-    http::{request::Parts, StatusCode},
+    http::{StatusCode, request::Parts},
 };
-use jsonwebtoken::{decode, DecodingKey, Validation};
+use jsonwebtoken::{DecodingKey, Validation, decode};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::api_error::{api_error, ApiError};
+use crate::api_error::{ApiError, api_error};
 use crate::models::Role;
 use crate::state::AppState;
 
@@ -95,7 +95,10 @@ pub(crate) fn forbid_mutating_superadmin_user_record(
 impl FromRequestParts<AppState> for Claims {
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let auth_header = parts
             .headers
             .get(axum::http::header::AUTHORIZATION)
@@ -103,11 +106,19 @@ impl FromRequestParts<AppState> for Claims {
 
         let auth_header = match auth_header {
             Some(header) => header,
-            None => return Err(api_error(StatusCode::UNAUTHORIZED, "Missing Authorization header")),
+            None => {
+                return Err(api_error(
+                    StatusCode::UNAUTHORIZED,
+                    "Missing Authorization header",
+                ));
+            }
         };
 
         if !auth_header.starts_with("Bearer ") {
-            return Err(api_error(StatusCode::UNAUTHORIZED, "Invalid Authorization header"));
+            return Err(api_error(
+                StatusCode::UNAUTHORIZED,
+                "Invalid Authorization header",
+            ));
         }
 
         let token = &auth_header["Bearer ".len()..];
@@ -173,8 +184,12 @@ pub struct RequireSuperAdmin(pub Claims);
 impl FromRequestParts<AppState> for RequireSuperAdmin {
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let claims = <Claims as FromRequestParts<AppState>>::from_request_parts(parts, state).await?;
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let claims =
+            <Claims as FromRequestParts<AppState>>::from_request_parts(parts, state).await?;
         if !claims.roles.contains(&Role::SuperAdmin) {
             return Err(api_error(StatusCode::FORBIDDEN, "Requires SuperAdmin role"));
         }
@@ -187,10 +202,17 @@ pub struct RequireAdminOrSuperAdmin(pub Claims);
 impl FromRequestParts<AppState> for RequireAdminOrSuperAdmin {
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let claims = <Claims as FromRequestParts<AppState>>::from_request_parts(parts, state).await?;
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let claims =
+            <Claims as FromRequestParts<AppState>>::from_request_parts(parts, state).await?;
         if !claims.roles.contains(&Role::Admin) && !claims.roles.contains(&Role::SuperAdmin) {
-            return Err(api_error(StatusCode::FORBIDDEN, "Requires Admin or SuperAdmin role"));
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "Requires Admin or SuperAdmin role",
+            ));
         }
         Ok(RequireAdminOrSuperAdmin(claims))
     }
@@ -201,10 +223,21 @@ pub struct RequireTrainerOrHigher(pub Claims);
 impl FromRequestParts<AppState> for RequireTrainerOrHigher {
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let claims = <Claims as FromRequestParts<AppState>>::from_request_parts(parts, state).await?;
-        if !claims.roles.iter().any(|r| matches!(r, Role::Trainer | Role::SuperAdmin)) {
-            return Err(api_error(StatusCode::FORBIDDEN, "Requires Trainer or higher role"));
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let claims =
+            <Claims as FromRequestParts<AppState>>::from_request_parts(parts, state).await?;
+        if !claims
+            .roles
+            .iter()
+            .any(|r| matches!(r, Role::Trainer | Role::SuperAdmin))
+        {
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "Requires Trainer or higher role",
+            ));
         }
         Ok(RequireTrainerOrHigher(claims))
     }
@@ -215,7 +248,7 @@ mod jwt_claims_tests {
     use super::*;
     use crate::models::Role;
     use chrono::{Duration, Utc};
-    use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+    use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 
     #[test]
     fn claims_serde_json_roundtrip() {
