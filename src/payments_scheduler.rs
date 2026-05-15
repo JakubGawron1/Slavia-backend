@@ -8,6 +8,7 @@
 //! kolejne uruchomienia nie generują duplikatów. Bezpiecznie więc uruchamiać scheduler
 //! kilka razy dziennie.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{Datelike, Utc};
@@ -16,6 +17,7 @@ use uuid::Uuid;
 
 use crate::audit::write_audit_log;
 use crate::state::Db;
+use crate::worker_metrics::WorkerMetrics;
 
 /// Składka miesięczna w PLN (musi być spójna z `routes::payments::MONTHLY_FEE_PLN`).
 const MONTHLY_FEE_PLN: f64 = 50.0;
@@ -140,19 +142,33 @@ pub async fn run_standing_orders_for_current_month(conn: &Db) -> Result<usize, l
 ///
 /// Pierwszy przebieg jest opóźniony o 30 sekund (żeby aplikacja zdążyła wstać i
 /// migracje były na pewno dokończone), a kolejne — co `RUN_INTERVAL_HOURS` godzin.
-pub fn spawn_standing_order_task(db: Db) -> JoinHandle<()> {
+pub fn spawn_standing_order_task(db: Db, metrics: Arc<WorkerMetrics>) -> JoinHandle<()> {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(30)).await;
         let interval = Duration::from_secs(RUN_INTERVAL_HOURS * 3600);
         loop {
+            let t0 = std::time::Instant::now();
             match run_standing_orders_for_current_month(&db).await {
-                Ok(0) => {
-                    // cisza — nic do roboty
-                }
                 Ok(n) => {
-                    eprintln!("[standing-order] utworzono {n} auto-składek za bieżący miesiąc.");
+                    metrics.record(
+                        "standing_order_scheduler",
+                        t0.elapsed().as_millis() as u64,
+                        true,
+                        Some(format!("created_auto_payments={n}")),
+                    );
+                    if n > 0 {
+                        eprintln!(
+                            "[standing-order] utworzono {n} auto-składek za bieżący miesiąc."
+                        );
+                    }
                 }
                 Err(e) => {
+                    metrics.record(
+                        "standing_order_scheduler",
+                        t0.elapsed().as_millis() as u64,
+                        false,
+                        Some(e.to_string()),
+                    );
                     eprintln!("[standing-order] błąd przebiegu: {e}");
                 }
             }

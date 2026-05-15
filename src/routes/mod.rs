@@ -7,6 +7,7 @@ pub mod chat;
 pub mod club_votes;
 pub mod calendar_export;
 pub mod comments;
+pub mod challenges;
 pub mod competition_participants;
 pub mod competitions;
 pub mod contact;
