@@ -152,6 +152,36 @@ pub async fn upload_handler(
     let filename = filename.unwrap_or_else(|| "upload.jpg".to_string());
     let content_type = content_type.unwrap_or_default();
 
+    // Task 39: Backend limit 40MB for video, 10MB for others.
+    let max_size = if content_type.starts_with("video/") {
+        40 * 1024 * 1024
+    } else {
+        10 * 1024 * 1024
+    };
+    if file_bytes.len() > max_size {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Plik jest za duży (maksymalnie {} MB)",
+                max_size / (1024 * 1024)
+            ),
+        ));
+    }
+
+    // Task 40: Block dangerous extensions
+    let ext = filename
+        .split('.')
+        .last()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    const BANNED_EXT: &[&str] = &["exe", "sh", "bat", "cmd", "msi", "bin", "com"];
+    if BANNED_EXT.contains(&ext.as_str()) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Niedozwolony typ pliku (ze względów bezpieczeństwa)",
+        ));
+    }
+
     let purpose = UploadPurpose::from_raw(purpose_raw.as_deref());
 
     // Slug loginu używany jako stabilny `public_id` tylko dla awatarów.

@@ -40,7 +40,7 @@ pub async fn login_handler(
     let mut rows = state
         .db
         .query(
-            "SELECT id, username, password_hash, roles, totp_secret, totp_enabled FROM users WHERE username = ?1",
+            "SELECT id, username, password_hash, roles, totp_secret, totp_enabled, token_version FROM users WHERE username = ?1",
             [username_trim.clone()],
         )
         .await
@@ -87,6 +87,7 @@ pub async fn login_handler(
     })?;
     let totp_secret: Option<String> = row.get(4).ok();
     let totp_enabled: i64 = row.get(5).unwrap_or(0);
+    let token_version: i64 = row.get(6).unwrap_or(0);
     let roles: Vec<Role> = serde_json::from_str(&roles_json)
         .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Invalid roles in db"))?;
 
@@ -141,6 +142,7 @@ pub async fn login_handler(
         sub: user_id.clone(),
         roles: roles.clone(),
         exp,
+        token_version,
     };
 
     let token = encode(
@@ -176,6 +178,9 @@ pub struct UserInfo {
     pub ui_color_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub athlete_gender: Option<String>,
+    /// Rok urodzenia z profilu sportowego (`athletes.birth_year`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub athlete_birth_year: Option<i64>,
     /// Zdjęcie z profilu sportowego (`athletes.image_url`), gdy konto jest powiązane ze zawodnikiem.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub athlete_image_url: Option<String>,
@@ -191,7 +196,7 @@ pub async fn me_handler(
     let mut rows = state
         .db
         .query(
-            "SELECT u.username, u.avatar_url, u.ui_theme_preset, u.ui_color_mode, a.gender, a.image_url, u.is_banned, u.banned_reason, u.totp_enabled, a.id AS athlete_prof_id
+            "SELECT u.username, u.avatar_url, u.ui_theme_preset, u.ui_color_mode, a.gender, a.image_url, u.is_banned, u.banned_reason, u.totp_enabled, a.id AS athlete_prof_id, a.birth_year
              FROM users u
              LEFT JOIN athletes a ON a.user_id = u.id
              WHERE u.id = ?1
@@ -220,6 +225,7 @@ pub async fn me_handler(
     let banned_reason: Option<String> = row.get(7).ok();
     let totp_enabled_i: i64 = row.get(8).unwrap_or(0);
     let athlete_id_link: Option<String> = row.get(9).ok();
+    let athlete_birth_year: Option<i64> = row.get(10).ok();
 
     Ok(Json(UserInfo {
         id: claims.sub,
@@ -232,7 +238,24 @@ pub async fn me_handler(
         ui_theme_preset,
         ui_color_mode,
         athlete_gender,
+        athlete_birth_year,
         athlete_image_url,
         athlete_id: athlete_id_link,
     }))
+}
+
+pub async fn logout_all_devices_handler(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> Result<StatusCode, ApiError> {
+    state
+        .db
+        .execute(
+            "UPDATE users SET token_version = token_version + 1 WHERE id = ?1",
+            [claims.sub],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(StatusCode::OK)
 }

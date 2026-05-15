@@ -27,6 +27,10 @@ impl Db {
         })
     }
 
+    pub fn backend(&self) -> &DatabaseBackend {
+        &self.backend
+    }
+
     async fn reconnect(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let next = Arc::new(connect_database(self.backend.clone()).await?);
         let mut w = self.conn.write().await;

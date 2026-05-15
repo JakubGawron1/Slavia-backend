@@ -1,0 +1,26 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Slavia API",
+    "version": "3.1.2-dev",
+    "description": "API for Slavia Weightlifting Club management system"
+  },
+  "paths": {
+    "/api/auth/login": {
+      "post": {
+        "summary": "User login",
+        "responses": {
+          "200": { "description": "Success" }
+        }
+      }
+    },
+    "/api/athletes": {
+      "get": {
+        "summary": "List athletes",
+        "responses": {
+          "200": { "description": "Success" }
+        }
+      }
+    }
+  }
+}
