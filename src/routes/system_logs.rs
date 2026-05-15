@@ -408,3 +408,11 @@ pub async fn db_backup_handler(
     }
 }
 
+/// Ostatnie przebiegi zadań cron w tle (czas ściany, nie CPU) — widok `/superadmin/workers`.
+pub async fn list_worker_cron_runs(
+    State(state): State<AppState>,
+    _auth: RequireSuperAdmin,
+) -> Json<Vec<crate::worker_metrics::WorkerCronRunDto>> {
+    Json(state.worker_metrics.snapshot())
+}
+

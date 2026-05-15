@@ -9,6 +9,7 @@
 //! Zadanie wykonuje się okresowo w tle (`spawn_chat_pruner_task`) oraz raz przy
 //! starcie aplikacji (przyszły scheduler nie potrzebuje persistent state).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -16,6 +17,7 @@ use tokio::task::JoinHandle;
 
 use crate::audit::write_audit_log;
 use crate::state::Db;
+use crate::worker_metrics::WorkerMetrics;
 
 /// Po ilu dniach bezczynności (od ostatniej wiadomości) wątek jest usuwany.
 /// Każda nowa wiadomość resetuje liczenie — to ona aktualizuje `MAX(created_at)`.
@@ -119,23 +121,35 @@ pub async fn prune_inactive_chat_threads(
 /// Pierwszy przebieg następuje krótko po starcie (po 60 s — żeby nie obciążać uruchomienia),
 /// kolejne co `PRUNE_INTERVAL_HOURS` godzin. Niepowodzenia są logowane na stderr,
 /// ale pętla biegnie dalej (chwilowy błąd DB nie powinien zatrzymywać pruner-a).
-pub fn spawn_chat_pruner_task(db: Db) -> JoinHandle<()> {
+pub fn spawn_chat_pruner_task(db: Db, metrics: Arc<WorkerMetrics>) -> JoinHandle<()> {
     tokio::spawn(async move {
         // Drobny delay startowy — aplikacja zdąży wstać, migracje już są skończone.
         tokio::time::sleep(Duration::from_secs(60)).await;
         let interval = Duration::from_secs(PRUNE_INTERVAL_HOURS * 3600);
         loop {
+            let t0 = std::time::Instant::now();
             match prune_inactive_chat_threads(&db, CHAT_INACTIVITY_DAYS).await {
-                Ok(0) => {
-                    // cisza w logach gdy nic do roboty
-                }
                 Ok(n) => {
-                    eprintln!(
-                        "[chat-pruner] usunięto {n} nieaktywnych wątków czatu (>{} dni bez wiadomości)",
-                        CHAT_INACTIVITY_DAYS
+                    metrics.record(
+                        "chat_pruner_scheduler",
+                        t0.elapsed().as_millis() as u64,
+                        true,
+                        Some(format!("deleted_threads={n}")),
                     );
+                    if n > 0 {
+                        eprintln!(
+                            "[chat-pruner] usunięto {n} nieaktywnych wątków czatu (>{} dni bez wiadomości)",
+                            CHAT_INACTIVITY_DAYS
+                        );
+                    }
                 }
                 Err(e) => {
+                    metrics.record(
+                        "chat_pruner_scheduler",
+                        t0.elapsed().as_millis() as u64,
+                        false,
+                        Some(e.to_string()),
+                    );
                     eprintln!("[chat-pruner] błąd przebiegu: {e}");
                 }
             }

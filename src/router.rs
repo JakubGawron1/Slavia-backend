@@ -361,6 +361,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/mobile-releases/latest", get(routes::mobile_releases::get_latest_mobile_release))
         .route("/mobile-releases/sync", post(routes::mobile_releases::sync_mobile_releases))
         .route("/event-feed", get(routes::system_logs::event_feed))
+        .route("/worker-cron-runs", get(routes::system_logs::list_worker_cron_runs))
         .route("/backup", post(routes::system_logs::db_backup_handler))
         .route(
             "/feature-flags",
@@ -376,6 +377,11 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/", post(routes::club_votes::submit_vote))
         .route("/my-vote", get(routes::club_votes::get_my_vote))
         .route("/summary", get(routes::club_votes::get_vote_summary));
+
+    let challenges_routes = Router::new().route(
+        "/monthly-training-sessions",
+        get(routes::challenges::monthly_training_sessions_leaderboard),
+    );
 
     Router::new()
         .route("/", get(backend_root_page))
@@ -401,6 +407,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .nest("/api/training-plans", training_plans_routes)
         .nest("/api/recovery", recovery_routes)
         .nest("/api/club-votes", club_votes_routes)
+        .nest("/api/challenges", challenges_routes)
         .nest("/api/system", system_routes)
         .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("x-api-version"),

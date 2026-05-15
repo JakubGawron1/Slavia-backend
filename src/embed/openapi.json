@@ -21,6 +21,24 @@
           "200": { "description": "Success" }
         }
       }
+    },
+    "/api/challenges/monthly-training-sessions": {
+      "get": {
+        "summary": "Leaderboard: liczba wpisów dziennika treningów na zawodnika w miesiącu (community challenge MVP)",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "example": "2026-05" },
+            "description": "YYYY-MM, domyślnie bieżący miesiąc (UTC)"
+          }
+        ],
+        "responses": {
+          "200": { "description": "OK" },
+          "400": { "description": "Nieprawidłowy parametr month" }
+        }
+      }
     }
   }
 }
