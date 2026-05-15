@@ -166,7 +166,8 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             is_banned INTEGER NOT NULL DEFAULT 0,
             banned_at TEXT,
             banned_by_user_id TEXT,
-            banned_reason TEXT
+            banned_reason TEXT,
+            token_version INTEGER NOT NULL DEFAULT 0
         )",
         "CREATE TABLE IF NOT EXISTS athletes (
             id TEXT PRIMARY KEY,
@@ -350,6 +351,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             approved_by_user_id TEXT REFERENCES users(id),
             approved_at TEXT
         )",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_membership_payments_unique ON membership_payments(athlete_id, month)",
         "CREATE INDEX IF NOT EXISTS idx_membership_payments_athlete_month ON membership_payments(athlete_id, month)",
         "CREATE INDEX IF NOT EXISTS idx_membership_payments_status_created ON membership_payments(status, created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_membership_payments_month_status ON membership_payments(month, status)",
@@ -465,6 +467,18 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             created_at TEXT NOT NULL,
             is_read INTEGER NOT NULL DEFAULT 0
         )",
+        "CREATE TABLE IF NOT EXISTS club_votes (
+            id TEXT PRIMARY KEY,
+            voter_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            athlete_id TEXT NOT NULL REFERENCES athletes(id) ON DELETE CASCADE,
+            month TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_club_votes_voter_month ON club_votes(voter_user_id, month)",
+        "CREATE TABLE IF NOT EXISTS system_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )",
     ];
 
     for sql in create_tables {
@@ -566,13 +580,20 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         .execute("ALTER TABLE users ADD COLUMN banned_reason TEXT", ())
         .await;
 
-    // TOTP (2FA opcjonalne) — sekret Base32 w plaintext (DB musi być chroniona); włączenie po weryfikacji kodu.
     let _ = conn
         .execute("ALTER TABLE users ADD COLUMN totp_secret TEXT", ())
         .await;
     let _ = conn
         .execute(
             "ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0",
+            (),
+        )
+        .await;
+
+    // Token version for "logout from all devices"
+    let _ = conn
+        .execute(
+            "ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0",
             (),
         )
         .await;
@@ -771,7 +792,8 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
                 is_banned INTEGER NOT NULL DEFAULT 0,
                 banned_at TEXT,
                 banned_by_user_id TEXT,
-                banned_reason TEXT
+                banned_reason TEXT,
+                token_version INTEGER NOT NULL DEFAULT 0
             )",
             "CREATE TABLE users__new",
         )
@@ -782,7 +804,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             conn,
             "INSERT INTO users__new (
                 id, username, password_hash, roles, avatar_url, ui_theme_preset, ui_color_mode,
-                is_banned, banned_at, banned_by_user_id, banned_reason
+                is_banned, banned_at, banned_by_user_id, banned_reason, token_version
              )
              SELECT
                 id,
@@ -801,7 +823,8 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
                 COALESCE(is_banned, 0),
                 banned_at,
                 banned_by_user_id,
-                banned_reason
+                banned_reason,
+                COALESCE(token_version, 0)
              FROM users",
             "INSERT users__new",
         )

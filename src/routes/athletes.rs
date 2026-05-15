@@ -660,7 +660,11 @@ pub async fn athlete_timeline(
     let mut results = state
         .db
         .query(
-            "SELECT id, date, snatch, clean_and_jerk, total, status FROM results WHERE athlete_id = ?1 ORDER BY date DESC LIMIT 50",
+            "SELECT r.id, r.date, r.snatch, r.clean_and_jerk, r.total, r.status, c.title \
+             FROM results r \
+             LEFT JOIN competitions c ON c.id = r.competition_id \
+             WHERE r.athlete_id = ?1 \
+             ORDER BY r.date DESC LIMIT 50",
             [athlete_id.clone()],
         )
         .await
@@ -676,11 +680,19 @@ pub async fn athlete_timeline(
         let cj: f64 = r.get(3).unwrap_or(0.0);
         let total: f64 = r.get(4).unwrap_or(0.0);
         let status: String = r.get(5).unwrap_or_default();
+        let comp_title: Option<String> = r.get(6).ok();
+
+        let display_title = if let Some(t) = comp_title {
+            format!("{} ({} kg, {})", t, total, status)
+        } else {
+            format!("Wynik {} kg ({})", total, status)
+        };
+
         out.push(AthleteTimelineItem {
             id,
             kind: "result".to_string(),
             at,
-            title: format!("Wynik {} kg ({})", total, status),
+            title: display_title,
             detail: format!("Rwanie {} kg · Podrzut {} kg", snatch, cj),
         });
     }
@@ -924,6 +936,61 @@ pub async fn link_athlete_to_user(
             linked_username, athlete_name
         ),
         Some(serde_json::json!({ "athlete_id": athlete_id, "user_id": user_id }).to_string()),
+    );
+
+    Ok(StatusCode::OK)
+}
+pub async fn update_my_athlete_profile_handler(
+    State(state): State<AppState>,
+    claims: Claims,
+    Json(payload): Json<UpdateAthleteRequest>,
+) -> Result<StatusCode, ApiError> {
+    if !claims.roles.contains(&Role::Athlete) {
+        return Err(api_error(StatusCode::FORBIDDEN, "Tylko zawodnicy mogą edytować swój profil sportowy tą drogą."));
+    }
+
+    let mut rows = state
+        .db
+        .query(
+            "SELECT id, full_name FROM athletes WHERE user_id = ?1",
+            [claims.sub.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let row = rows.next().await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = row.ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Nie znaleziono Twojej karty zawodnika."))?;
+    
+    let athlete_id: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let existing_full_name: String = row.get(1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Dla zawodnika ograniczamy co może zmienić — tylko dane biometryczne/profilowe, nie notes ani is_active.
+    state.db.execute(
+        "UPDATE athletes SET 
+            birth_year = COALESCE(?1, birth_year),
+            gender = COALESCE(?2, gender),
+            weight_category = COALESCE(?3, weight_category),
+            bodyweight = COALESCE(?4, bodyweight),
+            profile_tagline = COALESCE(?5, profile_tagline),
+            public_bio = COALESCE(?6, public_bio)
+         WHERE id = ?7",
+        (
+            payload.birth_year,
+            payload.gender,
+            payload.weight_category,
+            payload.bodyweight,
+            payload.profile_tagline,
+            payload.public_bio,
+            athlete_id.clone(),
+        )
+    ).await.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    notifications::notify_admin_broadcast(
+        &state,
+        "athlete_self_updated",
+        "Zawodnik zaktualizował profil",
+        &format!("Zawodnik „{}” zaktualizował swoje dane profilowe.", existing_full_name),
+        Some(serde_json::json!({ "athlete_id": athlete_id }).to_string()),
     );
 
     Ok(StatusCode::OK)

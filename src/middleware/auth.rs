@@ -62,6 +62,8 @@ pub struct Claims {
     #[serde(deserialize_with = "deserialize_claim_roles")]
     pub roles: Vec<Role>,
     pub exp: usize,
+    #[serde(default)]
+    pub token_version: i64,
 }
 
 /// Kadra (trener i wyżej) — dostęp jak przy starym pojedynczym polu `role` dla tych ról.
@@ -130,12 +132,10 @@ impl FromRequestParts<AppState> for Claims {
         )
         .map_err(|_| api_error(StatusCode::UNAUTHORIZED, "Invalid Token"))?;
 
-        // Banowanie kont jest egzekwowane w backendzie (DB) — działa natychmiast, niezależnie od wieku tokena.
-        // Nie blokujemy SuperAdminów, nawet jeśli ktoś ustawiłby `is_banned=1` (dodatkowe zabezpieczenie).
         let mut rows = state
             .db
             .query(
-                "SELECT is_banned FROM users WHERE id = ?1 LIMIT 1",
+                "SELECT is_banned, token_version FROM users WHERE id = ?1 LIMIT 1",
                 [token_data.claims.sub.clone()],
             )
             .await
@@ -146,8 +146,14 @@ impl FromRequestParts<AppState> for Claims {
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         if let Some(r) = row {
             let is_banned: i64 = r.get(0).unwrap_or(0);
+            let db_token_version: i64 = r.get(1).unwrap_or(0);
+
             if is_banned != 0 && !token_data.claims.roles.contains(&Role::SuperAdmin) {
                 return Err(api_error(StatusCode::FORBIDDEN, "Account is banned"));
+            }
+
+            if db_token_version > token_data.claims.token_version {
+                return Err(api_error(StatusCode::UNAUTHORIZED, "Token revoked (logged out from all devices)"));
             }
         }
 
@@ -256,6 +262,7 @@ mod jwt_claims_tests {
             sub: "user-1".into(),
             roles: vec![Role::SuperAdmin],
             exp: 2_147_483_647,
+            token_version: 0,
         };
         let json = serde_json::to_string(&c).expect("serialize claims");
         let c2: Claims = serde_json::from_str(&json).expect("deserialize claims");
@@ -281,6 +288,7 @@ mod jwt_claims_tests {
             sub: "uid".into(),
             roles: vec![Role::Admin],
             exp,
+            token_version: 0,
         };
         let token = encode(
             &Header::default(),

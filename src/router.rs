@@ -22,7 +22,8 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/profile", patch(routes::admins::update_profile))
         .route("/totp/setup", post(routes::totp::totp_setup_handler))
         .route("/totp/enable", post(routes::totp::totp_enable_handler))
-        .route("/totp/disable", post(routes::totp::totp_disable_handler));
+        .route("/totp/disable", post(routes::totp::totp_disable_handler))
+        .route("/logout-all", post(routes::auth::logout_all_devices_handler));
 
     let upload_routes = Router::new().route("/", post(routes::upload::upload_handler));
 
@@ -31,7 +32,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             "/",
             get(routes::athletes::list_athletes_public).post(routes::athletes::create_athlete),
         )
-        .route("/me", get(routes::athletes::me_athlete_handler))
+        .route(
+            "/me",
+            get(routes::athletes::me_athlete_handler).patch(routes::athletes::update_my_athlete_profile_handler),
+        )
         .route(
             "/my-calendar",
             get(routes::competition_participants::my_calendar_for_athlete),
@@ -353,7 +357,11 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/ping", get(routes::system_logs::ping_backend))
         .route("/audit-logs", get(routes::system_logs::list_audit_logs))
         .route("/metrics", get(routes::system_logs::system_metrics))
+        .route("/calendar/export/{id}", get(routes::calendar_export::export_competition_ics))
+        .route("/mobile-releases/latest", get(routes::mobile_releases::get_latest_mobile_release))
+        .route("/mobile-releases/sync", post(routes::mobile_releases::sync_mobile_releases))
         .route("/event-feed", get(routes::system_logs::event_feed))
+        .route("/backup", post(routes::system_logs::db_backup_handler))
         .route(
             "/feature-flags",
             get(routes::feature_flags::list_feature_flags),
@@ -361,7 +369,13 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route(
             "/feature-flags/{name}",
             post(routes::feature_flags::upsert_feature_flag),
-        );
+        )
+        .route("/openapi.json", get(routes::system_logs::openapi_handler));
+
+    let club_votes_routes = Router::new()
+        .route("/", post(routes::club_votes::submit_vote))
+        .route("/my-vote", get(routes::club_votes::get_my_vote))
+        .route("/summary", get(routes::club_votes::get_vote_summary));
 
     Router::new()
         .route("/", get(backend_root_page))
@@ -386,6 +400,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .nest("/api/comments", comments_routes)
         .nest("/api/training-plans", training_plans_routes)
         .nest("/api/recovery", recovery_routes)
+        .nest("/api/club-votes", club_votes_routes)
         .nest("/api/system", system_routes)
         .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("x-api-version"),
