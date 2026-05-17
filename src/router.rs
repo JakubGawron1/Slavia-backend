@@ -3,6 +3,7 @@
 use axum::{
     Router,
     http::{HeaderName, HeaderValue},
+    middleware,
     response::Html,
     routing::{delete, get, patch, post},
 };
@@ -409,6 +410,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .nest("/api/club-votes", club_votes_routes)
         .nest("/api/challenges", challenges_routes)
         .nest("/api/system", system_routes)
+        .layer(middleware::from_fn(crate::middleware::http_cache::cache_control_middleware))
         .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("x-api-version"),
             HeaderValue::from_static("1"),
