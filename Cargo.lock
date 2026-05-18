@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Slavia-backend"
-version = "3.2.2-dev"
+version = "3.2.3-dev"
 dependencies = [
  "argon2",
  "axum 0.8.9",
