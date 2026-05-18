@@ -14,6 +14,62 @@
 use libsql::Connection;
 use tokio::time::{Duration, sleep};
 
+/// Usuwa duplikaty (athlete_id, session_date) przed utworzeniem indeksu UNIQUE — inaczej start pada na Turso.
+async fn migrate_attendance_unique_index(conn: &Connection) -> Result<(), String> {
+    let mut exists = conn
+        .query(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'attendance_records'",
+            (),
+        )
+        .await
+        .map_err(|e| format!("attendance table check: {e}"))?;
+    let n: i64 = if let Some(row) = exists
+        .next()
+        .await
+        .map_err(|e| format!("attendance table row: {e}"))?
+    {
+        row.get(0).map_err(|e| format!("attendance table get: {e}"))?
+    } else {
+        0
+    };
+    drop(exists);
+    if n == 0 {
+        return Ok(());
+    }
+
+    let deduped = conn
+        .execute(
+            "DELETE FROM attendance_records WHERE id IN (
+                SELECT id FROM (
+                    SELECT id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY athlete_id, session_date
+                            ORDER BY
+                                CASE WHEN verification_state = 'verified' THEN 0 ELSE 1 END,
+                                updated_at DESC,
+                                rowid ASC
+                        ) AS rn
+                    FROM attendance_records
+                ) WHERE rn > 1
+            )",
+            (),
+        )
+        .await
+        .map_err(|e| format!("attendance dedupe: {e}"))?;
+    if deduped > 0 {
+        println!(
+            "🔄 Migracja: usunięto {deduped} zduplikowanych wpisów attendance_records (przed UNIQUE INDEX)."
+        );
+    }
+
+    exec0_retry(
+        conn,
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_unique_athlete_session ON attendance_records(athlete_id, session_date)",
+        "CREATE UNIQUE INDEX attendance_records",
+    )
+    .await
+}
+
 async fn exec0_retry(conn: &Connection, sql: &str, label: &str) -> Result<(), String> {
     // SQLite bywa chwilowo zablokowane (np. równoległe połączenie / statement).
     // Robimy krótki retry zamiast paniki na starcie.
@@ -268,7 +324,6 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             updated_at TEXT NOT NULL
         )",
         "CREATE INDEX IF NOT EXISTS idx_attendance_athlete_date ON attendance_records(athlete_id, session_date DESC)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_unique_athlete_session ON attendance_records(athlete_id, session_date)",
         "CREATE TABLE IF NOT EXISTS system_audit_logs (
             id TEXT PRIMARY KEY,
             actor_user_id TEXT,
@@ -485,6 +540,10 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
     for sql in create_tables {
         conn.execute(sql, ()).await?;
     }
+
+    migrate_attendance_unique_index(conn)
+        .await
+        .map_err(|e| format!("migrate_attendance_unique_index: {e}"))?;
 
     let _ = conn
         .execute(
@@ -1126,7 +1185,6 @@ pub async fn reset_database(
             updated_at TEXT NOT NULL
         )",
         "CREATE INDEX IF NOT EXISTS idx_attendance_athlete_date ON attendance_records(athlete_id, session_date DESC)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_unique_athlete_session ON attendance_records(athlete_id, session_date)",
         "CREATE TABLE IF NOT EXISTS system_audit_logs (
             id TEXT PRIMARY KEY,
             actor_user_id TEXT,
