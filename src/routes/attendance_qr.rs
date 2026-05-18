@@ -271,6 +271,28 @@ pub async fn qr_checkin(
         let id: String = row
             .get(0)
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let mut state_row = state
+            .db
+            .query(
+                "SELECT status, verification_state FROM attendance_records WHERE id = ?1 LIMIT 1",
+                [id.clone()],
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if let Some(sr) = state_row
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        {
+            let status: String = sr.get(0).unwrap_or_default();
+            let vs: String = sr.get(1).unwrap_or_default();
+            if status.trim() == "obecny" && vs.trim() == "verified" {
+                return Err(api_error(
+                    StatusCode::CONFLICT,
+                    "Masz już zatwierdzoną obecność na ten dzień.",
+                ));
+            }
+        }
         state
             .db
             .execute(

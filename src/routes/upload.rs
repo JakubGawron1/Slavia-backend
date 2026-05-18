@@ -37,7 +37,12 @@ impl UploadPurpose {
             Some("avatar") | Some("user-avatar") | Some("profile") => Self::Avatar,
             Some("blog") | Some("post") | Some("article") => Self::Blog,
             Some("gallery") | Some("media") => Self::Gallery,
-            Some("athletes") | Some("athlete") | Some("player") | Some("players") => Self::Athletes,
+            Some("athletes")
+            | Some("athlete")
+            | Some("player")
+            | Some("players")
+            | Some("athlete-photo")
+            | Some("athlete_photo") => Self::Athletes,
             _ => Self::Misc,
         }
     }
@@ -103,14 +108,18 @@ pub async fn upload_handler(
     let mut content_type: Option<String> = None;
     let mut purpose_raw: Option<String> = None;
 
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| api_error(StatusCode::BAD_REQUEST, e.to_string()))?
-    {
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        let msg = e.to_string();
+        let hint = if msg.to_ascii_lowercase().contains("multipart") {
+            " Sprawdź multipart/form-data (pole „file”) — nie ustawiaj ręcznie Content-Type."
+        } else {
+            ""
+        };
+        api_error(StatusCode::BAD_REQUEST, format!("{msg}.{hint}"))
+    })? {
         let name = field.name().unwrap_or_default().to_string();
         match name.as_str() {
-            "file" => {
+            "file" | "image" | "photo" | "upload" => {
                 content_type = Some(
                     field
                         .content_type()
