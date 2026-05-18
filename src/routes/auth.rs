@@ -196,7 +196,7 @@ pub async fn me_handler(
     let mut rows = state
         .db
         .query(
-            "SELECT u.username, u.avatar_url, u.ui_theme_preset, u.ui_color_mode, a.gender, a.image_url, u.is_banned, u.banned_reason, u.totp_enabled, a.id AS athlete_prof_id, a.birth_year
+            "SELECT u.username, u.avatar_url, u.ui_theme_preset, u.ui_color_mode, a.gender, a.image_url, u.is_banned, u.banned_reason, u.totp_enabled, a.id AS athlete_prof_id, a.birth_year, u.roles
              FROM users u
              LEFT JOIN athletes a ON a.user_id = u.id
              WHERE u.id = ?1
@@ -226,11 +226,19 @@ pub async fn me_handler(
     let totp_enabled_i: i64 = row.get(8).unwrap_or(0);
     let athlete_id_link: Option<String> = row.get(9).ok();
     let athlete_birth_year: Option<i64> = row.get(10).ok();
+    let roles_json: String = row.get(11).map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("roles error: {}", e),
+        )
+    })?;
+    let roles: Vec<Role> = serde_json::from_str(&roles_json)
+        .unwrap_or_else(|_| claims.roles.clone());
 
     Ok(Json(UserInfo {
         id: claims.sub,
         username,
-        roles: claims.roles,
+        roles,
         totp_enabled: totp_enabled_i != 0,
         avatar_url,
         is_banned: is_banned_i != 0,
