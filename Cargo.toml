@@ -1,6 +1,6 @@
 [package]
 name = "Slavia-backend"
-version = "3.2.2-dev"
+version = "3.2.3-dev"
 edition = "2024"
 
 [lib]
