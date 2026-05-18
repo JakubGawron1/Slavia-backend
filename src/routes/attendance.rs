@@ -68,7 +68,7 @@ fn normalize_status(raw: &str) -> Result<String, ApiError> {
     }
 }
 
-async fn load_attendance_record_by_id(
+pub async fn load_attendance_record_by_id(
     state: &AppState,
     id: &str,
 ) -> Result<Option<AttendanceRecord>, ApiError> {

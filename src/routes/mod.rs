@@ -2,6 +2,7 @@ pub mod admins;
 pub mod announcements;
 pub mod athletes;
 pub mod attendance;
+pub mod attendance_qr;
 pub mod auth;
 pub mod chat;
 pub mod club_votes;

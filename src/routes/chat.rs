@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -23,6 +23,17 @@ pub struct ChatThreadDto {
     pub title: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_last_seen_at: Option<String>,
+    #[serde(default)]
+    pub peer_online: bool,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ChatReactionSummary {
+    pub emoji: String,
+    pub count: i64,
+    pub reacted_by_me: bool,
 }
 
 #[derive(Serialize)]
@@ -37,7 +48,16 @@ pub struct ChatMessageDto {
     /// Cloudinary / URL: `users.avatar_url` lub — gdy puste — `athletes.image_url` nadawcy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sender_photo_url: Option<String>,
+    #[serde(default)]
+    pub reactions: Vec<ChatReactionSummary>,
 }
+
+#[derive(Deserialize)]
+pub struct ToggleReactionRequest {
+    pub emoji: String,
+}
+
+const PRESENCE_ONLINE_SECS: i64 = 300;
 
 #[derive(Deserialize)]
 pub struct OpenThreadRequest {
@@ -95,6 +115,118 @@ async fn load_sender_display(
     Ok((username, trim_opt_url(photo_raw)))
 }
 
+async fn touch_user_presence(state: &AppState, user_id: &str) {
+    let now = Utc::now().to_rfc3339();
+    let _ = state
+        .db
+        .execute(
+            "UPDATE users SET last_seen_at = ?1 WHERE id = ?2",
+            (now, user_id.to_string()),
+        )
+        .await;
+}
+
+fn is_recent_presence(ts: Option<&str>) -> bool {
+    let Some(raw) = ts else {
+        return false;
+    };
+    let Ok(dt) = DateTime::parse_from_rfc3339(raw.trim()) else {
+        return false;
+    };
+    let age = Utc::now().signed_duration_since(dt.with_timezone(&Utc));
+    age.num_seconds() >= 0 && age.num_seconds() <= PRESENCE_ONLINE_SECS
+}
+
+async fn peer_presence_for_thread(
+    state: &AppState,
+    athlete_uid: &str,
+    trainer_uid: &str,
+    viewer_id: &str,
+) -> Result<(Option<String>, bool), ApiError> {
+    let peer_id = if viewer_id == athlete_uid {
+        trainer_uid
+    } else {
+        athlete_uid
+    };
+    let mut rows = state
+        .db
+        .query(
+            "SELECT last_seen_at FROM users WHERE id = ?1 LIMIT 1",
+            [peer_id.to_string()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let last_seen: Option<String> = row.and_then(|r| r.get(0).ok());
+    let online = is_recent_presence(last_seen.as_deref());
+    Ok((last_seen, online))
+}
+
+async fn load_reactions_for_thread(
+    state: &AppState,
+    thread_id: &str,
+    viewer_id: &str,
+) -> Result<std::collections::HashMap<String, Vec<ChatReactionSummary>>, ApiError> {
+    use std::collections::HashMap;
+    let mut rows = state
+        .db
+        .query(
+            "SELECT r.message_id, r.emoji, COUNT(*) AS cnt,
+                    SUM(CASE WHEN r.user_id = ?1 THEN 1 ELSE 0 END) AS mine
+             FROM chat_message_reactions r
+             INNER JOIN chat_messages m ON m.id = r.message_id
+             WHERE m.thread_id = ?2
+             GROUP BY r.message_id, r.emoji",
+            (viewer_id.to_string(), thread_id.to_string()),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut map: HashMap<String, Vec<ChatReactionSummary>> = HashMap::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let mid: String = row.get(0).unwrap_or_default();
+        let emoji: String = row.get(1).unwrap_or_default();
+        let count: i64 = row.get(2).unwrap_or(0);
+        let mine: i64 = row.get(3).unwrap_or(0);
+        map.entry(mid).or_default().push(ChatReactionSummary {
+            emoji,
+            count,
+            reacted_by_me: mine > 0,
+        });
+    }
+    Ok(map)
+}
+
+async fn build_thread_dto(
+    state: &AppState,
+    viewer_id: &str,
+    id: String,
+    athlete_user_id: String,
+    trainer_user_id: String,
+    title: Option<String>,
+    created_at: String,
+    updated_at: String,
+) -> Result<ChatThreadDto, ApiError> {
+    let (peer_last_seen_at, peer_online) =
+        peer_presence_for_thread(state, &athlete_user_id, &trainer_user_id, viewer_id).await?;
+    Ok(ChatThreadDto {
+        id,
+        athlete_user_id,
+        trainer_user_id,
+        title,
+        created_at,
+        updated_at,
+        peer_last_seen_at,
+        peer_online,
+    })
+}
+
 fn can_chat(claims: &Claims) -> bool {
     claims.roles.iter().any(|r| {
         matches!(
@@ -128,14 +260,18 @@ pub async fn open_thread(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        return Ok(Json(ChatThreadDto {
-            id: row.get(0).unwrap_or_default(),
-            athlete_user_id: payload.athlete_user_id,
-            trainer_user_id: payload.trainer_user_id,
-            title: row.get(1).ok(),
-            created_at: row.get(2).unwrap_or_default(),
-            updated_at: row.get(3).unwrap_or_default(),
-        }));
+        let dto = build_thread_dto(
+            &state,
+            &claims.sub,
+            row.get(0).unwrap_or_default(),
+            payload.athlete_user_id,
+            payload.trainer_user_id,
+            row.get(1).ok(),
+            row.get(2).unwrap_or_default(),
+            row.get(3).unwrap_or_default(),
+        )
+        .await?;
+        return Ok(Json(dto));
     }
 
     let id = Uuid::new_v4().to_string();
@@ -155,14 +291,18 @@ pub async fn open_thread(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(ChatThreadDto {
+    let dto = build_thread_dto(
+        &state,
+        &claims.sub,
         id,
-        athlete_user_id: payload.athlete_user_id,
-        trainer_user_id: payload.trainer_user_id,
-        title: payload.title,
-        created_at: now.clone(),
-        updated_at: now,
-    }))
+        payload.athlete_user_id,
+        payload.trainer_user_id,
+        payload.title,
+        now.clone(),
+        now,
+    )
+    .await?;
+    Ok(Json(dto))
 }
 
 pub async fn list_my_threads(
@@ -172,6 +312,7 @@ pub async fn list_my_threads(
     if !can_chat(&claims) {
         return Ok(Json(vec![]));
     }
+    touch_user_presence(&state, &claims.sub).await;
     let mut rows = state
         .db
         .query(
@@ -189,14 +330,18 @@ pub async fn list_my_threads(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        out.push(ChatThreadDto {
-            id: row.get(0).unwrap_or_default(),
-            athlete_user_id: row.get(1).unwrap_or_default(),
-            trainer_user_id: row.get(2).unwrap_or_default(),
-            title: row.get(3).ok(),
-            created_at: row.get(4).unwrap_or_default(),
-            updated_at: row.get(5).unwrap_or_default(),
-        });
+        let dto = build_thread_dto(
+            &state,
+            &claims.sub,
+            row.get(0).unwrap_or_default(),
+            row.get(1).unwrap_or_default(),
+            row.get(2).unwrap_or_default(),
+            row.get(3).ok(),
+            row.get(4).unwrap_or_default(),
+            row.get(5).unwrap_or_default(),
+        )
+        .await?;
+        out.push(dto);
     }
     Ok(Json(out))
 }
@@ -231,14 +376,18 @@ pub async fn update_thread(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(ChatThreadDto {
-        id: thread_id,
-        athlete_user_id: row.get(1).unwrap_or_default(),
-        trainer_user_id: row.get(2).unwrap_or_default(),
-        title: payload.title,
-        created_at: row.get(3).unwrap_or_default(),
-        updated_at: now,
-    }))
+    let dto = build_thread_dto(
+        &state,
+        &claims.sub,
+        thread_id,
+        row.get(1).unwrap_or_default(),
+        row.get(2).unwrap_or_default(),
+        payload.title,
+        row.get(3).unwrap_or_default(),
+        now,
+    )
+    .await?;
+    Ok(Json(dto))
 }
 
 pub async fn list_messages(
@@ -263,6 +412,9 @@ pub async fn list_messages(
         return Err(api_error(StatusCode::FORBIDDEN, "Brak dostępu do wątku"));
     }
 
+    touch_user_presence(&state, &claims.sub).await;
+    let reaction_map = load_reactions_for_thread(&state, &thread_id, &claims.sub).await?;
+
     let mut rows = state
         .db
         .query(
@@ -285,14 +437,16 @@ pub async fn list_messages(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
         let photo_raw: Option<String> = row.get(6).ok();
+        let mid: String = row.get(0).unwrap_or_default();
         out.push(ChatMessageDto {
-            id: row.get(0).unwrap_or_default(),
+            id: mid.clone(),
             thread_id: row.get(1).unwrap_or_default(),
             sender_user_id: row.get(2).unwrap_or_default(),
             body: row.get(3).unwrap_or_default(),
             created_at: row.get(4).unwrap_or_default(),
             sender_username: row.get(5).ok(),
             sender_photo_url: trim_opt_url(photo_raw),
+            reactions: reaction_map.get(&mid).cloned().unwrap_or_default(),
         });
     }
 
@@ -301,7 +455,7 @@ pub async fn list_messages(
         .execute(
             "INSERT INTO chat_reads (thread_id, user_id, last_read_at) VALUES (?1, ?2, ?3)
              ON CONFLICT(thread_id, user_id) DO UPDATE SET last_read_at = excluded.last_read_at",
-            (thread_id, claims.sub, Utc::now().to_rfc3339()),
+            (thread_id, claims.sub.clone(), Utc::now().to_rfc3339()),
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -338,6 +492,7 @@ pub async fn send_message(
     let athlete_uid: String = row.get(0).unwrap_or_default();
     let trainer_uid: String = row.get(1).unwrap_or_default();
 
+    touch_user_presence(&state, &claims.sub).await;
     let now = Utc::now().to_rfc3339();
     let id = Uuid::new_v4().to_string();
     state
@@ -403,7 +558,92 @@ pub async fn send_message(
         created_at: now,
         sender_username,
         sender_photo_url,
+        reactions: vec![],
     }))
+}
+
+/// Heartbeat obecności (status „online” w czacie, ~5 min).
+pub async fn ping_presence(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> Result<StatusCode, ApiError> {
+    if !can_chat(&claims) {
+        return Err(api_error(StatusCode::FORBIDDEN, "Brak dostępu"));
+    }
+    touch_user_presence(&state, &claims.sub).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn toggle_message_reaction(
+    State(state): State<AppState>,
+    claims: Claims,
+    Path(message_id): Path<String>,
+    Json(payload): Json<ToggleReactionRequest>,
+) -> Result<Json<Vec<ChatReactionSummary>>, ApiError> {
+    let emoji = payload.emoji.trim();
+    if emoji.is_empty() || emoji.chars().count() > 16 {
+        return Err(api_error(StatusCode::BAD_REQUEST, "Nieprawidłowa reakcja"));
+    }
+    let mut rows = state
+        .db
+        .query(
+            "SELECT m.id, m.thread_id FROM chat_messages m
+             INNER JOIN chat_threads t ON t.id = m.thread_id
+             WHERE m.id = ?1 AND (t.athlete_user_id = ?2 OR t.trainer_user_id = ?2)",
+            (message_id.clone(), claims.sub.clone()),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Wiadomość nie istnieje"))?;
+    let thread_id: String = row.get(1).unwrap_or_default();
+
+    let mut existing = state
+        .db
+        .query(
+            "SELECT id FROM chat_message_reactions WHERE message_id = ?1 AND user_id = ?2 AND emoji = ?3 LIMIT 1",
+            (message_id.clone(), claims.sub.clone(), emoji.to_string()),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if existing
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .is_some()
+    {
+        state
+            .db
+            .execute(
+                "DELETE FROM chat_message_reactions WHERE message_id = ?1 AND user_id = ?2 AND emoji = ?3",
+                (message_id.clone(), claims.sub.clone(), emoji.to_string()),
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    } else {
+        state
+            .db
+            .execute(
+                "INSERT INTO chat_message_reactions (id, message_id, user_id, emoji, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                (
+                    Uuid::new_v4().to_string(),
+                    message_id.clone(),
+                    claims.sub.clone(),
+                    emoji.to_string(),
+                    Utc::now().to_rfc3339(),
+                ),
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+
+    let map = load_reactions_for_thread(&state, &thread_id, &claims.sub).await?;
+    Ok(Json(
+        map.get(&message_id).cloned().unwrap_or_default(),
+    ))
 }
 
 pub async fn delete_thread(

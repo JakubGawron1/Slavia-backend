@@ -28,14 +28,17 @@ pub struct UpsertRecurringTrainingBody {
     pub status: Option<String>,
 }
 
-fn parse_club_training_date(raw: &str) -> Result<NaiveDate, ApiError> {
+fn parse_club_training_date(raw: &str, allow_extra_weekday: bool) -> Result<NaiveDate, ApiError> {
     let d = NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d")
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "session_date must be YYYY-MM-DD"))?;
+    if allow_extra_weekday {
+        return Ok(d);
+    }
     match d.weekday() {
         Weekday::Mon | Weekday::Wed | Weekday::Fri => Ok(d),
         _ => Err(api_error(
             StatusCode::BAD_REQUEST,
-            "Recurring club trainings are only Mon, Wed, Fri",
+            "Recurring club trainings are only Mon, Wed, Fri (użyj status=extra dla innych dni)",
         )),
     }
 }
@@ -45,9 +48,10 @@ fn normalize_status(raw: &str) -> Result<&'static str, ApiError> {
         "scheduled" => Ok("scheduled"),
         "cancelled" => Ok("cancelled"),
         "moved" => Ok("moved"),
+        "extra" => Ok("extra"),
         _ => Err(api_error(
             StatusCode::BAD_REQUEST,
-            "status must be scheduled, cancelled or moved",
+            "status must be scheduled, cancelled, moved or extra",
         )),
     }
 }
@@ -89,11 +93,10 @@ pub async fn upsert_recurring_training_session(
     auth: RequireTrainerOrHigher,
     Json(body): Json<UpsertRecurringTrainingBody>,
 ) -> Result<StatusCode, ApiError> {
-    let d = parse_club_training_date(&body.session_date)?;
-    let session_date = d.format("%Y-%m-%d").to_string();
-
     let status_raw = body.status.unwrap_or_else(|| "cancelled".to_string());
     let status_norm = normalize_status(&status_raw)?;
+    let d = parse_club_training_date(&body.session_date, status_norm == "extra")?;
+    let session_date = d.format("%Y-%m-%d").to_string();
 
     if status_norm == "scheduled" {
         state

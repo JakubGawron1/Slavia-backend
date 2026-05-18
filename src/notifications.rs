@@ -220,19 +220,23 @@ async fn athlete_plus_superadmins(
     Ok(())
 }
 
-pub fn notify_result_approved(state: &AppState, athlete_id: &str, total: f64, date: &str) {
+pub fn notify_result_approved(state: &AppState, athlete_id: &str, total: f64, date: &str, review_note: Option<&str>) {
     let st = state.clone();
     let aid = athlete_id.to_string();
     let date = date.to_string();
+    let note = review_note.map(|s| s.to_string());
     spawn_notify(async move {
         let conn_arc = st.db.raw().await;
         let conn = conn_arc.as_ref();
         let name = athlete_display_for_notification(conn, &aid).await?;
         let title_a = "Wynik zatwierdzony";
-        let body_a = format!(
+        let mut body_a = format!(
             "Kadra zatwierdziła Twój wynik z {}: {:.1} kg (dwubój).",
             date, total
         );
+        if let Some(n) = &note {
+            body_a.push_str(&format!(" Uwagi: {}", n));
+        }
         let title_s = format!("Zatwierdzono wynik zawodnika ({})", name);
         let body_s = format!("Dwubój {:.1} kg — data {}.", total, date);
         let payload = serde_json::json!({
@@ -248,6 +252,101 @@ pub fn notify_result_approved(state: &AppState, athlete_id: &str, total: f64, da
             title_a,
             &body_a,
             "result_approved_staff",
+            &title_s,
+            &body_s,
+            Some(&payload),
+        )
+        .await?;
+        Ok(())
+    });
+}
+
+pub fn notify_result_rejected(state: &AppState, athlete_id: &str, total: f64, date: &str, review_note: Option<&str>) {
+    let st = state.clone();
+    let aid = athlete_id.to_string();
+    let date = date.to_string();
+    let note = review_note.map(|s| s.to_string());
+    spawn_notify(async move {
+        let conn_arc = st.db.raw().await;
+        let conn = conn_arc.as_ref();
+        let name = athlete_display_for_notification(conn, &aid).await?;
+        let title_a = "Wynik odrzucony";
+        let mut body_a = format!(
+            "Kadra odrzuciła Twój wynik z {}: {:.1} kg (dwubój).",
+            date, total
+        );
+        if let Some(n) = &note {
+            body_a.push_str(&format!(" Powód: {}", n));
+        }
+        let title_s = format!("Odrzucono wynik zawodnika ({})", name);
+        let body_s = format!("Dwubój {:.1} kg — data {}.", total, date);
+        let payload = serde_json::json!({
+            "athlete_id": aid,
+            "total": total,
+            "date": date,
+        })
+        .to_string();
+        athlete_plus_superadmins(
+            &st,
+            &aid,
+            "result_rejected",
+            title_a,
+            &body_a,
+            "result_rejected_staff",
+            &title_s,
+            &body_s,
+            Some(&payload),
+        )
+        .await?;
+        Ok(())
+    });
+}
+
+pub fn notify_exercise_submission_reviewed(
+    state: &AppState,
+    athlete_id: &str,
+    exercise_name: &str,
+    value: f64,
+    unit: &str,
+    approved: bool,
+    review_note: Option<&str>,
+) {
+    let st = state.clone();
+    let aid = athlete_id.to_string();
+    let en = exercise_name.to_string();
+    let unit = unit.to_string();
+    let note = review_note.map(|s| s.to_string());
+    spawn_notify(async move {
+        let conn_arc = st.db.raw().await;
+        let conn = conn_arc.as_ref();
+        let name = athlete_display_for_notification(conn, &aid).await?;
+        let (title_a, action_str, action_staff) = if approved {
+            ("Zatwierdzono ćwiczenie", "zatwierdziła", "Zatwierdzono")
+        } else {
+            ("Odrzucono ćwiczenie", "odrzuciła", "Odrzucono")
+        };
+        let mut body_a = format!(
+            "Kadra {} Twoje zgłoszenie: {} ({} {}).",
+            action_str, en, value, unit
+        );
+        if let Some(n) = &note {
+            let prefix = if approved { "Uwagi" } else { "Powód" };
+            body_a.push_str(&format!(" {}: {}", prefix, n));
+        }
+        let title_s = format!("{} zgłoszenie ({})", action_staff, name);
+        let body_s = format!("Ćwiczenie: {} ({} {}).", en, value, unit);
+        let payload = serde_json::json!({
+            "athlete_id": aid,
+            "exercise": en,
+        })
+        .to_string();
+        athlete_plus_superadmins(
+            &st,
+            &aid,
+            if approved { "exercise_approved" } else { "exercise_rejected" },
+            title_a,
+            &body_a,
+            if approved { "exercise_approved_staff" } else { "exercise_rejected_staff" },
             &title_s,
             &body_s,
             Some(&payload),
@@ -526,6 +625,64 @@ pub fn notify_competition_updated(state: &AppState, title_ev: &str, competition_
                 Some(&payload),
             )
             .await?;
+        }
+        Ok(())
+    });
+}
+
+/// [2027] Notify athletes assigned to a competition when date or location changes.
+pub fn notify_competition_schedule_changed(
+    state: &AppState,
+    competition_id: &str,
+    title_ev: &str,
+    new_date: &str,
+    new_location: &str,
+) {
+    let st = state.clone();
+    let cid = competition_id.to_string();
+    let title_ev = title_ev.to_string();
+    let new_date = new_date.to_string();
+    let new_location = new_location.to_string();
+    spawn_notify(async move {
+        let conn_arc = st.db.raw().await;
+        let conn = conn_arc.as_ref();
+        let ev = competition_title_for_notification(&title_ev);
+        let title_a = "Zmiana terminu / miejsca zawodów";
+        let body_a = format!(
+            "„{}” — nowa data: {}, miejsce: {}.",
+            ev, new_date, new_location
+        );
+        let payload = serde_json::json!({
+            "competition_id": cid,
+            "date": new_date,
+            "location": new_location,
+        })
+        .to_string();
+
+        // Fetch all athletes assigned to this competition and notify them
+        let mut rows = conn
+            .query(
+                "SELECT a.user_id FROM competition_participants cp \
+                 JOIN athletes a ON a.id = cp.athlete_id \
+                 WHERE cp.competition_id = ?1 AND a.user_id IS NOT NULL",
+                [cid.clone()],
+            )
+            .await?;
+        let mut notified = HashSet::new();
+        while let Some(row) = rows.next().await? {
+            if let Ok(uid) = row.get::<String>(0) {
+                if notified.insert(uid.clone()) {
+                    insert_notification(
+                        conn,
+                        &uid,
+                        "competition_schedule_changed",
+                        title_a,
+                        &body_a,
+                        Some(&payload),
+                    )
+                    .await?;
+                }
+            }
         }
         Ok(())
     });
