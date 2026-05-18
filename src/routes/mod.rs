@@ -14,6 +14,7 @@ pub mod competitions;
 pub mod contact;
 pub mod exercise_submissions;
 pub mod exercises;
+pub mod cms_status;
 pub mod mobile_releases;
 pub mod feature_flags;
 pub mod gallery;

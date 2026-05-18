@@ -8,6 +8,7 @@ version = "3.2.2-dev"
 dependencies = [
  "argon2",
  "axum 0.8.9",
+ "base64 0.22.1",
  "chrono",
  "dotenvy",
  "hex",

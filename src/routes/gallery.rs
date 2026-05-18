@@ -246,6 +246,7 @@ pub async fn update_gallery_photo(
             infer_resource_type(&existing.media_type),
         )
         .await;
+        crate::cms_github::destroy_if_cms(&existing.image_url).await;
     }
     let conn_arc = state.db.raw().await;
     let _ = write_audit_log(
@@ -316,6 +317,7 @@ pub async fn delete_gallery_photo(
         infer_resource_type(&existing.media_type),
     )
     .await;
+    crate::cms_github::destroy_if_cms(&existing.image_url).await;
     let conn_arc = state.db.raw().await;
     let _ = write_audit_log(
         conn_arc.as_ref(),

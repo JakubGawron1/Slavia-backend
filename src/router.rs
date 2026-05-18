@@ -383,6 +383,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             "/feature-adoption",
             get(routes::system_logs::feature_adoption_stats),
         )
+        .route("/cms-status", get(routes::cms_status::cms_status))
         .route("/calendar/export/{id}", get(routes::calendar_export::export_competition_ics))
         .route("/mobile-releases/latest", get(routes::mobile_releases::get_latest_mobile_release))
         .route("/mobile-releases/sync", post(routes::mobile_releases::sync_mobile_releases))

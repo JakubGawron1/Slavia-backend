@@ -8,6 +8,7 @@ use serde::Serialize;
 use crate::api_error::{ApiError, api_error};
 use crate::audit::write_audit_log;
 use crate::cloudinary::cloudinary_signature;
+use crate::cms_github;
 use crate::middleware::auth::Claims;
 use crate::state::AppState;
 
@@ -37,6 +38,7 @@ impl UploadPurpose {
             Some("avatar") | Some("user-avatar") | Some("profile") => Self::Avatar,
             Some("blog") | Some("post") | Some("article") => Self::Blog,
             Some("gallery") | Some("media") => Self::Gallery,
+            Some("announcements") | Some("announcement") | Some("ogloszenia") => Self::Gallery,
             Some("athletes")
             | Some("athlete")
             | Some("player")
@@ -73,6 +75,84 @@ impl UploadPurpose {
             Self::Misc => "misc",
         }
     }
+
+    /// Galeria, blog i pozostałe media klubowe → Slavia-cms (gdy skonfigurowane).
+    fn uses_cms(self) -> bool {
+        matches!(self, Self::Gallery | Self::Blog | Self::Misc)
+    }
+
+    fn requires_cloudinary(self) -> bool {
+        matches!(self, Self::Avatar | Self::Athletes)
+    }
+}
+
+async fn record_cms_upload(state: &AppState, path: &str) {
+    let now = chrono::Utc::now().to_rfc3339();
+    for (key, val) in [
+        ("cms_last_upload_at", now.as_str()),
+        ("cms_last_upload_path", path),
+    ] {
+        let _ = state
+            .db
+            .execute(
+                "INSERT INTO system_settings (key, value) VALUES (?1, ?2) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, val),
+            )
+            .await;
+    }
+}
+
+async fn upload_to_cms(
+    state: &AppState,
+    claims: &Claims,
+    purpose: UploadPurpose,
+    filename: &str,
+    file_bytes: &[u8],
+    content_type: &str,
+) -> Result<Json<UploadResponse>, ApiError> {
+    let cfg = cms_github::cms_config();
+    if !cms_github::cms_upload_ready(&cfg) {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Upload do Slavia-cms wymaga SLAVIA_CMS_REPO i GITHUB_TOKEN (scope repo).",
+        ));
+    }
+    let path = cms_github::upload_bytes(
+        &cfg,
+        purpose.as_audit_str(),
+        filename,
+        file_bytes,
+    )
+    .await
+    .map_err(|e| api_error(StatusCode::BAD_GATEWAY, e))?;
+
+    record_cms_upload(state, &path).await;
+
+    let conn_arc = state.db.raw().await;
+    let _ = write_audit_log(
+        conn_arc.as_ref(),
+        Some(&claims.sub),
+        Some("upload"),
+        "upload",
+        "cms_github_upload",
+        Some("cms"),
+        Some(&path),
+        Some(
+            &serde_json::json!({
+                "purpose": purpose.as_audit_str(),
+                "content_type": content_type,
+                "repo": cfg.repo,
+                "branch": cfg.branch,
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    Ok(Json(UploadResponse {
+        url: path,
+    }))
 }
 
 pub async fn upload_handler(
@@ -80,28 +160,6 @@ pub async fn upload_handler(
     claims: Claims,
     mut multipart: Multipart,
 ) -> Result<Json<UploadResponse>, ApiError> {
-    if state.cloudinary_cloud_name.is_empty() {
-        return Err(api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Brak konfiguracji Cloudinary (CLOUDINARY_CLOUD_NAME)",
-        ));
-    }
-    // Preferuj signed upload (Render ma zmienne IP → whitelisting przy unsigned presetach bywa problematyczny).
-    // Fallback: unsigned upload preset (legacy).
-    let can_signed = !state.cloudinary_api_key.trim().is_empty()
-        && !state.cloudinary_api_secret.trim().is_empty();
-    let upload_preset = std::env::var("CLOUDINARY_UPLOAD_PRESET")
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    if !can_signed && upload_preset.is_empty() {
-        return Err(api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Brak konfiguracji Cloudinary (CLOUDINARY_UPLOAD_PRESET dla unsigned upload) ani kluczy do signed upload (CLOUDINARY_API_KEY/CLOUDINARY_API_SECRET).",
-        ));
-    }
-    let upload_preset_trim = upload_preset.trim().to_string();
-
     // Czytamy wszystkie pola z multipart — `file` (wymagane) oraz opcjonalne `purpose`.
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut filename: Option<String> = None;
@@ -192,6 +250,48 @@ pub async fn upload_handler(
     }
 
     let purpose = UploadPurpose::from_raw(purpose_raw.as_deref());
+
+    if purpose.uses_cms() && cms_github::cms_upload_ready(&cms_github::cms_config()) {
+        return upload_to_cms(
+            &state,
+            &claims,
+            purpose,
+            &filename,
+            &file_bytes,
+            &content_type,
+        )
+        .await;
+    }
+
+    if purpose.requires_cloudinary() && state.cloudinary_cloud_name.is_empty() {
+        return Err(api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Brak konfiguracji Cloudinary (CLOUDINARY_CLOUD_NAME) — wymagane dla avatarów i zdjęć zawodników.",
+        ));
+    }
+
+    if state.cloudinary_cloud_name.is_empty() {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Brak Cloudinary i brak Slavia-cms — ustaw GITHUB_TOKEN + SLAVIA_CMS_REPO albo Cloudinary.",
+        ));
+    }
+
+    // Preferuj signed upload (Render ma zmienne IP → whitelisting przy unsigned presetach bywa problematyczny).
+    // Fallback: unsigned upload preset (legacy).
+    let can_signed = !state.cloudinary_api_key.trim().is_empty()
+        && !state.cloudinary_api_secret.trim().is_empty();
+    let upload_preset = std::env::var("CLOUDINARY_UPLOAD_PRESET")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if !can_signed && upload_preset.is_empty() {
+        return Err(api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Brak konfiguracji Cloudinary (CLOUDINARY_UPLOAD_PRESET dla unsigned upload) ani kluczy do signed upload (CLOUDINARY_API_KEY/CLOUDINARY_API_SECRET).",
+        ));
+    }
+    let upload_preset_trim = upload_preset.trim().to_string();
 
     // Slug loginu używany jako stabilny `public_id` tylko dla awatarów.
     let username_slug: Option<String> = if can_signed && purpose.deterministic_public_id() {
