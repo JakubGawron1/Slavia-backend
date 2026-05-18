@@ -144,6 +144,64 @@ pub async fn upsert_attendance(
         None
     };
     let now = Utc::now().to_rfc3339();
+
+    let mut dup_rows = state
+        .db
+        .query(
+            "SELECT id, verification_state, status FROM attendance_records WHERE athlete_id = ?1 AND session_date = ?2 LIMIT 1",
+            (
+                payload.athlete_id.clone(),
+                payload.session_date.clone(),
+            ),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if let Some(dup) = dup_rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let dup_id: String = dup.get(0).unwrap_or_default();
+        let dup_vs: String = dup.get(1).unwrap_or_default();
+        let _dup_status: String = dup.get(2).unwrap_or_default();
+        if !is_staff {
+            if dup_vs == "verified" {
+                return Err(api_error(
+                    StatusCode::CONFLICT,
+                    "Obecność na ten dzień jest już zapisana i zatwierdzona.",
+                ));
+            }
+            if dup_vs == "pending" {
+                return Err(api_error(
+                    StatusCode::CONFLICT,
+                    "Masz już zgłoszenie obecności oczekujące na weryfikację dla tego dnia.",
+                ));
+            }
+        }
+        state
+            .db
+            .execute(
+                "UPDATE attendance_records SET status = ?1, source_role = ?2, created_by = ?3, verified_by = ?4,
+                 verification_state = ?5, note = ?6, updated_at = ?7 WHERE id = ?8",
+                (
+                    status.clone(),
+                    actor_role.clone(),
+                    Some(created_by.clone()),
+                    verified_by.clone(),
+                    verification_state.to_string(),
+                    payload.note.clone(),
+                    now.clone(),
+                    dup_id.clone(),
+                ),
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let rec = load_attendance_record_by_id(&state, &dup_id)
+            .await?
+            .ok_or_else(|| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Brak wpisu po zapisie"))?;
+        return Ok(Json(rec));
+    }
+
     let id = Uuid::new_v4().to_string();
 
     state

@@ -97,6 +97,56 @@ pub async fn list_audit_logs(
     Ok(Json(out))
 }
 
+#[derive(Serialize)]
+pub struct FeatureAdoptionRow {
+    pub module_key: String,
+    pub label: String,
+    pub unique_users_30d: i64,
+    pub events_30d: i64,
+}
+
+/// Panel superadmin: unikalni użytkownicy z audytu w ostatnich 30 dniach per moduł.
+pub async fn feature_adoption_stats(
+    State(state): State<AppState>,
+    _auth: RequireSuperAdmin,
+) -> Result<Json<Vec<FeatureAdoptionRow>>, ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT category, action, COUNT(DISTINCT actor_user_id) AS users, COUNT(*) AS events
+             FROM system_audit_logs
+             WHERE actor_user_id IS NOT NULL
+               AND created_at >= datetime('now', '-30 day')
+             GROUP BY category, action
+             ORDER BY users DESC, events DESC
+             LIMIT 80",
+            (),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let category: String = row.get(0).unwrap_or_default();
+        let action: String = row.get(1).unwrap_or_default();
+        let users: i64 = row.get(2).unwrap_or(0);
+        let events: i64 = row.get(3).unwrap_or(0);
+        let module_key = format!("{category}:{action}");
+        let label = format!("{category} · {action}");
+        out.push(FeatureAdoptionRow {
+            module_key,
+            label,
+            unique_users_30d: users,
+            events_30d: events,
+        });
+    }
+    Ok(Json(out))
+}
+
 pub async fn system_metrics(
     State(state): State<AppState>,
     _auth: RequireTrainerOrHigher,

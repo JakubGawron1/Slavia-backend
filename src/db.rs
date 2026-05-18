@@ -268,6 +268,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             updated_at TEXT NOT NULL
         )",
         "CREATE INDEX IF NOT EXISTS idx_attendance_athlete_date ON attendance_records(athlete_id, session_date DESC)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_unique_athlete_session ON attendance_records(athlete_id, session_date)",
         "CREATE TABLE IF NOT EXISTS system_audit_logs (
             id TEXT PRIMARY KEY,
             actor_user_id TEXT,
@@ -1125,6 +1126,7 @@ pub async fn reset_database(
             updated_at TEXT NOT NULL
         )",
         "CREATE INDEX IF NOT EXISTS idx_attendance_athlete_date ON attendance_records(athlete_id, session_date DESC)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_unique_athlete_session ON attendance_records(athlete_id, session_date)",
         "CREATE TABLE IF NOT EXISTS system_audit_logs (
             id TEXT PRIMARY KEY,
             actor_user_id TEXT,

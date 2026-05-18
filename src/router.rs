@@ -2,6 +2,7 @@
 
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     http::{HeaderName, HeaderValue},
     middleware,
     response::Html,
@@ -26,7 +27,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/totp/disable", post(routes::totp::totp_disable_handler))
         .route("/logout-all", post(routes::auth::logout_all_devices_handler));
 
-    let upload_routes = Router::new().route("/", post(routes::upload::upload_handler));
+    // Upload zdjęć/filmów — domyślny limit Axum (2 MB) powodował błędy „multipart” przy większych plikach.
+    let upload_routes = Router::new()
+        .route("/", post(routes::upload::upload_handler))
+        .layer(DefaultBodyLimit::max(45 * 1024 * 1024));
 
     let athletes_routes = Router::new()
         .route(
@@ -375,6 +379,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/ping", get(routes::system_logs::ping_backend))
         .route("/audit-logs", get(routes::system_logs::list_audit_logs))
         .route("/metrics", get(routes::system_logs::system_metrics))
+        .route(
+            "/feature-adoption",
+            get(routes::system_logs::feature_adoption_stats),
+        )
         .route("/calendar/export/{id}", get(routes::calendar_export::export_competition_ics))
         .route("/mobile-releases/latest", get(routes::mobile_releases::get_latest_mobile_release))
         .route("/mobile-releases/sync", post(routes::mobile_releases::sync_mobile_releases))
