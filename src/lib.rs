@@ -19,6 +19,7 @@ pub mod state;
 
 pub(crate) mod api_error;
 pub mod cloudinary;
+pub mod cms_github;
 mod external_calendar_sync;
 mod login_throttle;
 mod post_throttle;
