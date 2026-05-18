@@ -71,6 +71,7 @@ pub struct UpdateProfileRequest {
 pub struct UpdateUserAccountRequest {
     pub username: Option<String>,
     pub password: Option<String>,
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,6 +189,47 @@ async fn collect_users_for_sql(state: &AppState, sql: &str) -> Result<Vec<User>,
     Ok(out)
 }
 
+const ADMIN_ACCOUNTS_SQL: &str = "SELECT u.id, u.username, u.avatar_url, u.roles, u.is_banned, u.banned_reason,
+    (SELECT a.id FROM athletes a WHERE a.user_id = u.id ORDER BY a.id ASC LIMIT 1) AS athlete_id,
+    (SELECT a.image_url FROM athletes a WHERE a.user_id = u.id ORDER BY a.id ASC LIMIT 1) AS athlete_image_url,
+    (SELECT a.full_name FROM athletes a WHERE a.user_id = u.id ORDER BY a.id ASC LIMIT 1) AS athlete_full_name
+    FROM users u ORDER BY u.username ASC";
+
+async fn collect_admin_accounts(state: &AppState) -> Result<Vec<AdminAccountDto>, ApiError> {
+    let mut rows = state
+        .db
+        .query(ADMIN_ACCOUNTS_SQL, ())
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let roles_json: String = row.get(3).unwrap();
+        let roles: Vec<Role> = serde_json::from_str(&roles_json).unwrap();
+        let is_banned: i64 = row.get(4).unwrap_or(0);
+        let banned_reason: Option<String> = row.get(5).ok();
+        let athlete_id: Option<String> = row.get(6).ok();
+        let athlete_image_url: Option<String> = row.get(7).ok();
+        let athlete_full_name: Option<String> = row.get(8).ok();
+        out.push(AdminAccountDto {
+            id: row.get(0).unwrap(),
+            username: row.get(1).unwrap(),
+            avatar_url: row.get(2).ok(),
+            is_banned: is_banned != 0,
+            banned_reason,
+            roles,
+            athlete_id,
+            athlete_image_url,
+            athlete_full_name,
+        });
+    }
+    Ok(out)
+}
+
 pub async fn list_admins(
     State(state): State<AppState>,
     auth: RequireAdminOrSuperAdmin,
@@ -210,22 +252,40 @@ pub async fn list_admins(
     Ok(Json(admins))
 }
 
+/// Konto użytkownika w panelu administracyjnym — z opcjonalnym powiązaniem profilu sportowego.
+#[derive(Debug, Serialize, Clone)]
+pub struct AdminAccountDto {
+    pub id: String,
+    pub username: String,
+    pub avatar_url: Option<String>,
+    #[serde(default)]
+    pub is_banned: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banned_reason: Option<String>,
+    pub roles: Vec<Role>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub athlete_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub athlete_image_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub athlete_full_name: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct GroupedAccounts {
     /// SuperAdmin, Admin — dostęp do panelu administracyjnego (trener bez Admina nie trafia tutaj).
-    pub admins: Vec<User>,
+    pub admins: Vec<AdminAccountDto>,
     /// Trenerzy bez roli kadry administracyjnej (`Trainer`).
-    pub trainers: Vec<User>,
+    pub trainers: Vec<AdminAccountDto>,
     /// Zawodnicy z kontem (`Athlete`), bez roli admin ani trener.
-    pub athletes: Vec<User>,
+    pub athletes: Vec<AdminAccountDto>,
 }
 
 pub async fn list_accounts_grouped(
     State(state): State<AppState>,
     auth: RequireAdminOrSuperAdmin,
 ) -> Result<Json<GroupedAccounts>, ApiError> {
-    let sql = "SELECT id, username, avatar_url, roles, is_banned, banned_reason FROM users ORDER BY username ASC";
-    let all_users = collect_users_for_sql(&state, sql).await?;
+    let all_users = collect_admin_accounts(&state).await?;
     let caller_super = auth.0.roles.contains(&Role::SuperAdmin);
 
     let mut admins = Vec::new();
@@ -330,10 +390,10 @@ pub async fn update_user_account(
     auth: RequireAdminOrSuperAdmin,
     Json(payload): Json<UpdateUserAccountRequest>,
 ) -> Result<StatusCode, ApiError> {
-    if payload.username.is_none() && payload.password.is_none() {
+    if payload.username.is_none() && payload.password.is_none() && payload.avatar_url.is_none() {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
-            "At least one of username, password is required",
+            "At least one of username, password, avatar_url is required",
         ));
     }
 
@@ -351,6 +411,25 @@ pub async fn update_user_account(
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "User not found"))?;
 
     forbid_mutating_superadmin_user_record(claims, &target_roles)?;
+
+    let mut prev_avatar: Option<String> = None;
+    if payload.avatar_url.is_some() {
+        let mut rows = state
+            .db
+            .query(
+                "SELECT avatar_url FROM users WHERE id = ?1",
+                [id.clone()],
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        {
+            prev_avatar = row.get(0).ok();
+        }
+    }
 
     if let Some(new_username) = &payload.username {
         if new_username.is_empty() {
@@ -387,6 +466,31 @@ pub async fn update_user_account(
             .execute(
                 "UPDATE users SET password_hash = ?1 WHERE id = ?2",
                 (hash, id.clone()),
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+
+    if let Some(ref new_av) = payload.avatar_url {
+        let trimmed = new_av.trim();
+        let stored: Option<String> = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+        if prev_avatar.as_ref() != stored.as_ref() {
+            if let Some(ref old) = prev_avatar {
+                let s = old.trim();
+                if !s.is_empty() {
+                    crate::cloudinary::destroy_if_cloudinary(&state, s, "image").await;
+                }
+            }
+        }
+        state
+            .db
+            .execute(
+                "UPDATE users SET avatar_url = ?1 WHERE id = ?2",
+                (stored, id.clone()),
             )
             .await
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

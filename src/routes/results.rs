@@ -505,7 +505,7 @@ pub async fn create_result(
     if claims_is_pure_athlete(&claims) {
         let mut rows = state
             .db
-            .query("SELECT id FROM athletes WHERE user_id = ?1", [claims.sub])
+            .query("SELECT id FROM athletes WHERE user_id = ?1", [claims.sub.clone()])
             .await
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         if let Some(row) = rows
@@ -559,6 +559,32 @@ pub async fn create_result(
             StatusCode::BAD_REQUEST,
             "Podaj dodatnie rwanie i/lub podrzut (0 dozwolone przy kontuzji/jednoboju) albo przynajmniej jedno ćwiczenie siłowe",
         ));
+    }
+
+    if claims_is_pure_athlete(&claims) {
+        let mut dup_rows = state
+            .db
+            .query(
+                "SELECT id FROM results WHERE athlete_id = ?1 AND date = ?2 AND total = ?3 AND status = 'Pending' LIMIT 1",
+                (
+                    payload.athlete_id.clone(),
+                    payload.date.clone(),
+                    total,
+                ),
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if dup_rows
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .is_some()
+        {
+            return Err(api_error(
+                StatusCode::CONFLICT,
+                "Masz już zgłoszenie wyniku oczekujące na weryfikację z tym samym totalem i datą.",
+            ));
+        }
     }
 
     let id = Uuid::new_v4().to_string();
