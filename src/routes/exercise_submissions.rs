@@ -298,21 +298,25 @@ async fn load_submission_for_review(
     id: &str,
 ) -> Result<
     (
-        String,
-        String,
-        f64,
-        String,
-        String,
-        Option<String>,
+        String,  // athlete_id
+        String,  // exercise_id
+        f64,     // value
+        String,  // unit
+        String,  // performed_at
+        Option<String>, // notes
         ResultStatus,
+        String,  // exercise_name
     ),
     ApiError,
 > {
     let mut rows = state
         .db
         .query(
-            "SELECT athlete_id, exercise_id, value, unit, performed_at, notes, status
-             FROM exercise_submissions WHERE id = ?1",
+            "SELECT s.athlete_id, s.exercise_id, s.value, s.unit, s.performed_at, s.notes,
+                    s.status, e.name
+             FROM exercise_submissions s
+             JOIN exercises e ON e.id = s.exercise_id
+             WHERE s.id = ?1",
             [id.to_string()],
         )
         .await
@@ -328,6 +332,8 @@ async fn load_submission_for_review(
     let status = status_str
         .parse::<ResultStatus>()
         .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Invalid status"))?;
+    let exercise_name = sql_row::required_string(&row, 7)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     Ok((
         sql_row::required_string(&row, 0)
@@ -343,6 +349,7 @@ async fn load_submission_for_review(
         sql_row::opt_string(&row, 5)
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
         status,
+        exercise_name,
     ))
 }
 
@@ -355,7 +362,7 @@ pub async fn approve_exercise_submission(
     if !claims_has_staff_access(&claims) {
         return Err(api_error(StatusCode::FORBIDDEN, "Brak uprawnień"));
     }
-    let (athlete_id, exercise_id, value, unit, performed_at, notes, status) =
+    let (athlete_id, exercise_id, value, unit, performed_at, notes, status, exercise_name) =
         load_submission_for_review(&state, &id).await?;
     if status == ResultStatus::Approved {
         return Ok(StatusCode::NO_CONTENT);
@@ -401,21 +408,32 @@ pub async fn approve_exercise_submission(
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             (
                 hid,
-                athlete_id,
+                athlete_id.clone(),
                 exercise_id,
                 value,
-                unit,
+                unit.clone(),
                 performed_at,
                 Some(id),
                 Some(claims.sub),
                 now.clone(),
                 notes,
-                review_note,
+                review_note.clone(),
                 now,
             ),
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // 3) Notify athlete
+    crate::notifications::notify_exercise_submission_reviewed(
+        &state,
+        &athlete_id,
+        &exercise_name,
+        value,
+        &unit,
+        true,
+        review_note.as_deref(),
+    );
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -429,7 +447,8 @@ pub async fn reject_exercise_submission(
     if !claims_has_staff_access(&claims) {
         return Err(api_error(StatusCode::FORBIDDEN, "Brak uprawnień"));
     }
-    let (_, _, _, _, _, _, status) = load_submission_for_review(&state, &id).await?;
+    let (athlete_id, _, value, unit, _, _, status, exercise_name) =
+        load_submission_for_review(&state, &id).await?;
     if status == ResultStatus::Rejected {
         return Ok(StatusCode::NO_CONTENT);
     }
@@ -452,10 +471,21 @@ pub async fn reject_exercise_submission(
             "UPDATE exercise_submissions
              SET status = 'Rejected', reviewed_by_user_id = ?1, reviewed_at = ?2, review_note = ?3
              WHERE id = ?4",
-            (claims.sub, now, review_note, id),
+            (claims.sub, now, review_note.clone(), id),
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Notify athlete
+    crate::notifications::notify_exercise_submission_reviewed(
+        &state,
+        &athlete_id,
+        &exercise_name,
+        value,
+        &unit,
+        false,
+        review_note.as_deref(),
+    );
 
     Ok(StatusCode::NO_CONTENT)
 }

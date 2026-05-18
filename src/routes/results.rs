@@ -644,10 +644,17 @@ pub async fn create_result(
     }))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ReviewResultRequest {
+    #[serde(default)]
+    pub review_note: Option<String>,
+}
+
 pub async fn approve_result(
     State(state): State<AppState>,
     Path(id): Path<String>,
     _auth: RequireTrainerOrHigher,
+    payload: Option<axum::Json<ReviewResultRequest>>,
 ) -> Result<StatusCode, ApiError> {
     let mut rows = state
         .db
@@ -684,7 +691,8 @@ pub async fn approve_result(
         return Err(api_error(StatusCode::NOT_FOUND, "Result not found"));
     }
     sync_athlete_bests_from_approved(&state, &athlete_id).await?;
-    crate::notifications::notify_result_approved(&state, &athlete_id, total, &date);
+    let note = payload.and_then(|p| p.0.review_note.filter(|s| !s.trim().is_empty()));
+    crate::notifications::notify_result_approved(&state, &athlete_id, total, &date, note.as_deref());
     Ok(StatusCode::OK)
 }
 
@@ -692,7 +700,31 @@ pub async fn reject_result(
     State(state): State<AppState>,
     Path(id): Path<String>,
     _auth: RequireTrainerOrHigher,
+    payload: Option<axum::Json<ReviewResultRequest>>,
 ) -> Result<StatusCode, ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT athlete_id, total, date FROM results WHERE id = ?1",
+            [id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Result not found"))?;
+    let athlete_id: String = row
+        .get(0)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let total: f64 = row
+        .get(1)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let date: String = row
+        .get(2)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
     let n = state
         .db
         .execute(
@@ -704,6 +736,9 @@ pub async fn reject_result(
     if n == 0 {
         return Err(api_error(StatusCode::NOT_FOUND, "Result not found"));
     }
+    
+    let note = payload.and_then(|p| p.0.review_note.filter(|s| !s.trim().is_empty()));
+    crate::notifications::notify_result_rejected(&state, &athlete_id, total, &date, note.as_deref());
     Ok(StatusCode::OK)
 }
 
@@ -1014,7 +1049,7 @@ pub async fn batch_approve_results(
             .get(2)
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         athlete_ids.insert(athlete_id.clone());
-        crate::notifications::notify_result_approved(&state, &athlete_id, total, &date);
+        crate::notifications::notify_result_approved(&state, &athlete_id, total, &date, None);
     }
 
     for aid in &athlete_ids {

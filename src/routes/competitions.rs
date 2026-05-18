@@ -181,6 +181,26 @@ pub async fn update_competition(
 ) -> Result<Json<Competition>, ApiError> {
     let ext = competition_external_source(&state, &id).await?;
 
+    // [2027] Read old values to detect schedule changes
+    let old_vals: Option<(String, String)> = {
+        let mut rows = state
+            .db
+            .query("SELECT date, location FROM competitions WHERE id = ?1", [id.clone()])
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        {
+            let d: String = row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            let l: String = row.get(1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            Some((d, l))
+        } else {
+            None
+        }
+    };
+
     if ext.is_some() {
         let status = payload.status.unwrap_or_else(|| "scheduled".to_string());
         let category_opt = payload.category.map(|s| s.trim().to_string());
@@ -236,6 +256,23 @@ pub async fn update_competition(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     notifications::notify_competition_updated(&state, &updated.title, &updated.id);
+
+    // [2027] Notify assigned athletes if date or location changed
+    if ext.is_none() {
+        if let Some((old_date, old_location)) = old_vals {
+            let date_changed = old_date != payload.date;
+            let location_changed = old_location != payload.location;
+            if date_changed || location_changed {
+                notifications::notify_competition_schedule_changed(
+                    &state,
+                    &updated.id,
+                    &updated.title,
+                    &updated.date,
+                    &updated.location,
+                );
+            }
+        }
+    }
 
     Ok(Json(updated))
 }

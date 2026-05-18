@@ -292,6 +292,18 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             get(routes::attendance::list_attendance).post(routes::attendance::upsert_attendance),
         )
         .route(
+            "/qr-config",
+            get(routes::attendance_qr::get_attendance_qr_config),
+        )
+        .route(
+            "/qr-config/regenerate",
+            post(routes::attendance_qr::regenerate_attendance_qr_token),
+        )
+        .route(
+            "/qr-checkin",
+            post(routes::attendance_qr::qr_checkin),
+        )
+        .route(
             "/summary/{athlete_id}",
             get(routes::attendance::attendance_summary_for_athlete),
         )
@@ -316,6 +328,11 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             "/threads/{thread_id}/messages",
             get(routes::chat::list_messages).post(routes::chat::send_message),
         )
+        .route(
+            "/messages/{message_id}/reactions",
+            post(routes::chat::toggle_message_reaction),
+        )
+        .route("/presence", post(routes::chat::ping_presence))
         // Ręczne czyszczenie bezczynnych wątków (Admin+). Domyślnie używa progu z `chat_cleanup::CHAT_INACTIVITY_DAYS`,
         // można go nadpisać query paramem `?days=N` (1..=365) — np. by ręcznie posprzątać po incydencie.
         .route("/admin/prune", post(routes::chat::admin_prune_threads));

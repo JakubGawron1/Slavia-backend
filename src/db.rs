@@ -688,6 +688,27 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             (),
         )
         .await;
+    let _ = conn
+        .execute("ALTER TABLE users ADD COLUMN last_seen_at TEXT", ())
+        .await;
+    let _ = conn
+        .execute(
+            "CREATE TABLE IF NOT EXISTS chat_message_reactions (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                emoji TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_reaction_unique ON chat_message_reactions(message_id, user_id, emoji)",
+            (),
+        )
+        .await;
 
     let n = sync_all_athletes_bests_from_results(conn)
         .await
