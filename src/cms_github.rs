@@ -65,11 +65,52 @@ pub fn cms_subdir_for_purpose(purpose: &str) -> &'static str {
 }
 
 pub fn is_cms_storage_path(url_or_path: &str) -> bool {
-    let s = url_or_path.trim();
-    if s.is_empty() || s.starts_with("http://") || s.starts_with("https://") {
-        return false;
+    normalize_cms_path(url_or_path).is_some()
+}
+
+/// Wyciąga ścieżkę w repo CMS z wartości w DB (np. `media/gallery/…`) lub pełnego URL raw GitHub / Pages.
+pub fn normalize_cms_path(path_or_url: &str) -> Option<String> {
+    let s = path_or_url.trim();
+    if s.is_empty() {
+        return None;
     }
-    s.starts_with("media/") || s.starts_with("gallery/") || s.starts_with("blog/")
+
+    if !s.starts_with("http://") && !s.starts_with("https://") {
+        let clean = s.trim_start_matches('/');
+        return is_cms_relative_path(clean).then(|| clean.to_string());
+    }
+
+    let lower = s.to_ascii_lowercase();
+    if lower.contains("raw.githubusercontent.com/")
+        && let Some(idx) = lower.find("raw.githubusercontent.com/") {
+            let rest = &s[idx + "raw.githubusercontent.com/".len()..];
+            let path = rest.splitn(4, '/').nth(3)?;
+            let path = path.split(['?', '#']).next().unwrap_or(path);
+            if is_cms_relative_path(path) {
+                return Some(path.to_string());
+            }
+        }
+
+    if lower.contains("github.io/")
+        && let Some(idx) = lower.find("github.io/") {
+            let rest = &s[idx + "github.io/".len()..];
+            let media_idx = rest.to_ascii_lowercase().find("media/")?;
+            let path = &rest[media_idx..];
+            let path = path.split(['?', '#']).next().unwrap_or(path);
+            if is_cms_relative_path(path) {
+                return Some(path.to_string());
+            }
+        }
+
+    None
+}
+
+fn is_cms_relative_path(path: &str) -> bool {
+    let p = path.trim_start_matches('/');
+    p.starts_with("media/")
+        || p.starts_with("gallery/")
+        || p.starts_with("blog/")
+        || p.starts_with("announcements/")
 }
 
 fn sanitize_filename(name: &str) -> String {
@@ -278,11 +319,51 @@ pub async fn delete_path(cfg: &CmsConfig, path: &str) -> Result<(), String> {
 }
 
 pub async fn destroy_if_cms(path_or_url: &str) {
-    if !is_cms_storage_path(path_or_url) {
+    let Some(path) = normalize_cms_path(path_or_url) else {
         return;
-    }
+    };
     let cfg = cms_config();
-    if let Err(e) = delete_path(&cfg, path_or_url).await {
-        eprintln!("[cms] delete {path_or_url}: {e}");
+    if let Err(e) = delete_path(&cfg, &path).await {
+        eprintln!("[cms] delete {path}: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_relative_gallery_path() {
+        assert_eq!(
+            normalize_cms_path("media/gallery/abc-photo.jpg").as_deref(),
+            Some("media/gallery/abc-photo.jpg")
+        );
+    }
+
+    #[test]
+    fn normalize_raw_github_url() {
+        assert_eq!(
+            normalize_cms_path(
+                "https://raw.githubusercontent.com/JakubGawron1/Slavia-cms/main/media/gallery/abc-photo.jpg"
+            )
+            .as_deref(),
+            Some("media/gallery/abc-photo.jpg")
+        );
+    }
+
+    #[test]
+    fn normalize_github_pages_url() {
+        assert_eq!(
+            normalize_cms_path(
+                "https://jakubgawron1.github.io/Slavia-cms/media/gallery/abc-photo.jpg"
+            )
+            .as_deref(),
+            Some("media/gallery/abc-photo.jpg")
+        );
+    }
+
+    #[test]
+    fn reject_cloudinary_url() {
+        assert!(normalize_cms_path("https://res.cloudinary.com/demo/image/upload/v1/x.jpg").is_none());
     }
 }

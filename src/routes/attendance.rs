@@ -426,36 +426,31 @@ pub async fn list_attendance(
     );
     let mut params: Vec<String> = Vec::new();
 
-    if let Some(v) = query.athlete_id.as_ref() {
-        if !v.trim().is_empty() {
+    if let Some(v) = query.athlete_id.as_ref()
+        && !v.trim().is_empty() {
             sql.push_str(" AND athlete_id = ?");
             params.push(v.trim().to_string());
         }
-    }
-    if let Some(v) = query.status.as_ref() {
-        if !v.trim().is_empty() {
+    if let Some(v) = query.status.as_ref()
+        && !v.trim().is_empty() {
             sql.push_str(" AND status = ?");
             params.push(v.trim().to_string());
         }
-    }
-    if let Some(v) = query.verification_state.as_ref() {
-        if !v.trim().is_empty() {
+    if let Some(v) = query.verification_state.as_ref()
+        && !v.trim().is_empty() {
             sql.push_str(" AND verification_state = ?");
             params.push(v.trim().to_string());
         }
-    }
-    if let Some(v) = query.from_date.as_ref() {
-        if !v.trim().is_empty() {
+    if let Some(v) = query.from_date.as_ref()
+        && !v.trim().is_empty() {
             sql.push_str(" AND session_date >= ?");
             params.push(v.trim().to_string());
         }
-    }
-    if let Some(v) = query.to_date.as_ref() {
-        if !v.trim().is_empty() {
+    if let Some(v) = query.to_date.as_ref()
+        && !v.trim().is_empty() {
             sql.push_str(" AND session_date <= ?");
             params.push(v.trim().to_string());
         }
-    }
     sql.push_str(" ORDER BY session_date DESC, created_at DESC LIMIT 500");
 
     let mut rows = state

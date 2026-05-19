@@ -128,16 +128,13 @@ impl std::str::FromStr for ResultStatus {
 /// `Training` — wynik z treningu (widoczny po zalogowaniu, nie wpływa na PB w `athletes`).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ResultKind {
+    #[default]
     Competition,
     Training,
 }
 
-impl Default for ResultKind {
-    fn default() -> Self {
-        ResultKind::Competition
-    }
-}
 
 impl std::fmt::Display for ResultKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

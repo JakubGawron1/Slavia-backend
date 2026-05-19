@@ -478,14 +478,13 @@ pub async fn update_user_account(
         } else {
             Some(trimmed.to_string())
         };
-        if prev_avatar.as_ref() != stored.as_ref() {
-            if let Some(ref old) = prev_avatar {
+        if prev_avatar.as_ref() != stored.as_ref()
+            && let Some(ref old) = prev_avatar {
                 let s = old.trim();
                 if !s.is_empty() {
                     crate::cloudinary::destroy_if_cloudinary(&state, s, "image").await;
                 }
             }
-        }
         state
             .db
             .execute(
@@ -774,13 +773,11 @@ pub async fn update_profile(
         }
     }
 
-    if let Some(ref new_av) = payload.avatar_url {
-        if prev_avatar.as_ref() != Some(new_av) {
-            if let Some(ref old) = prev_avatar {
+    if let Some(ref new_av) = payload.avatar_url
+        && prev_avatar.as_ref() != Some(new_av)
+            && let Some(ref old) = prev_avatar {
                 crate::cloudinary::destroy_if_cloudinary(&state, old, "image").await;
             }
-        }
-    }
 
     if let Some(ref new_password) = payload.password {
         let trimmed = new_password.trim();

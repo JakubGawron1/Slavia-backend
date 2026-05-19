@@ -408,8 +408,8 @@ pub async fn update_athlete(
         .unwrap_or_else(|| "Zawodnik".to_string());
 
     let mut user_id_to_set = current_user_id.clone();
-    if current_user_id.is_none() {
-        if let Some(uid) = try_attach_athlete_login_or_request(
+    if current_user_id.is_none()
+        && let Some(uid) = try_attach_athlete_login_or_request(
             &state,
             &auth.0,
             &id,
@@ -421,7 +421,6 @@ pub async fn update_athlete(
         {
             user_id_to_set = Some(uid);
         }
-    }
 
     // Calculate total
     let snatch = payload.best_snatch_kg.unwrap_or(0.0);
@@ -447,11 +446,10 @@ pub async fn update_athlete(
         return Err(api_error(StatusCode::NOT_FOUND, "Athlete not found"));
     };
 
-    if payload.image_url.as_ref() != prev_img.as_ref() {
-        if let Some(ref old) = prev_img {
+    if payload.image_url.as_ref() != prev_img.as_ref()
+        && let Some(ref old) = prev_img {
             crate::cloudinary::destroy_if_cloudinary(&state, old, "image").await;
         }
-    }
 
     state
         .db
@@ -527,11 +525,10 @@ pub async fn delete_athlete(
         let user_id: Option<String> = row.get(0).ok();
         let full_name: String = row.get(1).unwrap_or_else(|_| "?".to_string());
 
-        if let Some(ref uid) = user_id {
-            if let Some(roles) = user_roles_by_id(&state, uid).await? {
+        if let Some(ref uid) = user_id
+            && let Some(roles) = user_roles_by_id(&state, uid).await? {
                 forbid_mutating_superadmin_user_record(claims, &roles)?;
             }
-        }
 
         state
             .db
@@ -749,7 +746,7 @@ pub async fn athlete_timeline(
         });
     }
 
-    out.sort_by(|a, b| parse_sort_ts(&b.at).cmp(&parse_sort_ts(&a.at)));
+    out.sort_by_key(|b| std::cmp::Reverse(parse_sort_ts(&b.at)));
     Ok(Json(out))
 }
 

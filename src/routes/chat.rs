@@ -203,6 +203,7 @@ async fn load_reactions_for_thread(
     Ok(map)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn build_thread_dto(
     state: &AppState,
     viewer_id: &str,

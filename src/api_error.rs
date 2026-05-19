@@ -11,7 +11,6 @@ pub struct ErrorBody {
 
 pub type ApiError = (StatusCode, Json<ErrorBody>);
 
-#[must_use]
 pub fn api_error(status: StatusCode, msg: impl Into<String>) -> ApiError {
     (
         status,

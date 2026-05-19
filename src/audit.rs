@@ -2,6 +2,7 @@ use chrono::Utc;
 use libsql::Connection;
 use uuid::Uuid;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn write_audit_log(
     conn: &Connection,
     actor_user_id: Option<&str>,
