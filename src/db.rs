@@ -667,6 +667,19 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
 
     let _ = conn
         .execute(
+            "CREATE INDEX IF NOT EXISTS idx_posts_published_created ON posts(published, created_at DESC)",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
+            "CREATE INDEX IF NOT EXISTS idx_announcements_published_list ON announcements(published, pinned DESC, sort_order ASC, created_at DESC)",
+            (),
+        )
+        .await;
+
+    let _ = conn
+        .execute(
             "ALTER TABLE competitions ADD COLUMN external_source TEXT",
             (),
         )

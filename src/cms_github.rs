@@ -102,6 +102,18 @@ pub fn normalize_cms_path(path_or_url: &str) -> Option<String> {
             }
         }
 
+    for base in cms_base_urls() {
+        let base_lower = base.to_ascii_lowercase();
+        if lower.starts_with(&base_lower) {
+            let rest = &s[base.len()..];
+            let path = rest.trim_start_matches('/');
+            let path = path.split(['?', '#']).next().unwrap_or(path);
+            if is_cms_relative_path(path) {
+                return Some(path.to_string());
+            }
+        }
+    }
+
     None
 }
 
@@ -140,14 +152,34 @@ fn build_repo_path(cfg: &CmsConfig, purpose: &str, filename: &str) -> String {
     format!("{}/{}/{unique}", cfg.media_root, sub)
 }
 
+/// Odpowiedź GET Contents API — `sha` jest na poziomie głównym (nie w `content`).
 #[derive(Debug, Deserialize)]
 struct GhContentResponse {
+    sha: Option<String>,
+    #[serde(default)]
     content: Option<GhContentNode>,
 }
 
 #[derive(Debug, Deserialize)]
 struct GhContentNode {
-    sha: String,
+    sha: Option<String>,
+}
+
+fn contents_api_path(path: &str) -> String {
+    path.split('/')
+        .filter(|seg| !seg.is_empty())
+        .map(urlencoding::encode)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn cms_base_urls() -> Vec<String> {
+    ["SLAVIA_CMS_BASE_URL", "NUXT_PUBLIC_CMS_BASE_URL"]
+        .into_iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -216,10 +248,11 @@ async fn fetch_file_sha(
     path: &str,
     token: &str,
 ) -> Result<Option<String>, String> {
+    let encoded = contents_api_path(path);
     let url = format!(
         "https://api.github.com/repos/{}/contents/{}?ref={}",
         cfg.repo,
-        urlencoding::encode(path),
+        encoded,
         urlencoding::encode(&cfg.branch)
     );
     let res = client
@@ -238,7 +271,10 @@ async fn fetch_file_sha(
         return Err(github_error_detail(res).await);
     }
     let parsed: GhContentResponse = res.json().await.map_err(|e| e.to_string())?;
-    Ok(parsed.content.map(|c| c.sha))
+    Ok(parsed
+        .sha
+        .or_else(|| parsed.content.and_then(|c| c.sha))
+        .filter(|s| !s.is_empty()))
 }
 
 /// Wgrywa plik do repo CMS; zwraca ścieżkę względną (np. `media/gallery/uuid-foto.jpg`).
@@ -258,10 +294,10 @@ pub async fn upload_bytes(
 
     let path = build_repo_path(cfg, purpose, filename);
     let client = reqwest::Client::new();
+    let encoded = contents_api_path(&path);
     let url = format!(
         "https://api.github.com/repos/{}/contents/{}",
-        cfg.repo,
-        urlencoding::encode(&path)
+        cfg.repo, encoded
     );
     let existing_sha = fetch_file_sha(&client, cfg, &path, token).await?;
     let put = GhPutBody {
@@ -295,12 +331,15 @@ pub async fn delete_path(cfg: &CmsConfig, path: &str) -> Result<(), String> {
     let client = reqwest::Client::new();
     let sha = match fetch_file_sha(&client, cfg, path, token).await? {
         Some(s) => s,
-        None => return Ok(()),
+        None => {
+            eprintln!("[cms] delete skip (brak sha na GitHub): {path} (repo={})", cfg.repo);
+            return Ok(());
+        }
     };
+    let encoded = contents_api_path(path);
     let url = format!(
         "https://api.github.com/repos/{}/contents/{}",
-        cfg.repo,
-        urlencoding::encode(path)
+        cfg.repo, encoded
     );
     let del = GhDeleteBody {
         message: &format!("Slavia CMS delete: {path}"),
@@ -319,12 +358,30 @@ pub async fn delete_path(cfg: &CmsConfig, path: &str) -> Result<(), String> {
 }
 
 pub async fn destroy_if_cms(path_or_url: &str) {
-    let Some(path) = normalize_cms_path(path_or_url) else {
+    let raw = path_or_url.trim();
+    if raw.is_empty() {
+        return;
+    }
+    let Some(path) = normalize_cms_path(raw) else {
+        if raw.contains("media/") || raw.contains("slavia-cms") {
+            eprintln!("[cms] delete skip (nie rozpoznano ścieżki CMS): {raw}");
+        }
         return;
     };
     let cfg = cms_config();
+    if cfg.token.is_none() {
+        eprintln!(
+            "[cms] delete skip (brak GITHUB_TOKEN): {path} — ustaw PAT ze scope `repo`"
+        );
+        return;
+    }
     if let Err(e) = delete_path(&cfg, &path).await {
-        eprintln!("[cms] delete {path}: {e}");
+        eprintln!(
+            "[cms] delete FAILED path={path} repo={} branch={}: {e}",
+            cfg.repo, cfg.branch
+        );
+    } else {
+        eprintln!("[cms] delete OK: {path}");
     }
 }
 
@@ -365,5 +422,24 @@ mod tests {
     #[test]
     fn reject_cloudinary_url() {
         assert!(normalize_cms_path("https://res.cloudinary.com/demo/image/upload/v1/x.jpg").is_none());
+    }
+
+    #[test]
+    fn normalize_cms_base_url_prefix() {
+        // raw.githubusercontent.com jest obsługiwany bez zmiennych środowiskowych
+        assert_eq!(
+            normalize_cms_path(
+                "https://raw.githubusercontent.com/JakubGawron1/Slavia-cms/main/media/blog/x.jpg"
+            )
+            .as_deref(),
+            Some("media/blog/x.jpg")
+        );
+    }
+
+    #[test]
+    fn parse_sha_from_github_contents_root() {
+        let json = r#"{"sha":"abc123def","name":"foto.jpg","path":"media/gallery/foto.jpg"}"#;
+        let parsed: GhContentResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.sha.as_deref(), Some("abc123def"));
     }
 }
