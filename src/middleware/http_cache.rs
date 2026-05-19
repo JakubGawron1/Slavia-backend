@@ -50,15 +50,19 @@ pub async fn cache_control_middleware(
         }
     } else if path.starts_with("/api/results/public-board") {
         Some("public, max-age=60, stale-while-revalidate=180")
-    } else if path == "/api/announcements/" || path.starts_with("/api/announcements/") {
+    } else if path == "/api/announcements" || path == "/api/announcements/" {
         Some("public, max-age=120, stale-while-revalidate=300")
-    } else if path == "/api/gallery/" || path.starts_with("/api/gallery/") {
+    } else if path == "/api/gallery" || path == "/api/gallery/" {
         Some("public, max-age=180, stale-while-revalidate=600")
-    } else if path == "/api/posts/" || path.starts_with("/api/posts/")
-        || path == "/api/competitions/" || path.starts_with("/api/competitions/") {
+    } else if path == "/api/posts" || path == "/api/posts/" {
         Some("public, max-age=120, stale-while-revalidate=300")
-    } else if path.starts_with("/api/auth/") {
+    } else if path.contains("/manage")
+        || path.contains("/admin")
+        || path.starts_with("/api/auth/")
+    {
         Some("private, no-store")
+    } else if path == "/api/competitions/" || path.starts_with("/api/competitions/") {
+        Some("public, max-age=120, stale-while-revalidate=300")
     } else {
         None
     };

@@ -264,7 +264,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             "/",
             get(routes::exercises::list_exercises).post(routes::exercises::create_exercise),
         )
-        .route("/{id}", delete(routes::exercises::delete_exercise));
+        .route(
+            "/{id}",
+            patch(routes::exercises::update_exercise).delete(routes::exercises::delete_exercise),
+        );
     let exercise_submissions_routes = Router::new()
         .route(
             "/",

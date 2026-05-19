@@ -85,6 +85,14 @@ pub struct CreateExerciseRequest {
     pub video_url: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateExerciseRequest {
+    pub name: String,
+    pub category: Option<String>,
+    pub description: Option<String>,
+    pub video_url: Option<String>,
+}
+
 pub async fn list_exercises(
     State(state): State<AppState>,
     _claims: Claims,
@@ -153,6 +161,74 @@ pub async fn create_exercise(
     }))
 }
 
+pub async fn update_exercise(
+    State(state): State<AppState>,
+    claims: Claims,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateExerciseRequest>,
+) -> Result<Json<ExerciseDto>, ApiError> {
+    if !claims_has_staff_access(&claims) {
+        return Err(api_error(StatusCode::FORBIDDEN, "Brak uprawnień"));
+    }
+    if payload.name.trim().is_empty() {
+        return Err(api_error(StatusCode::BAD_REQUEST, "Name is required"));
+    }
+
+    let mut rows = state
+        .db
+        .query(
+            "SELECT id, name, category, description, video_url, created_at FROM exercises WHERE id = ?1",
+            [id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let existing = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if existing.is_none() {
+        return Err(api_error(StatusCode::NOT_FOUND, "Exercise not found"));
+    }
+
+    state
+        .db
+        .execute(
+            "UPDATE exercises SET name = ?1, category = ?2, description = ?3, video_url = ?4 WHERE id = ?5",
+            (
+                payload.name.trim().to_string(),
+                payload.category.clone(),
+                payload.description.clone(),
+                payload.video_url.clone(),
+                id.clone(),
+            ),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut rows = state
+        .db
+        .query(
+            "SELECT id, name, category, description, video_url, created_at FROM exercises WHERE id = ?1",
+            [id],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Exercise row missing"))?;
+
+    Ok(Json(ExerciseDto {
+        id: row.get(0).unwrap(),
+        name: row.get(1).unwrap(),
+        category: row.get(2).ok(),
+        description: row.get(3).ok(),
+        video_url: row.get(4).ok(),
+        created_at: row.get(5).unwrap(),
+    }))
+}
+
 pub async fn delete_exercise(
     State(state): State<AppState>,
     claims: Claims,
@@ -161,10 +237,13 @@ pub async fn delete_exercise(
     if !claims_has_staff_access(&claims) {
         return Err(api_error(StatusCode::FORBIDDEN, "Brak uprawnień"));
     }
-    state
+    let n = state
         .db
         .execute("DELETE FROM exercises WHERE id = ?1", [id])
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if n == 0 {
+        return Err(api_error(StatusCode::NOT_FOUND, "Exercise not found"));
+    }
     Ok(StatusCode::NO_CONTENT)
 }
