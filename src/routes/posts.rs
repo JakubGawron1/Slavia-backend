@@ -8,7 +8,7 @@ use libsql::Row;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::api_error::{ApiError, api_error};
+use crate::api_error::{ApiError, api_error, api_validation_error};
 use crate::middleware::auth::{Claims, RequireAdminOrSuperAdmin};
 use crate::models::Post;
 use crate::notifications;
@@ -47,6 +47,22 @@ pub struct UpdatePostRequest {
 }
 
 const POST_COLUMNS: &str = "id, title, content, author_id, image_url, created_at, published";
+
+fn validate_post_fields(title: &str, content: &str) -> Result<(), ApiError> {
+    if title.trim().is_empty() {
+        return Err(api_validation_error(
+            "Tytuł wpisu jest wymagany",
+            "title must not be empty",
+        ));
+    }
+    if content.trim().is_empty() {
+        return Err(api_validation_error(
+            "Treść wpisu jest wymagana",
+            "content must not be empty",
+        ));
+    }
+    Ok(())
+}
 
 /// Lista publiczna — tylko opublikowane wpisy.
 pub async fn list_posts_public(State(state): State<AppState>) -> Result<Json<Vec<Post>>, ApiError> {
@@ -109,6 +125,7 @@ pub async fn create_post(
     _auth: RequireAdminOrSuperAdmin,
     Json(payload): Json<CreatePostRequest>,
 ) -> Result<Json<Post>, ApiError> {
+    validate_post_fields(&payload.title, &payload.content)?;
     let id = Uuid::new_v4().to_string();
     let created_at = Utc::now().to_rfc3339();
     let published = payload.published.unwrap_or(true);
@@ -165,6 +182,7 @@ pub async fn update_post(
     _auth: RequireAdminOrSuperAdmin,
     Json(payload): Json<UpdatePostRequest>,
 ) -> Result<Json<Post>, ApiError> {
+    validate_post_fields(&payload.title, &payload.content)?;
     let mut rows = state
         .db
         .query(

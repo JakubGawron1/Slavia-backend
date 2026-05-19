@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.5] — 2026-05-19
+
+### Ulepszone
+- **Wpisy CMS (`/api/posts`)** — walidacja pustego tytułu lub treści przy tworzeniu i edycji (komunikat po polsku, `validation_error`).
+- **Motywy profilu (ui_theme_preset)** — glass, sport-tech, neon-brutalism.
+- **GET /api/auth/me** — pole roles w odpowiedzi.
+
 ## [3.2.4] — 2026-05-19
 
 ### Naprawione
