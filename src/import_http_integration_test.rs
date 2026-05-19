@@ -28,6 +28,7 @@ fn jwt_super(secret: &[u8]) -> String {
         sub: "integration-test-sub".into(),
         roles: vec![Role::SuperAdmin],
         exp,
+        token_version: 0,
     };
     encode(
         &Header::default(),
@@ -43,6 +44,7 @@ fn jwt_trainer(secret: &[u8]) -> String {
         sub: "integration-test-trainer".into(),
         roles: vec![Role::Trainer],
         exp,
+        token_version: 0,
     };
     encode(
         &Header::default(),
@@ -58,6 +60,7 @@ fn jwt_athlete(secret: &[u8], user_id: &str) -> String {
         sub: user_id.to_string(),
         roles: vec![Role::Athlete],
         exp,
+        token_version: 0,
     };
     encode(
         &Header::default(),
@@ -73,6 +76,7 @@ fn jwt_trainer_for_sub(secret: &[u8], sub: &str) -> String {
         sub: sub.to_string(),
         roles: vec![Role::Trainer],
         exp,
+        token_version: 0,
     };
     encode(
         &Header::default(),

@@ -54,9 +54,8 @@ pub async fn cache_control_middleware(
         Some("public, max-age=120, stale-while-revalidate=300")
     } else if path == "/api/gallery/" || path.starts_with("/api/gallery/") {
         Some("public, max-age=180, stale-while-revalidate=600")
-    } else if path == "/api/posts/" || path.starts_with("/api/posts/") {
-        Some("public, max-age=120, stale-while-revalidate=300")
-    } else if path == "/api/competitions/" || path.starts_with("/api/competitions/") {
+    } else if path == "/api/posts/" || path.starts_with("/api/posts/")
+        || path == "/api/competitions/" || path.starts_with("/api/competitions/") {
         Some("public, max-age=120, stale-while-revalidate=300")
     } else if path.starts_with("/api/auth/") {
         Some("private, no-store")
@@ -64,11 +63,10 @@ pub async fn cache_control_middleware(
         None
     };
 
-    if let Some(value) = policy {
-        if let Some(h) = cache_header(value) {
+    if let Some(value) = policy
+        && let Some(h) = cache_header(value) {
             response.headers_mut().insert(header::CACHE_CONTROL, h);
         }
-    }
 
     response
 }

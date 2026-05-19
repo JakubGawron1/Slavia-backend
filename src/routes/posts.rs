@@ -203,6 +203,12 @@ pub async fn update_post(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    if existing.image_url.as_deref() != payload.image_url.as_deref()
+        && let Some(old) = existing.image_url.as_deref() {
+            crate::cloudinary::destroy_if_cloudinary(&state, old, "image").await;
+            crate::cms_github::destroy_if_cms(old).await;
+        }
+
     let title_old = existing.title.clone();
     let conn_arc = state.db.raw().await;
     let editor = notifications::username_by_id(conn_arc.as_ref(), &claims.sub)
@@ -239,15 +245,21 @@ pub async fn delete_post(
 ) -> Result<StatusCode, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT title FROM posts WHERE id = ?1", [id.clone()])
+        .query(
+            "SELECT title, image_url FROM posts WHERE id = ?1",
+            [id.clone()],
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let title_opt = if let Some(row) = rows
+    let (title_opt, image_url_opt) = if let Some(row) = rows
         .next()
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        row.get::<String>(0).ok()
+        (
+            row.get::<String>(0).ok(),
+            sql_row::flex_opt_string(&row, 1).ok().flatten(),
+        )
     } else {
         return Err(api_error(StatusCode::NOT_FOUND, "Post not found"));
     };
@@ -257,6 +269,11 @@ pub async fn delete_post(
         .execute("DELETE FROM posts WHERE id = ?1", [id.clone()])
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if let Some(old) = image_url_opt.as_deref() {
+        crate::cloudinary::destroy_if_cloudinary(&state, old, "image").await;
+        crate::cms_github::destroy_if_cms(old).await;
+    }
 
     let t = title_opt.unwrap_or_else(|| "?".to_string());
     notifications::notify_admin_broadcast(

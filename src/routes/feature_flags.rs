@@ -108,14 +108,13 @@ pub async fn upsert_feature_flag(
         ));
     }
     let target_user = payload.user_id.as_ref().map(|v| v.trim().to_string());
-    if let Some(uid) = target_user.as_ref() {
-        if uid.is_empty() {
+    if let Some(uid) = target_user.as_ref()
+        && uid.is_empty() {
             return Err(api_error(
                 StatusCode::BAD_REQUEST,
                 "user_id nie może być pusty",
             ));
         }
-    }
 
     let now = Utc::now().to_rfc3339();
     let value_num = if payload.value { 1i64 } else { 0i64 };

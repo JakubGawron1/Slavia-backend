@@ -238,7 +238,7 @@ pub async fn upload_handler(
     // Task 40: Block dangerous extensions
     let ext = filename
         .split('.')
-        .last()
+        .next_back()
         .unwrap_or_default()
         .to_ascii_lowercase();
     const BANNED_EXT: &[&str] = &["exe", "sh", "bat", "cmd", "msi", "bin", "com"];

@@ -258,8 +258,8 @@ pub async fn update_competition(
     notifications::notify_competition_updated(&state, &updated.title, &updated.id);
 
     // [2027] Notify assigned athletes if date or location changed
-    if ext.is_none() {
-        if let Some((old_date, old_location)) = old_vals {
+    if ext.is_none()
+        && let Some((old_date, old_location)) = old_vals {
             let date_changed = old_date != payload.date;
             let location_changed = old_location != payload.location;
             if date_changed || location_changed {
@@ -272,7 +272,6 @@ pub async fn update_competition(
                 );
             }
         }
-    }
 
     Ok(Json(updated))
 }

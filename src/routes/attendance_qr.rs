@@ -121,9 +121,9 @@ async fn resolve_athlete_id_for_user(state: &AppState, user_id: &str) -> Result<
                 "Brak profilu zawodnika powiązanego z kontem",
             )
         })?;
-    Ok(row
+    row
         .get(0)
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 fn parse_session_date(raw: &str) -> Result<String, ApiError> {

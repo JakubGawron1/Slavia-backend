@@ -186,6 +186,7 @@ pub fn competition_title_for_notification(raw: &str) -> String {
     t.to_string()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn athlete_plus_superadmins(
     state: &AppState,
     athlete_id: &str,
@@ -670,8 +671,8 @@ pub fn notify_competition_schedule_changed(
             .await?;
         let mut notified = HashSet::new();
         while let Some(row) = rows.next().await? {
-            if let Ok(uid) = row.get::<String>(0) {
-                if notified.insert(uid.clone()) {
+            if let Ok(uid) = row.get::<String>(0)
+                && notified.insert(uid.clone()) {
                     insert_notification(
                         conn,
                         &uid,
@@ -682,7 +683,6 @@ pub fn notify_competition_schedule_changed(
                     )
                     .await?;
                 }
-            }
         }
         Ok(())
     });
