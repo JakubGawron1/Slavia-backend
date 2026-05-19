@@ -7,8 +7,11 @@ use tokio::net::TcpListener;
 use dotenvy::dotenv;
 use slavia_backend::DatabaseBackend;
 
+type AppConfig = (DatabaseBackend, String, String, String, String);
+type AppError = Box<dyn std::error::Error + Send + Sync>;
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn main() -> Result<(), AppError> {
     let _ = dotenv();
 
     let (database, jwt_secret, c_name, c_key, c_secret) = load_config()?;
@@ -92,14 +95,11 @@ fn load_database_backend(secrets: Option<&toml::Table>) -> Result<DatabaseBacken
     })
 }
 
-fn load_config() -> Result<
-    (DatabaseBackend, String, String, String, String),
-    Box<dyn std::error::Error + Send + Sync>,
-> {
+fn load_config() -> Result<AppConfig, AppError> {
     let secrets = load_secrets_table();
 
     let database = load_database_backend(secrets.as_ref())
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+        .map_err(|e| -> AppError { e.into() })?;
 
     let jwt_secret = pick_cfg(secrets.as_ref(), "JWT_SECRET", "JWT_SECRET")
         .unwrap_or_else(|| "default_secret_for_dev_only".to_string());
