@@ -1,4 +1,5 @@
 //! Integracja HTTP `POST /api/import/data` (świeża baza + `REBUILD_DB=true`). Moduł w lib — bez osobnego binarka testowego.
+#![allow(clippy::await_holding_lock)]
 
 use std::sync::{Mutex, MutexGuard};
 
