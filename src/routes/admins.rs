@@ -827,7 +827,8 @@ pub async fn update_profile(
         } else {
             const ALLOW_PRESET: &[&str] = &[
                 "pink", "dark", "slavia", "iron", "arena", "platform", "midnight", "ruby", "neon",
-                "blackgym", "glass", "sport-tech", "neon-brutalism",
+                "blackgym", "glass", "sport-tech", "neon-brutalism", "podium", "chalk", "aurora",
+                "forge", "velvet",
             ];
             if !ALLOW_PRESET.contains(&trimmed) {
                 return Err(api_error(
