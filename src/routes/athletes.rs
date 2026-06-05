@@ -231,7 +231,7 @@ pub async fn get_athlete_public(
     Path(id): Path<String>,
 ) -> Result<Json<AthletePublic>, ApiError> {
     let sql = format!(
-        "{} WHERE a.id = ?1 AND (a.is_active IS NULL OR a.is_active = 1)",
+        "{} WHERE a.id = ?1",
         ATHLETE_ROW_JOIN_USER_AVATAR_SQL
     );
     let mut rows = state
@@ -283,6 +283,36 @@ pub async fn list_athletes_public(
         .query(
             &format!(
                 "{} WHERE (a.is_active IS NULL OR a.is_active = 1)",
+                ATHLETE_ROW_JOIN_USER_AVATAR_SQL
+            ),
+            (),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut athletes = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let a = athlete_from_row_merge_public_photo(&row)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        athletes.push(a);
+    }
+
+    Ok(Json(athletes))
+}
+
+/// Publiczna lista byłych zawodników (oznaczeni jako nieaktywni w kadrze).
+pub async fn list_athletes_public_archive(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<Athlete>>, ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            &format!(
+                "{} WHERE a.is_active = 0",
                 ATHLETE_ROW_JOIN_USER_AVATAR_SQL
             ),
             (),
@@ -467,9 +497,8 @@ pub async fn update_athlete(
             notes = ?10,
             profile_tagline = ?11,
             public_bio = ?12,
-            is_active = COALESCE(?13, is_active),
-            user_id = COALESCE(?14, user_id)
-         WHERE id = ?15",
+            user_id = COALESCE(?13, user_id)
+         WHERE id = ?14",
             (
                 payload.full_name,
                 payload.birth_year,
@@ -483,13 +512,24 @@ pub async fn update_athlete(
                 payload.notes,
                 payload.profile_tagline,
                 payload.public_bio,
-                payload.is_active.map(|v| if v { 1 } else { 0 }),
                 user_id_to_set,
                 id.clone(),
             ),
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Osobny UPDATE — jawne 0/1 (bez COALESCE), żeby `false` zawsze zapisało się jako nieaktywny.
+    if let Some(active) = payload.is_active {
+        state
+            .db
+            .execute(
+                "UPDATE athletes SET is_active = ?1 WHERE id = ?2",
+                (if active { 1i64 } else { 0i64 }, id.clone()),
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
 
     notifications::notify_admin_broadcast(
         &state,
