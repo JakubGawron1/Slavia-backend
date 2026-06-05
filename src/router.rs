@@ -47,6 +47,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         )
         .route("/admin", get(routes::athletes::list_athletes))
         .route(
+            "/archive",
+            get(routes::athletes::list_athletes_public_archive),
+        )
+        .route(
             "/{id}/competitions",
             get(routes::competition_participants::list_competitions_for_athlete)
                 .put(routes::competition_participants::sync_competitions_for_athlete),
@@ -399,7 +403,8 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         )
         .route(
             "/feature-flags/{name}",
-            post(routes::feature_flags::upsert_feature_flag),
+            post(routes::feature_flags::upsert_feature_flag)
+                .delete(routes::feature_flags::delete_feature_flag),
         )
         .route("/openapi.json", get(routes::system_logs::openapi_handler));
 
