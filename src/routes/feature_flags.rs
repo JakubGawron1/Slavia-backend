@@ -11,7 +11,10 @@ use uuid::Uuid;
 use crate::api_error::{ApiError, api_error};
 use crate::audit::write_audit_log;
 use crate::middleware::auth::{Claims, RequireTrainerOrHigher, claims_has_staff_access};
+use crate::models::Role;
 use crate::state::AppState;
+
+const PANEL_NAV_FLAG_PREFIX: &str = "panel_nav_";
 
 #[derive(Debug, Serialize)]
 pub struct FeatureFlagRecord {
@@ -116,6 +119,15 @@ pub async fn upsert_feature_flag(
             ));
         }
 
+    if flag_name.starts_with(PANEL_NAV_FLAG_PREFIX)
+        && !claims.roles.contains(&Role::SuperAdmin)
+    {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Tylko SuperAdmin może zmieniać widoczność modułów panelu",
+        ));
+    }
+
     let now = Utc::now().to_rfc3339();
     let value_num = if payload.value { 1i64 } else { 0i64 };
     let target_user_for_sql = target_user.clone();
@@ -180,4 +192,77 @@ pub async fn upsert_feature_flag(
         user_id: payload.user_id,
         updated_at: now,
     }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteFlagQuery {
+    pub user_id: Option<String>,
+}
+
+pub async fn delete_feature_flag(
+    State(state): State<AppState>,
+    RequireTrainerOrHigher(claims): RequireTrainerOrHigher,
+    Path(name): Path<String>,
+    Query(query): Query<DeleteFlagQuery>,
+) -> Result<StatusCode, ApiError> {
+    let flag_name = name.trim().to_lowercase();
+    if flag_name.is_empty() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Nazwa flagi nie może być pusta",
+        ));
+    }
+
+    let target_user = query.user_id.unwrap_or_default().trim().to_string();
+    let effective_user = if target_user.is_empty() {
+        None
+    } else {
+        Some(target_user)
+    };
+
+    if flag_name.starts_with(PANEL_NAV_FLAG_PREFIX)
+        && !claims.roles.contains(&Role::SuperAdmin)
+    {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Tylko SuperAdmin może usuwać widoczność modułów panelu",
+        ));
+    }
+
+    let target_user_for_sql = effective_user.clone();
+    let deleted = state
+        .db
+        .execute(
+            "DELETE FROM feature_flags WHERE name = ?1 AND ((?2 IS NULL AND user_id IS NULL) OR user_id = ?2)",
+            (flag_name.clone(), target_user_for_sql),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if deleted == 0 {
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            "Flaga nie istnieje",
+        ));
+    }
+
+    let detail = json!({
+        "name": flag_name,
+        "user_id": effective_user
+    })
+    .to_string();
+    let conn_arc = state.db.raw().await;
+    let _ = write_audit_log(
+        conn_arc.as_ref(),
+        Some(&claims.sub),
+        Some("staff"),
+        "feature_flags",
+        "delete",
+        Some("feature_flag"),
+        Some(&name),
+        Some(&detail),
+    )
+    .await;
+
+    Ok(StatusCode::NO_CONTENT)
 }
