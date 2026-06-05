@@ -243,7 +243,7 @@ pub async fn list_admins(
             u.roles.iter().any(|r| {
                 matches!(
                     r,
-                    Role::Admin | Role::SuperAdmin | Role::Trainer | Role::Athlete
+                    Role::Admin | Role::SuperAdmin | Role::Editor | Role::Trainer | Role::Athlete
                 )
             })
         })

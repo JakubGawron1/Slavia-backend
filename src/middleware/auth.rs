@@ -40,6 +40,7 @@ where
                     match key.as_str() {
                         "SuperAdmin" => add(Role::SuperAdmin),
                         "Admin" => add(Role::Admin),
+                        "Editor" => add(Role::Editor),
                         "Trainer" => add(Role::Trainer),
                         "Athlete" => add(Role::Athlete),
                         "TrainerAdmin" => {
@@ -221,6 +222,33 @@ impl FromRequestParts<AppState> for RequireAdminOrSuperAdmin {
             ));
         }
         Ok(RequireAdminOrSuperAdmin(claims))
+    }
+}
+
+/// Redaktor CMS — Editor, Admin lub SuperAdmin.
+pub struct RequireEditorOrHigher(pub Claims);
+
+impl FromRequestParts<AppState> for RequireEditorOrHigher {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let claims =
+            <Claims as FromRequestParts<AppState>>::from_request_parts(parts, state).await?;
+        if !claims.roles.iter().any(|r| {
+            matches!(
+                r,
+                Role::Editor | Role::Admin | Role::SuperAdmin
+            )
+        }) {
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "Requires Editor, Admin or SuperAdmin role",
+            ));
+        }
+        Ok(RequireEditorOrHigher(claims))
     }
 }
 

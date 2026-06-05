@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub enum Role {
     SuperAdmin,
     Admin,
+    Editor,
     Trainer,
     Athlete,
 }
@@ -19,6 +20,7 @@ impl std::fmt::Display for Role {
         let s = match self {
             Role::SuperAdmin => "SuperAdmin",
             Role::Admin => "Admin",
+            Role::Editor => "Editor",
             Role::Trainer => "Trainer",
             Role::Athlete => "Athlete",
         };
@@ -32,6 +34,7 @@ impl std::str::FromStr for Role {
         match s {
             "SuperAdmin" => Ok(Role::SuperAdmin),
             "Admin" => Ok(Role::Admin),
+            "Editor" => Ok(Role::Editor),
             "Trainer" => Ok(Role::Trainer),
             "Athlete" => Ok(Role::Athlete),
             _ => Err(format!("Invalid role: {}", s)),
@@ -306,4 +309,87 @@ pub struct ExerciseBoardRow {
     pub source_approved_results_count: i64,
     pub source_training_log_count: i64,
     pub source_last_approved_date: Option<String>,
+}
+
+/// Typ wartości zmiennej CMS.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CmsVariableType {
+    Text,
+    Html,
+    Image,
+    Number,
+    Boolean,
+}
+
+impl std::fmt::Display for CmsVariableType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            CmsVariableType::Text => "text",
+            CmsVariableType::Html => "html",
+            CmsVariableType::Image => "image",
+            CmsVariableType::Number => "number",
+            CmsVariableType::Boolean => "boolean",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl std::str::FromStr for CmsVariableType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "text" => Ok(CmsVariableType::Text),
+            "html" => Ok(CmsVariableType::Html),
+            "image" => Ok(CmsVariableType::Image),
+            "number" => Ok(CmsVariableType::Number),
+            "boolean" => Ok(CmsVariableType::Boolean),
+            _ => Err(format!("Invalid CMS variable type: {}", s)),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CmsVariable {
+    pub id: String,
+    pub key: String,
+    pub value: serde_json::Value,
+    #[serde(rename = "type")]
+    pub value_type: CmsVariableType,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CmsPage {
+    pub id: String,
+    pub page_name: String,
+    pub fields: serde_json::Value,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CmsNavigationItem {
+    pub id: String,
+    pub role: String,
+    pub label: String,
+    pub icon: String,
+    pub url: String,
+    pub order_index: i64,
+    #[serde(default)]
+    pub group_name: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CmsVersionEntry {
+    pub id: String,
+    pub entity_type: String,
+    pub entity_key: String,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+    pub changed_by: Option<String>,
+    pub created_at: String,
 }

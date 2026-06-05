@@ -14,6 +14,141 @@
 use libsql::Connection;
 use tokio::time::{Duration, sleep};
 
+/// Wykrywa stary moduł CMS z gałęzi `dev-cms` (page_key, cms_fields, cms_sections…).
+async fn cms_legacy_schema_detected(conn: &Connection) -> Result<bool, String> {
+    let mut legacy_tables = conn
+        .query(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('cms_fields', 'cms_sections', 'cms_navigation')",
+            (),
+        )
+        .await
+        .map_err(|e| format!("cms legacy table check: {e}"))?;
+    let legacy_count: i64 = legacy_tables
+        .next()
+        .await
+        .map_err(|e| format!("cms legacy table row: {e}"))?
+        .map(|r| r.get(0).unwrap_or(0))
+        .unwrap_or(0);
+    drop(legacy_tables);
+    if legacy_count > 0 {
+        return Ok(true);
+    }
+
+    let mut exists = conn
+        .query(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'cms_pages'",
+            (),
+        )
+        .await
+        .map_err(|e| format!("cms_pages table check: {e}"))?;
+    let table_exists: i64 = exists
+        .next()
+        .await
+        .map_err(|e| format!("cms_pages table check row: {e}"))?
+        .map(|r| r.get(0).unwrap_or(0))
+        .unwrap_or(0);
+    drop(exists);
+    if table_exists == 0 {
+        return Ok(false);
+    }
+
+    let mut cols = conn
+        .query("PRAGMA table_info(cms_pages)", ())
+        .await
+        .map_err(|e| format!("cms_pages pragma: {e}"))?;
+    let mut has_page_name = false;
+    while let Some(row) = cols
+        .next()
+        .await
+        .map_err(|e| format!("cms_pages pragma row: {e}"))?
+    {
+        let col: String = row.get(1).unwrap_or_default();
+        if col == "page_name" {
+            has_page_name = true;
+        }
+    }
+    drop(cols);
+
+    Ok(!has_page_name)
+}
+
+/// Stara gałąź `dev-cms` — tabele z FK i innymi kolumnami. DROP w poprawnej kolejności + FK off.
+async fn migrate_cms_schema(conn: &Connection) -> Result<(), String> {
+    if !cms_legacy_schema_detected(conn).await? {
+        return Ok(());
+    }
+
+    eprintln!(
+        "🔄 Migracja CMS: stary schemat (dev-cms) — usuwam cms_fields/cms_sections/cms_navigation…"
+    );
+    eprintln!("   (jeśli wisi: zamknij inne instancje Slavia-backend trzymające slavia.db)");
+    let _ = conn.execute("PRAGMA busy_timeout = 3000", ()).await;
+    exec0_retry_with_limit(conn, "PRAGMA foreign_keys = OFF", "cms foreign_keys off", 12).await?;
+
+    for sql in [
+        "DROP TABLE IF EXISTS cms_fields",
+        "DROP TABLE IF EXISTS cms_sections",
+        "DROP TABLE IF EXISTS cms_version_history",
+        "DROP TABLE IF EXISTS cms_navigation_items",
+        "DROP TABLE IF EXISTS cms_navigation",
+        "DROP TABLE IF EXISTS cms_pages",
+        "DROP TABLE IF EXISTS cms_variables",
+    ] {
+        exec0_retry_with_limit(conn, sql, "cms drop legacy tables", 12).await?;
+    }
+
+    let _ = conn.execute("PRAGMA foreign_keys = ON", ()).await;
+    Ok(())
+}
+
+async fn create_cms_tables(conn: &Connection) -> Result<(), String> {
+    let statements = [
+        "CREATE TABLE IF NOT EXISTS cms_variables (
+            id TEXT PRIMARY KEY,
+            key TEXT NOT NULL UNIQUE,
+            value TEXT NOT NULL,
+            value_type TEXT NOT NULL DEFAULT 'text',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_cms_variables_key ON cms_variables(key)",
+        "CREATE TABLE IF NOT EXISTS cms_pages (
+            id TEXT PRIMARY KEY,
+            page_name TEXT NOT NULL UNIQUE,
+            fields TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_cms_pages_name ON cms_pages(page_name)",
+        "CREATE TABLE IF NOT EXISTS cms_navigation_items (
+            id TEXT PRIMARY KEY,
+            role TEXT NOT NULL,
+            label TEXT NOT NULL,
+            icon TEXT NOT NULL,
+            url TEXT NOT NULL,
+            order_index INTEGER NOT NULL DEFAULT 0,
+            group_name TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_cms_nav_role_order ON cms_navigation_items(role, order_index)",
+        "CREATE TABLE IF NOT EXISTS cms_version_history (
+            id TEXT PRIMARY KEY,
+            entity_type TEXT NOT NULL,
+            entity_key TEXT NOT NULL,
+            old_value TEXT,
+            new_value TEXT,
+            changed_by TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_cms_version_entity ON cms_version_history(entity_type, entity_key, created_at DESC)",
+    ];
+    for sql in statements {
+        exec0_retry(conn, sql, "create_cms_tables").await?;
+    }
+    Ok(())
+}
+
 /// Usuwa duplikaty (athlete_id, session_date) przed utworzeniem indeksu UNIQUE — inaczej start pada na Turso.
 async fn migrate_attendance_unique_index(conn: &Connection) -> Result<(), String> {
     let mut exists = conn
@@ -70,10 +205,15 @@ async fn migrate_attendance_unique_index(conn: &Connection) -> Result<(), String
     .await
 }
 
-async fn exec0_retry(conn: &Connection, sql: &str, label: &str) -> Result<(), String> {
+async fn exec0_retry_with_limit(
+    conn: &Connection,
+    sql: &str,
+    label: &str,
+    max_attempts: u32,
+) -> Result<(), String> {
     // SQLite bywa chwilowo zablokowane (np. równoległe połączenie / statement).
     // Robimy krótki retry zamiast paniki na starcie.
-    for attempt in 0..80 {
+    for attempt in 0..max_attempts {
         match conn.execute(sql, ()).await {
             Ok(_) => return Ok(()),
             Err(e) => {
@@ -82,16 +222,20 @@ async fn exec0_retry(conn: &Connection, sql: &str, label: &str) -> Result<(), St
                     || msg.contains("database is locked")
                     || msg.contains("SQLITE_BUSY")
                     || msg.contains("SQLITE_LOCKED");
-                if !locked || attempt == 79 {
+                if !locked || attempt + 1 == max_attempts {
                     return Err(format!("{label}: {msg}"));
                 }
-                // rosnący backoff z limitem ~1.5s; 80 prób ~ < 70s
+                // rosnący backoff z limitem ~1.5s
                 let ms = (100 + (attempt as u64 * 80)).min(1500);
                 sleep(Duration::from_millis(ms)).await;
             }
         }
     }
     Err(format!("{label}: exhausted retries"))
+}
+
+async fn exec0_retry(conn: &Connection, sql: &str, label: &str) -> Result<(), String> {
+    exec0_retry_with_limit(conn, sql, label, 80).await
 }
 
 async fn migrate_remove_trainer_admin_role(conn: &Connection) -> Result<u64, String> {
@@ -540,6 +684,13 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
     for sql in create_tables {
         conn.execute(sql, ()).await?;
     }
+
+    migrate_cms_schema(conn)
+        .await
+        .map_err(|e| format!("migrate_cms_schema: {e}"))?;
+    create_cms_tables(conn)
+        .await
+        .map_err(|e| format!("create_cms_tables: {e}"))?;
 
     migrate_attendance_unique_index(conn)
         .await
