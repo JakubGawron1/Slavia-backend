@@ -56,6 +56,14 @@ pub async fn cache_control_middleware(
         Some("public, max-age=180, stale-while-revalidate=600")
     } else if path == "/api/posts" || path == "/api/posts/" {
         Some("public, max-age=120, stale-while-revalidate=300")
+    } else if path.starts_with("/api/cms/variables")
+        || path.starts_with("/api/cms/page/")
+        || path.starts_with("/api/cms/navigation")
+        || path.starts_with("/api/cms/pages")
+    {
+        Some("public, max-age=60, stale-while-revalidate=120")
+    } else if path.starts_with("/api/cms/") {
+        Some("private, no-store")
     } else if path.contains("/manage")
         || path.contains("/admin")
         || path.starts_with("/api/auth/")

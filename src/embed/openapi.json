@@ -22,6 +22,30 @@
         }
       }
     },
+    "/api/cms/variables": {
+      "get": { "summary": "List CMS variables", "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/cms/variable": {
+      "post": { "summary": "Create CMS variable", "responses": { "201": { "description": "Created" } } }
+    },
+    "/api/cms/variable/{key}": {
+      "put": { "summary": "Update CMS variable", "responses": { "200": { "description": "OK" } } },
+      "delete": { "summary": "Delete CMS variable", "responses": { "204": { "description": "No Content" } } }
+    },
+    "/api/cms/pages": {
+      "get": { "summary": "List CMS pages", "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/cms/page/{name}": {
+      "get": { "summary": "Get CMS page", "responses": { "200": { "description": "OK" } } },
+      "put": { "summary": "Update CMS page", "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/cms/navigation": {
+      "get": { "summary": "List CMS navigation items", "responses": { "200": { "description": "OK" } } },
+      "put": { "summary": "Replace CMS navigation", "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/cms/history": {
+      "get": { "summary": "CMS version history", "responses": { "200": { "description": "OK" } } }
+    },
     "/api/challenges/monthly-training-sessions": {
       "get": {
         "summary": "Leaderboard: liczba wpisów dziennika treningów na zawodnika w miesiącu (community challenge MVP)",

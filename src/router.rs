@@ -6,7 +6,7 @@ use axum::{
     http::{HeaderName, HeaderValue},
     middleware,
     response::Html,
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
 };
 use tower_http::cors::CorsLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -418,6 +418,24 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         get(routes::challenges::monthly_training_sessions_leaderboard),
     );
 
+    let cms_routes = Router::new()
+        .route("/variables", get(routes::cms::list_variables))
+        .route("/variable", post(routes::cms::create_variable))
+        .route(
+            "/variable/{key}",
+            put(routes::cms::update_variable).delete(routes::cms::delete_variable),
+        )
+        .route("/pages", get(routes::cms::list_pages))
+        .route(
+            "/page/{name}",
+            get(routes::cms::get_page).put(routes::cms::update_page),
+        )
+        .route(
+            "/navigation",
+            get(routes::cms::list_navigation).put(routes::cms::update_navigation),
+        )
+        .route("/history", get(routes::cms::list_version_history));
+
     Router::new()
         .route("/", get(backend_root_page))
         .nest("/api/auth", auth_routes)
@@ -443,6 +461,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .nest("/api/recovery", recovery_routes)
         .nest("/api/club-votes", club_votes_routes)
         .nest("/api/challenges", challenges_routes)
+        .nest("/api/cms", cms_routes)
         .nest("/api/system", system_routes)
         .layer(middleware::from_fn(crate::middleware::http_cache::cache_control_middleware))
         .layer(SetResponseHeaderLayer::if_not_present(
