@@ -24,6 +24,7 @@ pub mod import;
 pub mod notifications;
 pub mod payments;
 pub mod posts;
+pub mod club_feed;
 pub mod recovery;
 pub mod recurring_training_cancellations;
 pub mod results;

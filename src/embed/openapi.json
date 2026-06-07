@@ -56,6 +56,13 @@
             "required": false,
             "schema": { "type": "string", "example": "2026-05" },
             "description": "YYYY-MM, domyślnie bieżący miesiąc (UTC)"
+          },
+          {
+            "name": "metric",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "enum": ["sessions", "tonnage"], "default": "sessions" },
+            "description": "sessions — liczba wpisów dziennika; tonnage — suma kg×powt. z notatek"
           }
         ],
         "responses": {
