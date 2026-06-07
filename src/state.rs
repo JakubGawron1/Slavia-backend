@@ -1,59 +1,107 @@
-use std::sync::Arc;
+use std::time::Duration;
 
+use deadpool_libsql::{Manager, Pool, Runtime};
 use libsql::Connection;
 
 use crate::DatabaseBackend;
 
 fn is_stream_not_found_error(e: &libsql::Error) -> bool {
     let msg = e.to_string().to_ascii_lowercase();
-    // Turso/libsql (Hrana) potrafi zwrócić 404 ze starym streamem po idle/redeployu.
     msg.contains("stream not found")
+}
+
+fn pool_size() -> usize {
+    std::env::var("DATABASE_POOL_SIZE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n| n >= 1 && n <= 64)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| (n.get() * 2).clamp(4, 16))
+                .unwrap_or(8)
+        })
+}
+
+fn replica_sync_interval_secs() -> u64 {
+    std::env::var("TURSO_REPLICA_SYNC_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60)
+}
+
+/// Połączenie z poola — zwraca się do puli po drop.
+pub struct PooledConn(deadpool_libsql::Object);
+
+impl AsRef<Connection> for PooledConn {
+    fn as_ref(&self) -> &Connection {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for PooledConn {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 #[derive(Clone)]
 pub struct Db {
+    pool: Pool,
     backend: DatabaseBackend,
-    conn: Arc<tokio::sync::RwLock<Arc<Connection>>>,
 }
 
 impl Db {
     pub async fn new(
         backend: DatabaseBackend,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let conn = Arc::new(connect_database(backend.clone()).await?);
-        Ok(Self {
-            backend,
-            conn: Arc::new(tokio::sync::RwLock::new(conn)),
-        })
+        let database = build_database(&backend).await?;
+
+        if backend.uses_local_sqlite_engine() {
+            if let Ok(conn) = database.connect() {
+                let _ = apply_connection_pragmas(&conn).await;
+            }
+        }
+
+        let manager = Manager::from_libsql_database(database);
+        let pool = Pool::builder(manager)
+            .max_size(pool_size())
+            .runtime(Runtime::Tokio1)
+            .build()?;
+
+        eprintln!(
+            "[db] pool size={} mode={}",
+            pool_size(),
+            backend.describe()
+        );
+
+        Ok(Self { pool, backend })
     }
 
     pub fn backend(&self) -> &DatabaseBackend {
         &self.backend
     }
 
-    async fn reconnect(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let next = Arc::new(connect_database(self.backend.clone()).await?);
-        let mut w = self.conn.write().await;
-        *w = next;
-        Ok(())
-    }
-
-    /// Dostęp do “surowego” połączenia (np. do migracji/initu).
-    pub async fn raw(&self) -> Arc<Connection> {
-        self.conn.read().await.clone()
+    /// Pożyczka połączenia z puli (zwraca się automatycznie po drop).
+    pub async fn raw(&self) -> PooledConn {
+        let conn = self
+            .pool
+            .get()
+            .await
+            .expect("database pool unavailable");
+        PooledConn(conn)
     }
 
     pub async fn execute<P>(&self, sql: &str, params: P) -> Result<u64, libsql::Error>
     where
         P: libsql::params::IntoParams + Clone + Send,
     {
-        let conn = self.conn.read().await.clone();
+        let conn = self.raw().await;
         match conn.execute(sql, params.clone()).await {
             Ok(v) => Ok(v),
             Err(e) if is_stream_not_found_error(&e) => {
-                // Jednorazowy reconnect + retry.
-                let _ = self.reconnect().await;
-                let conn2 = self.conn.read().await.clone();
+                let conn2 = self.raw().await;
                 conn2.execute(sql, params).await
             }
             Err(e) => Err(e),
@@ -64,12 +112,11 @@ impl Db {
     where
         P: libsql::params::IntoParams + Clone + Send,
     {
-        let conn = self.conn.read().await.clone();
+        let conn = self.raw().await;
         match conn.query(sql, params.clone()).await {
             Ok(v) => Ok(v),
             Err(e) if is_stream_not_found_error(&e) => {
-                let _ = self.reconnect().await;
-                let conn2 = self.conn.read().await.clone();
+                let conn2 = self.raw().await;
                 conn2.query(sql, params).await
             }
             Err(e) => Err(e),
@@ -77,20 +124,72 @@ impl Db {
     }
 }
 
-async fn connect_database(
-    backend: DatabaseBackend,
-) -> Result<Connection, Box<dyn std::error::Error + Send + Sync>> {
+async fn build_database(
+    backend: &DatabaseBackend,
+) -> Result<libsql::Database, Box<dyn std::error::Error + Send + Sync>> {
     match backend {
         DatabaseBackend::Local(path) => {
             if let Some(dir) = path.parent() {
                 std::fs::create_dir_all(dir)?;
             }
-            let db = libsql::Builder::new_local(path).build().await?;
-            Ok(db.connect()?)
+            Ok(libsql::Builder::new_local(path).build().await?)
         }
-        DatabaseBackend::Remote { url, auth_token } => {
-            let db = libsql::Builder::new_remote(url, auth_token).build().await?;
-            Ok(db.connect()?)
+        DatabaseBackend::Remote {
+            url,
+            auth_token,
+            replica_path,
+        } => {
+            if let Some(path) = replica_path {
+                if let Some(dir) = path.parent() {
+                    std::fs::create_dir_all(dir)?;
+                }
+                Ok(libsql::Builder::new_remote_replica(
+                    path,
+                    url.clone(),
+                    auth_token.clone(),
+                )
+                .sync_interval(Duration::from_secs(replica_sync_interval_secs()))
+                .read_your_writes(true)
+                .build()
+                .await?)
+            } else {
+                Ok(libsql::Builder::new_remote(url.clone(), auth_token.clone())
+                    .build()
+                    .await?)
+            }
+        }
+    }
+}
+
+/// PRAGMA dla lokalnego SQLite / embedded replica — WAL + większy cache.
+pub async fn apply_connection_pragmas(conn: &Connection) -> Result<(), libsql::Error> {
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=NORMAL;
+         PRAGMA cache_size=-64000;
+         PRAGMA temp_store=MEMORY;
+         PRAGMA mmap_size=268435456;
+         PRAGMA busy_timeout=5000;",
+    )
+    .await?;
+    Ok(())
+}
+
+impl DatabaseBackend {
+    pub fn uses_local_sqlite_engine(&self) -> bool {
+        matches!(self, DatabaseBackend::Local(_) | DatabaseBackend::Remote { replica_path: Some(_), .. })
+    }
+
+    pub fn describe(&self) -> &'static str {
+        match self {
+            DatabaseBackend::Local(_) => "local",
+            DatabaseBackend::Remote {
+                replica_path: Some(_),
+                ..
+            } => "turso-replica",
+            DatabaseBackend::Remote {
+                replica_path: None, ..
+            } => "turso-remote",
         }
     }
 }
@@ -104,5 +203,5 @@ pub struct AppState {
     pub cloudinary_api_secret: String,
     pub groq_api_key: String,
     pub groq_model: String,
-    pub worker_metrics: Arc<crate::worker_metrics::WorkerMetrics>,
+    pub worker_metrics: std::sync::Arc<crate::worker_metrics::WorkerMetrics>,
 }
