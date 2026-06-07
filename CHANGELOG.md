@@ -1,5 +1,11 @@
 # Changelog
 
+## [5.1.0] — 2026-06-07
+
+### Wydajność i API publiczne
+- **`list_public_results_board`**: `LIMIT 500` na tablicy wyników publicznych.
+- **`sync_all_athletes_bests_from_results`**: uruchamiane tylko przy `REBUILD_DB=true` (szybszy zwykły start).
+
 ## [5.0.0] — 2026-06-07
 
 ### Trener AI (Groq / LLaMA)

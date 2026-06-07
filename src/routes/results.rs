@@ -227,7 +227,8 @@ pub async fn list_public_results_board(
              INNER JOIN athletes a ON a.id = r.athlete_id \
              LEFT JOIN competitions c ON c.id = r.competition_id \
              WHERE r.status = 'Approved' AND r.kind = 'competition' \
-             ORDER BY r.date DESC, r.total DESC",
+             ORDER BY r.date DESC, r.total DESC \
+             LIMIT 500",
             (),
         )
         .await
