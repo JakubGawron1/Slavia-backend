@@ -1,7 +1,9 @@
 //! Współdzielona logika HTTP — używana przez `main` (Axum/Tokio) i testy.
 
 use std::path::PathBuf;
-use tower_http::cors::{Any, CorsLayer};
+
+use axum::http::{HeaderValue, Method};
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 pub mod audit;
 pub mod chat_cleanup;
@@ -32,11 +34,16 @@ mod import_http_integration_test;
 use state::AppState;
 use state::Db;
 
-/// Skąd brać bazę: lokalny plik SQLite (dev) albo Turso przez HTTP (`new_remote`).
+/// Skąd brać bazę: lokalny SQLite, Turso embedded replica (domyślnie) lub czysty HTTP.
 #[derive(Debug, Clone)]
 pub enum DatabaseBackend {
     Local(PathBuf),
-    Remote { url: String, auth_token: String },
+    Remote {
+        url: String,
+        auth_token: String,
+        /// Lokalna kopia zsynchronizowana z Turso — szybkie odczyty. `None` = sam HTTP.
+        replica_path: Option<PathBuf>,
+    },
 }
 
 /// Buduje router Axum (libsql: SQLite lokalnie lub Turso zdalnie + JWT).
@@ -51,6 +58,7 @@ pub async fn create_app(
 ) -> Result<axum::Router, Box<dyn std::error::Error + Send + Sync>> {
     let db = Db::new(database).await?;
     let init_conn = db.raw().await;
+    state::apply_connection_pragmas(&init_conn).await.ok();
     db::init_db(init_conn.as_ref()).await?;
 
     let worker_metrics: std::sync::Arc<worker_metrics::WorkerMetrics> =
@@ -146,10 +154,42 @@ pub async fn create_app(
         worker_metrics,
     };
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    Ok(router::build_router(state, build_cors_layer()))
+}
 
-    Ok(router::build_router(state, cors))
+/// Dozwolone originy CORS — lista po przecinku w `CORS_ALLOWED_ORIGINS` lub domyślna whitelist.
+fn build_cors_layer() -> CorsLayer {
+    const DEFAULT_ORIGINS: &str = concat!(
+        "http://localhost:3000,",
+        "http://127.0.0.1:3000,",
+        "https://cksslavia.vercel.app,",
+        "https://cksslavia-git-main-jakubgawron2s-projects.vercel.app"
+    );
+
+    let raw = std::env::var("CORS_ALLOWED_ORIGINS").unwrap_or_else(|_| DEFAULT_ORIGINS.to_string());
+    let origins: Vec<HeaderValue> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| HeaderValue::from_str(s).ok())
+        .collect();
+
+    if origins.is_empty() {
+        return CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any);
+    }
+
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list(origins))
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers(Any)
 }
