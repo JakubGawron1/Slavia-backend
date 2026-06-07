@@ -421,7 +421,9 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
     let ai_coach_routes = Router::new()
         .route("/status", get(routes::ai_coach::coach_status))
         .route("/chat", post(routes::ai_coach::coach_chat))
-        .route("/import-plan", post(routes::ai_coach::coach_import_plan));
+        .route("/import-plan", post(routes::ai_coach::coach_import_plan))
+        .route("/public/status", get(routes::ai_coach::coach_public_status))
+        .route("/public/chat", post(routes::ai_coach::coach_public_chat));
 
     let cms_routes = Router::new()
         .route("/variables", get(routes::cms::list_variables))

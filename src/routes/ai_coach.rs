@@ -1,9 +1,9 @@
-//! Trener AI (Gemini) — czat, plany treningowe, suplementacja, regeneracja.
+//! Trener AI (Groq + LLaMA) — czat, plany treningowe, suplementacja, regeneracja.
 
 use axum::{
     Json,
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
 };
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
@@ -44,7 +44,39 @@ Zasady odpowiedzi:
 - Pisz po polsku, konkretnie, z nagłówkami i listami; przy planach używaj tabel lub sekcji per dzień (pon–nd).
 - Używaj terminologii PL + EN w nawiasie przy pierwszym użyciu (np. rwanie / snatch).
 - Jesteś trenerem pomocniczym — przy ważnych decyzjach zachęcaj do konsultacji z trenerem klubu.
-- Nie wymyślaj danych zawodnika — jeśli brak kontekstu, zapytaj lub podaj plan szablonowy z placeholderami."#;
+- Nie wymyślaj danych zawodnika — jeśli brak kontekstu, zapytaj lub podaj plan szablonowy z placeholderami.
+- Gdy w kontekście są wpisy dziennika treningów, wyniki z zawodów, obecności lub aktywny plan klubowy — odwołuj się do nich w odpowiedzi (objętość, ostatnie starty, trendy)."#;
+
+const DEFAULT_GROQ_MODEL: &str = "llama-3.1-70b-versatile";
+
+const MAX_USER_MESSAGE_LEN: usize = 3_500;
+const MAX_HISTORY_TURNS: usize = 8;
+const MAX_OUTPUT_TOKENS_CHAT: u32 = 1_536;
+const MAX_OUTPUT_TOKENS_IMPORT: u32 = 2_048;
+const TRAINING_LOG_CONTEXT_LIMIT: usize = 3;
+const COMPETITION_RESULTS_CONTEXT_LIMIT: usize = 4;
+const ATTENDANCE_CONTEXT_LIMIT: usize = 4;
+const PLAN_ITEMS_CONTEXT_LIMIT: usize = 12;
+const MAX_PUBLIC_MESSAGE_LEN: usize = 1_200;
+const MAX_PUBLIC_HISTORY_TURNS: usize = 6;
+const MAX_OUTPUT_TOKENS_PUBLIC: u32 = 768;
+
+const PUBLIC_SYSTEM_INSTRUCTION: &str = r#"Jesteś asystentem CKS Slavia Ruda Śląska — klubu podnoszenia ciężarów i dwuboju olimpijskiego.
+
+Odpowiadasz gościom na stronie klubu po polsku, krótko i przyjaźnie.
+
+Możesz pomóc w:
+- informacjach o klubie Slavia (treningi, dwubój, siłownia, społeczność),
+- ogólnych pytaniach o podnoszenie ciężarów i dwubój (technika, sprzęt, zawody — na poziomie edukacyjnym),
+- wskazaniu gdzie na stronie znaleźć treści (zawodnicy, kalendarz, aktualności, galeria, kontakt),
+- zachęceniu do kontaktu z trenerem klubu.
+
+Zasady:
+- Nie udzielaj indywidualnych planów treningowych ani diagnoz medycznych — zaproponuj logowanie do panelu zawodnika (Trener AI) lub kontakt z trenerem.
+- Przy pytaniach o zapisy, cennik, indywidualny plan, kontuzje, konflikty — zawsze poleć stronę kontaktową: /kontakt (formularz i dane klubu).
+- Nie wymyślaj numerów telefonów, adresów e-mail ani godzin treningów — jeśli nie masz pewności, odsyłaj na /kontakt.
+- Bądź uprzejmy, używaj list i krótkich akapitów."#;
+const GROQ_CHAT_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
 
 #[derive(Debug, Deserialize)]
 pub struct AiCoachHistoryMessage {
@@ -80,28 +112,86 @@ pub struct AiCoachChatRequest {
 pub struct AiCoachChatResponse {
     pub reply: String,
     pub model: String,
+    /// club | personal
+    pub key_source: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AiCoachQuota {
+    pub chat_used_today: u32,
+    pub chat_limit_per_day: u32,
+    pub chat_used_this_minute: u32,
+    pub chat_limit_per_minute: u32,
+    pub import_used_today: u32,
+    pub import_limit_per_day: u32,
+    pub import_used_this_hour: u32,
+    pub import_limit_per_hour: u32,
+    pub applies_to_you: bool,
 }
 
 #[derive(Debug, Serialize)]
 pub struct AiCoachStatusResponse {
     pub configured: bool,
     pub model: String,
+    pub key_format_ok: bool,
+    pub setup_hint: Option<String>,
+    pub quota: AiCoachQuota,
 }
 
-#[derive(Serialize)]
-struct GeminiPart {
-    text: String,
+#[derive(Debug, Deserialize)]
+pub struct AiCoachPublicChatRequest {
+    pub message: String,
+    pub history: Option<Vec<AiCoachHistoryMessage>>,
 }
 
-#[derive(Serialize)]
-struct GeminiContent {
+#[derive(Debug, Serialize)]
+pub struct AiCoachPublicStatusResponse {
+    pub enabled: bool,
+    pub model: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AiCoachPublicChatResponse {
+    pub reply: String,
+    pub model: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct GroqChatMessage {
     role: String,
-    parts: Vec<GeminiPart>,
+    content: String,
 }
 
 #[derive(Serialize)]
-struct GeminiSystemInstruction {
-    parts: Vec<GeminiPart>,
+struct GroqResponseFormat {
+    r#type: String,
+}
+
+#[derive(Serialize)]
+struct GroqChatRequest {
+    model: String,
+    messages: Vec<GroqChatMessage>,
+    temperature: f32,
+    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<GroqResponseFormat>,
+}
+
+#[derive(Deserialize)]
+struct GroqChatChoice {
+    message: Option<GroqChatMessage>,
+}
+
+#[derive(Deserialize)]
+struct GroqChatResponse {
+    choices: Option<Vec<GroqChatChoice>>,
+    model: Option<String>,
+    error: Option<GroqErrorBody>,
+}
+
+#[derive(Deserialize)]
+struct GroqErrorBody {
+    message: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -164,47 +254,6 @@ Zasady:
 - sort_order rośnie w obrębie dnia od 0
 - intensity_percent i weight_kg — użyj tego, co wynika z tekstu; brak = null
 - Nie pomijaj ćwiczeń głównych ani akcesoriów wymienionych w planie"#;
-
-#[derive(Serialize)]
-struct GeminiGenerationConfig {
-    temperature: f32,
-    max_output_tokens: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    response_mime_type: Option<String>,
-}
-
-#[derive(Serialize)]
-struct GeminiRequest {
-    system_instruction: GeminiSystemInstruction,
-    contents: Vec<GeminiContent>,
-    generation_config: GeminiGenerationConfig,
-}
-
-#[derive(Deserialize)]
-struct GeminiCandidate {
-    content: Option<GeminiResponseContent>,
-}
-
-#[derive(Deserialize)]
-struct GeminiResponseContent {
-    parts: Option<Vec<GeminiResponsePart>>,
-}
-
-#[derive(Deserialize)]
-struct GeminiResponsePart {
-    text: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct GeminiResponse {
-    candidates: Option<Vec<GeminiCandidate>>,
-    error: Option<GeminiErrorBody>,
-}
-
-#[derive(Deserialize)]
-struct GeminiErrorBody {
-    message: Option<String>,
-}
 
 fn coach_role_allowed(claims: &Claims) -> bool {
     claims.roles.iter().any(|r| {
@@ -282,6 +331,321 @@ fn format_plan_context(ctx: &AiCoachPlanContext) -> String {
     }
 }
 
+fn truncate_for_context(s: &str, max: usize) -> String {
+    let t = s.trim();
+    if t.chars().count() <= max {
+        return t.to_string();
+    }
+    let cut: String = t.chars().take(max.saturating_sub(1)).collect();
+    format!("{cut}…")
+}
+
+fn build_quota_for_user(user_sub: &str, applies: bool) -> AiCoachQuota {
+    AiCoachQuota {
+        chat_used_today: crate::post_throttle::count_user_post_attempts(
+            user_sub,
+            "ai_coach_chat_daily",
+        ) as u32,
+        chat_limit_per_day: crate::post_throttle::max_for_bucket("ai_coach_chat_daily") as u32,
+        chat_used_this_minute: crate::post_throttle::count_user_post_attempts(
+            user_sub,
+            "ai_coach_chat",
+        ) as u32,
+        chat_limit_per_minute: crate::post_throttle::max_for_bucket("ai_coach_chat") as u32,
+        import_used_today: crate::post_throttle::count_user_post_attempts(
+            user_sub,
+            "ai_coach_import_daily",
+        ) as u32,
+        import_limit_per_day: crate::post_throttle::max_for_bucket("ai_coach_import_daily") as u32,
+        import_used_this_hour: crate::post_throttle::count_user_post_attempts(
+            user_sub,
+            "ai_coach_import",
+        ) as u32,
+        import_limit_per_hour: crate::post_throttle::max_for_bucket("ai_coach_import") as u32,
+        applies_to_you: applies,
+    }
+}
+
+fn chat_limit_error(deny: crate::post_throttle::AiCoachLimitDeny) -> ApiError {
+    let msg = match deny {
+        crate::post_throttle::AiCoachLimitDeny::ChatDaily => {
+            "Dzienny limit wiadomości Trenera AI wyczerpany. Spróbuj jutro."
+        }
+        crate::post_throttle::AiCoachLimitDeny::ChatMinute => {
+            "Zbyt wiele wiadomości na minutę — odczekaj chwilę przed kolejną."
+        }
+        crate::post_throttle::AiCoachLimitDeny::ClubChatDaily => {
+            "Klubowy dzienny limit Trenera AI wyczerpany. Spróbuj jutro."
+        }
+        crate::post_throttle::AiCoachLimitDeny::ClubChatMinute => {
+            "Klubowy limit wiadomości na minutę wyczerpany — odczekaj chwilę."
+        }
+        _ => "Limit Trenera AI wyczerpany — spróbuj później.",
+    };
+    api_error(StatusCode::TOO_MANY_REQUESTS, msg)
+}
+
+fn public_chat_limit_error(deny: crate::post_throttle::AiCoachLimitDeny) -> ApiError {
+    let msg = match deny {
+        crate::post_throttle::AiCoachLimitDeny::ChatDaily => {
+            "Osiągnięto dzienny limit wiadomości. Spróbuj jutro lub napisz do nas przez /kontakt."
+        }
+        crate::post_throttle::AiCoachLimitDeny::ChatMinute
+        | crate::post_throttle::AiCoachLimitDeny::ClubChatMinute => {
+            "Zbyt wiele wiadomości — odczekaj chwilę."
+        }
+        crate::post_throttle::AiCoachLimitDeny::ClubChatDaily => {
+            "Asystent klubu jest chwilowo niedostępny — spróbuj później lub przejdź na /kontakt."
+        }
+        _ => "Limit wiadomości wyczerpany — spróbuj później.",
+    };
+    api_error(StatusCode::TOO_MANY_REQUESTS, msg)
+}
+
+fn import_limit_error(deny: crate::post_throttle::AiCoachLimitDeny) -> ApiError {
+    let msg = match deny {
+        crate::post_throttle::AiCoachLimitDeny::ImportDaily => {
+            "Dzienny limit importów planów AI wyczerpany. Spróbuj jutro."
+        }
+        crate::post_throttle::AiCoachLimitDeny::ImportHour => {
+            "Zbyt wiele importów planów — maks. 3 na godzinę."
+        }
+        crate::post_throttle::AiCoachLimitDeny::ClubImportDaily => {
+            "Klubowy dzienny limit importów AI wyczerpany. Spróbuj jutro."
+        }
+        crate::post_throttle::AiCoachLimitDeny::ClubImportHour => {
+            "Klubowy limit importów na godzinę wyczerpany — odczekaj chwilę."
+        }
+        _ => "Limit importu planu AI wyczerpany — spróbuj później.",
+    };
+    api_error(StatusCode::TOO_MANY_REQUESTS, msg)
+}
+
+fn enforce_chat_limits(user_sub: &str, include_club_global: bool) -> Result<(), ApiError> {
+    crate::post_throttle::reserve_ai_coach_chat(user_sub, include_club_global)
+        .map_err(chat_limit_error)
+}
+
+fn enforce_import_limits(user_sub: &str, include_club_global: bool) -> Result<(), ApiError> {
+    crate::post_throttle::reserve_ai_coach_import(user_sub, include_club_global)
+        .map_err(import_limit_error)
+}
+
+fn client_ip_from_headers(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+        })
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+async fn append_training_log_context(
+    state: &AppState,
+    athlete_id: &str,
+    parts: &mut Vec<String>,
+) {
+    let Ok(mut rows) = state
+        .db
+        .query(
+            "SELECT session_date, title, notes FROM training_log_entries \
+             WHERE athlete_id = ?1 ORDER BY session_date DESC LIMIT ?2",
+            (
+                athlete_id.to_string(),
+                TRAINING_LOG_CONTEXT_LIMIT as i64,
+            ),
+        )
+        .await
+    else {
+        return;
+    };
+    let mut lines = Vec::new();
+    while let Ok(Some(r)) = rows.next().await {
+        let date: String = r.get(0).unwrap_or_default();
+        let title: Option<String> = r.get(1).ok();
+        let notes: String = r.get(2).unwrap_or_default();
+        let title_part = title
+            .filter(|s| !s.trim().is_empty())
+            .map(|t| format!(" «{t}»"))
+            .unwrap_or_default();
+        let notes_short = truncate_for_context(&notes, 180);
+        if notes_short.is_empty() {
+            continue;
+        }
+        lines.push(format!("- {date}{title_part}: {notes_short}"));
+    }
+    if !lines.is_empty() {
+        parts.push(format!(
+            "Ostatnie wpisy dziennika treningów:\n{}",
+            lines.join("\n")
+        ));
+    }
+}
+
+async fn append_competition_results_context(
+    state: &AppState,
+    athlete_id: &str,
+    parts: &mut Vec<String>,
+) {
+    let Ok(mut rows) = state
+        .db
+        .query(
+            "SELECT r.date, r.snatch, r.clean_and_jerk, r.total, r.bodyweight_kg, r.kind, \
+             COALESCE(c.title, r.location, '') \
+             FROM results r \
+             LEFT JOIN competitions c ON c.id = r.competition_id \
+             WHERE r.athlete_id = ?1 AND r.status = 'Approved' \
+             ORDER BY r.date DESC LIMIT ?2",
+            (
+                athlete_id.to_string(),
+                COMPETITION_RESULTS_CONTEXT_LIMIT as i64,
+            ),
+        )
+        .await
+    else {
+        return;
+    };
+    let mut lines = Vec::new();
+    while let Ok(Some(r)) = rows.next().await {
+        let date: String = r.get(0).unwrap_or_default();
+        let snatch: f64 = r.get(1).unwrap_or(0.0);
+        let cj: f64 = r.get(2).unwrap_or(0.0);
+        let total: f64 = r.get(3).unwrap_or(0.0);
+        let bw: Option<f64> = r.get(4).ok();
+        let kind: String = r.get(5).unwrap_or_else(|_| "competition".to_string());
+        let comp_title: String = r.get(6).unwrap_or_default();
+        let kind_label = if kind == "training" {
+            "trening startowy"
+        } else {
+            "zawody"
+        };
+        let mut line = format!("- {date} ({kind_label}): S {snatch} / C&J {cj} / Σ {total} kg");
+        if let Some(v) = bw {
+            line.push_str(&format!(", BW {v} kg"));
+        }
+        if !comp_title.trim().is_empty() {
+            line.push_str(&format!(" — {}", comp_title.trim()));
+        }
+        lines.push(line);
+    }
+    if !lines.is_empty() {
+        parts.push(format!(
+            "Ostatnie zatwierdzone wyniki (zawody / starty):\n{}",
+            lines.join("\n")
+        ));
+    }
+}
+
+async fn append_attendance_context(state: &AppState, athlete_id: &str, parts: &mut Vec<String>) {
+    let Ok(mut rows) = state
+        .db
+        .query(
+            "SELECT session_date, status FROM attendance_records \
+             WHERE athlete_id = ?1 ORDER BY session_date DESC LIMIT ?2",
+            (
+                athlete_id.to_string(),
+                ATTENDANCE_CONTEXT_LIMIT as i64,
+            ),
+        )
+        .await
+    else {
+        return;
+    };
+    let mut lines = Vec::new();
+    while let Ok(Some(r)) = rows.next().await {
+        let date: String = r.get(0).unwrap_or_default();
+        let status: String = r.get(1).unwrap_or_default();
+        lines.push(format!("- {date}: {status}"));
+    }
+    if !lines.is_empty() {
+        parts.push(format!(
+            "Ostatnia obecność na treningach klubowych:\n{}",
+            lines.join("\n")
+        ));
+    }
+}
+
+async fn append_active_plan_context(state: &AppState, athlete_id: &str, parts: &mut Vec<String>) {
+    let Ok(mut plan_rows) = state
+        .db
+        .query(
+            "SELECT id, title, week_start, status, goal FROM training_plans \
+             WHERE athlete_id = ?1 AND status IN ('active', 'planned') \
+             ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, week_start DESC \
+             LIMIT 1",
+            [athlete_id.to_string()],
+        )
+        .await
+    else {
+        return;
+    };
+    let Some(plan_row) = plan_rows.next().await.ok().flatten() else {
+        return;
+    };
+    let plan_id: String = plan_row.get(0).unwrap_or_default();
+    let title: String = plan_row.get(1).unwrap_or_default();
+    let week_start: String = plan_row.get(2).unwrap_or_default();
+    let status: String = plan_row.get(3).unwrap_or_default();
+    let goal: Option<String> = plan_row.get(4).ok();
+
+    let mut header = format!(
+        "Aktywny / zaplanowany plan klubowy: «{title}» (od {week_start}, status: {status})"
+    );
+    if let Some(g) = goal.filter(|s| !s.trim().is_empty()) {
+        header.push_str(&format!("\nCel planu: {}", g.trim()));
+    }
+
+    let Ok(mut item_rows) = state
+        .db
+        .query(
+            "SELECT day_of_week, custom_exercise_name, sets, reps, intensity_percent, weight_kg \
+             FROM training_plan_items WHERE plan_id = ?1 \
+             ORDER BY day_of_week ASC, sort_order ASC LIMIT ?2",
+            (plan_id, PLAN_ITEMS_CONTEXT_LIMIT as i64),
+        )
+        .await
+    else {
+        parts.push(header);
+        return;
+    };
+
+    let mut items = Vec::new();
+    while let Ok(Some(r)) = item_rows.next().await {
+        let day: i32 = r.get(0).unwrap_or(1);
+        let name: String = r.get(1).unwrap_or_default();
+        let sets: Option<i32> = r.get(2).ok();
+        let reps: Option<i32> = r.get(3).ok();
+        let pct: Option<f64> = r.get(4).ok();
+        let kg: Option<f64> = r.get(5).ok();
+        if name.trim().is_empty() {
+            continue;
+        }
+        let mut detail = format!("  dzień {day}: {name}");
+        if let (Some(s), Some(rp)) = (sets, reps) {
+            detail.push_str(&format!(" {s}×{rp}"));
+        }
+        if let Some(p) = pct {
+            detail.push_str(&format!(" @ {p}%"));
+        } else if let Some(w) = kg {
+            detail.push_str(&format!(" @ {w} kg"));
+        }
+        items.push(detail);
+    }
+    if !items.is_empty() {
+        header.push_str("\nPozycje planu:\n");
+        header.push_str(&items.join("\n"));
+    }
+    parts.push(header);
+}
+
 async fn fetch_athlete_context(state: &AppState, athlete_id: &str) -> Option<String> {
     let mut rows = state
         .db
@@ -357,7 +721,12 @@ async fn fetch_athlete_context(state: &AppState, athlete_id: &str) -> Option<Str
         }
     }
 
-    Some(parts.join("\n"))
+    append_training_log_context(state, athlete_id, &mut parts).await;
+    append_competition_results_context(state, athlete_id, &mut parts).await;
+    append_attendance_context(state, athlete_id, &mut parts).await;
+    append_active_plan_context(state, athlete_id, &mut parts).await;
+
+    Some(parts.join("\n\n"))
 }
 
 async fn fetch_athlete_context_for_user(state: &AppState, user_id: &str) -> Option<String> {
@@ -374,32 +743,147 @@ async fn fetch_athlete_context_for_user(state: &AppState, user_id: &str) -> Opti
     fetch_athlete_context(state, &athlete_id).await
 }
 
-async fn call_gemini(
-    state: &AppState,
+fn configured_groq_model(state: &AppState) -> String {
+    if state.groq_model.trim().is_empty() {
+        DEFAULT_GROQ_MODEL.to_string()
+    } else {
+        state.groq_model.trim().to_string()
+    }
+}
+
+fn groq_key_format_ok(key: &str) -> bool {
+    key.trim().starts_with("gsk_")
+}
+
+fn groq_model_candidates(configured: &str) -> Vec<String> {
+    let primary = if configured.trim().is_empty() {
+        DEFAULT_GROQ_MODEL.to_string()
+    } else {
+        configured.trim().to_string()
+    };
+    let fallbacks = [DEFAULT_GROQ_MODEL, "llama-3.3-70b-versatile"];
+    let mut out = vec![primary];
+    for f in fallbacks {
+        if !out.iter().any(|m| m == f) {
+            out.push(f.to_string());
+        }
+    }
+    out
+}
+
+fn groq_error_user_message(raw: &str) -> (StatusCode, String) {
+    let lower = raw.to_ascii_lowercase();
+    if lower.contains("invalid api key") || lower.contains("invalid_api_key") {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Nieprawidłowy klucz Groq. Wygeneruj nowy na https://console.groq.com/keys (format gsk_…)."
+                .to_string(),
+        );
+    }
+    if lower.contains("rate limit")
+        || lower.contains("rate_limit")
+        || lower.contains("quota")
+        || lower.contains("too many requests")
+    {
+        if let Some(secs) = extract_groq_retry_seconds(raw) {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!(
+                    "Limit zapytań Groq wyczerpany — spróbuj za ~{secs}s. \
+                     Sprawdź limity na https://console.groq.com/"
+                ),
+            );
+        }
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            "Limit zapytań Groq wyczerpany (darmowy tier). Odczekaj chwilę lub podłącz własny klucz."
+                .to_string(),
+        );
+    }
+    if lower.contains("decommissioned") || lower.contains("no longer supported") {
+        return (
+            StatusCode::BAD_GATEWAY,
+            "Model LLaMA na Groq został wycofany — ustaw GROQ_MODEL=llama-3.3-70b-versatile w .env."
+                .to_string(),
+        );
+    }
+    (
+        StatusCode::BAD_GATEWAY,
+        format!("Groq: {}", truncate_error(raw, 380)),
+    )
+}
+
+fn extract_groq_retry_seconds(raw: &str) -> Option<u64> {
+    let lower = raw.to_ascii_lowercase();
+    for marker in ["try again in ", "retry after ", "retry in "] {
+        if let Some(idx) = lower.find(marker) {
+            let tail = &raw[idx + marker.len()..];
+            let num: String = tail
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            if let Ok(v) = num.parse::<f64>() {
+                return Some(v.ceil() as u64);
+            }
+        }
+    }
+    None
+}
+
+fn truncate_error(raw: &str, max: usize) -> String {
+    let t = raw.trim();
+    if t.chars().count() <= max {
+        return t.to_string();
+    }
+    let cut: String = t.chars().take(max.saturating_sub(1)).collect();
+    format!("{cut}…")
+}
+
+fn status_setup_hint(key: &str, configured: bool) -> Option<String> {
+    if !configured {
+        return Some(
+            "Ustaw GROQ_API_KEY w .env backendu (https://console.groq.com/keys).".to_string(),
+        );
+    }
+    if !groq_key_format_ok(key) {
+        return Some(
+            "Klucz nie wygląda na klucz Groq (oczekiwany prefix gsk_…).".to_string(),
+        );
+    }
+    None
+}
+
+struct LlmCallResult {
+    text: String,
+    model: String,
+}
+
+async fn call_groq_single(
+    api_key: &str,
+    model: &str,
     user_text: String,
     history: &[AiCoachHistoryMessage],
     system_instruction: &str,
     temperature: f32,
     json_response: bool,
-) -> Result<String, ApiError> {
-    let api_key = state.gemini_api_key.trim();
+    max_output_tokens: u32,
+) -> Result<LlmCallResult, (StatusCode, String)> {
+    let api_key = api_key.trim();
     if api_key.is_empty() {
-        return Err(api_error(
+        return Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            "Trener AI nie jest skonfigurowany (brak GEMINI_API_KEY na backendzie)",
+            "Trener AI nie jest skonfigurowany (brak GROQ_API_KEY na backendzie)".to_string(),
         ));
     }
 
-    let model = if state.gemini_model.trim().is_empty() {
-        "gemini-2.0-flash".to_string()
-    } else {
-        state.gemini_model.trim().to_string()
-    };
-
-    let mut contents: Vec<GeminiContent> = Vec::new();
+    let model = model.trim().to_string();
+    let mut messages = vec![GroqChatMessage {
+        role: "system".to_string(),
+        content: system_instruction.to_string(),
+    }];
     for h in history {
         let role = if h.role == "assistant" || h.role == "model" {
-            "model"
+            "assistant"
         } else {
             "user"
         };
@@ -407,62 +891,53 @@ async fn call_gemini(
         if text.is_empty() {
             continue;
         }
-        contents.push(GeminiContent {
+        messages.push(GroqChatMessage {
             role: role.to_string(),
-            parts: vec![GeminiPart {
-                text: text.to_string(),
-            }],
+            content: text.to_string(),
         });
     }
-    contents.push(GeminiContent {
+    messages.push(GroqChatMessage {
         role: "user".to_string(),
-        parts: vec![GeminiPart { text: user_text }],
+        content: user_text,
     });
 
-    let body = GeminiRequest {
-        system_instruction: GeminiSystemInstruction {
-            parts: vec![GeminiPart {
-                text: system_instruction.to_string(),
-            }],
-        },
-        contents,
-        generation_config: GeminiGenerationConfig {
-            temperature,
-            max_output_tokens: 8192,
-            response_mime_type: if json_response {
-                Some("application/json".to_string())
-            } else {
-                None
-            },
+    let body = GroqChatRequest {
+        model: model.clone(),
+        messages,
+        temperature,
+        max_tokens: max_output_tokens,
+        response_format: if json_response {
+            Some(GroqResponseFormat {
+                r#type: "json_object".to_string(),
+            })
+        } else {
+            None
         },
     };
-
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    );
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(90))
         .build()
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let res = client
-        .post(&url)
+        .post(GROQ_CHAT_URL)
+        .header("Authorization", format!("Bearer {api_key}"))
         .json(&body)
         .send()
         .await
         .map_err(|e| {
-            api_error(
+            (
                 StatusCode::BAD_GATEWAY,
-                format!("Błąd połączenia z Gemini: {e}"),
+                format!("Błąd połączenia z Groq ({model}): {e}"),
             )
         })?;
 
     let status = res.status();
-    let parsed: GeminiResponse = res.json().await.map_err(|e| {
-        api_error(
+    let parsed: GroqChatResponse = res.json().await.map_err(|e| {
+        (
             StatusCode::BAD_GATEWAY,
-            format!("Nieprawidłowa odpowiedź Gemini: {e}"),
+            format!("Nieprawidłowa odpowiedź Groq ({model}): {e}"),
         )
     })?;
 
@@ -470,29 +945,121 @@ async fn call_gemini(
         let msg = parsed
             .error
             .and_then(|e| e.message)
-            .unwrap_or_else(|| format!("Gemini HTTP {status}"));
-        return Err(api_error(StatusCode::BAD_GATEWAY, msg));
+            .unwrap_or_else(|| format!("Groq HTTP {status} (model {model})"));
+        return Err(groq_error_user_message(&msg));
     }
 
     let text = parsed
-        .candidates
+        .choices
         .and_then(|c| c.into_iter().next())
-        .and_then(|c| c.content)
-        .and_then(|c| c.parts)
-        .and_then(|p| p.into_iter().next())
-        .and_then(|p| p.text)
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+        .and_then(|c| c.message)
+        .map(|m| m.content.trim().to_string())
+        .unwrap_or_default();
 
     if text.is_empty() {
-        return Err(api_error(
+        return Err((
             StatusCode::BAD_GATEWAY,
-            "Gemini zwróciło pustą odpowiedź",
+            format!("Groq ({model}) zwróciło pustą odpowiedź"),
         ));
     }
 
-    Ok(text)
+    let used_model = parsed.model.unwrap_or(model);
+    Ok(LlmCallResult {
+        text,
+        model: used_model,
+    })
+}
+
+async fn call_groq_with_key(
+    api_key: &str,
+    model_config: &str,
+    user_text: String,
+    history: &[AiCoachHistoryMessage],
+    system_instruction: &str,
+    temperature: f32,
+    json_response: bool,
+    max_output_tokens: u32,
+) -> Result<LlmCallResult, ApiError> {
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Brak klucza Groq do wywołania modelu",
+        ));
+    }
+
+    let models = groq_model_candidates(model_config);
+    let mut last_err: Option<(StatusCode, String)> = None;
+
+    for model in models {
+        match call_groq_single(
+            api_key,
+            &model,
+            user_text.clone(),
+            history,
+            system_instruction,
+            temperature,
+            json_response,
+            max_output_tokens,
+        )
+        .await
+        {
+            Ok(res) => return Ok(res),
+            Err((code, msg)) => {
+                last_err = Some((code, msg));
+            }
+        }
+    }
+
+    let (code, msg) = last_err.unwrap_or((
+        StatusCode::BAD_GATEWAY,
+        "Groq: brak dostępnego modelu".to_string(),
+    ));
+    Err(api_error(code, msg))
+}
+
+async fn invoke_llm(
+    state: &AppState,
+    user_id: &str,
+    user_text: String,
+    history: &[AiCoachHistoryMessage],
+    system_instruction: &str,
+    temperature: f32,
+    json_response: bool,
+    max_output_tokens: u32,
+    for_import: bool,
+) -> Result<LlmCallResult, ApiError> {
+    let club_key = state.groq_api_key.trim();
+    if club_key.is_empty() {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Trener AI niedostępny — brak GROQ_API_KEY na backendzie.",
+        ));
+    }
+    if !groq_key_format_ok(club_key) {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Nieprawidłowy klucz Groq klubu — skontaktuj się z administratorem.",
+        ));
+    }
+
+    if for_import {
+        enforce_import_limits(user_id, true)?;
+    } else {
+        enforce_chat_limits(user_id, true)?;
+    }
+
+    call_groq_with_key(
+        club_key,
+        &state.groq_model,
+        user_text,
+        history,
+        system_instruction,
+        temperature,
+        json_response,
+        max_output_tokens,
+    )
+    .await
 }
 
 fn extract_json_payload(raw: &str) -> String {
@@ -561,16 +1128,19 @@ pub async fn coach_import_plan(
     let parse_prompt = format!(
         "Przekształć poniższy plan treningowy na JSON według schematu z instrukcji systemowej.\n\n---\n{plan_text}\n---"
     );
-    let json_raw = call_gemini(
+    let llm_res = invoke_llm(
         &state,
+        &claims.sub,
         parse_prompt,
         &[],
         IMPORT_SYSTEM_INSTRUCTION,
         0.2,
         true,
+        MAX_OUTPUT_TOKENS_IMPORT,
+        true,
     )
     .await?;
-    let json_clean = extract_json_payload(&json_raw);
+    let json_clean = extract_json_payload(&llm_res.text);
     let parsed: ParsedPlanImport = serde_json::from_str(&json_clean).map_err(|e| {
         api_error(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -736,14 +1306,86 @@ pub async fn coach_status(
             "Brak uprawnień do trenera AI",
         ));
     }
-    let model = if state.gemini_model.trim().is_empty() {
-        "gemini-2.0-flash".to_string()
-    } else {
-        state.gemini_model.trim().to_string()
-    };
+    let key = state.groq_api_key.trim();
+    let club_available = !key.is_empty();
+    let configured = club_available && groq_key_format_ok(key);
+
     Ok(Json(AiCoachStatusResponse {
-        configured: !state.gemini_api_key.trim().is_empty(),
-        model,
+        configured,
+        model: configured_groq_model(&state),
+        key_format_ok: !club_available || groq_key_format_ok(key),
+        setup_hint: status_setup_hint(key, club_available),
+        quota: build_quota_for_user(&claims.sub, configured),
+    }))
+}
+
+pub async fn coach_public_status(
+    State(state): State<AppState>,
+) -> Result<Json<AiCoachPublicStatusResponse>, ApiError> {
+    let key = state.groq_api_key.trim();
+    let enabled = !key.is_empty() && groq_key_format_ok(key);
+    Ok(Json(AiCoachPublicStatusResponse {
+        enabled,
+        model: configured_groq_model(&state),
+    }))
+}
+
+pub async fn coach_public_chat(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AiCoachPublicChatRequest>,
+) -> Result<Json<AiCoachPublicChatResponse>, ApiError> {
+    let key = state.groq_api_key.trim();
+    if key.is_empty() || !groq_key_format_ok(key) {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Asystent klubu jest chwilowo niedostępny.",
+        ));
+    }
+
+    let message = payload.message.trim();
+    if message.is_empty() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Treść wiadomości nie może być pusta",
+        ));
+    }
+    if message.chars().count() > MAX_PUBLIC_MESSAGE_LEN {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            format!("Wiadomość jest za długa (max {MAX_PUBLIC_MESSAGE_LEN} znaków)."),
+        ));
+    }
+
+    let client_ip = client_ip_from_headers(&headers);
+    crate::post_throttle::reserve_ai_coach_public_chat(&client_ip).map_err(public_chat_limit_error)?;
+
+    let history = payload
+        .history
+        .unwrap_or_default()
+        .into_iter()
+        .rev()
+        .take(MAX_PUBLIC_HISTORY_TURNS)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
+
+    let llm_res = call_groq_with_key(
+        key,
+        &state.groq_model,
+        message.to_string(),
+        &history,
+        PUBLIC_SYSTEM_INSTRUCTION,
+        0.55,
+        false,
+        MAX_OUTPUT_TOKENS_PUBLIC,
+    )
+    .await?;
+
+    Ok(Json(AiCoachPublicChatResponse {
+        reply: llm_res.text,
+        model: llm_res.model,
     }))
 }
 
@@ -766,9 +1408,26 @@ pub async fn coach_chat(
             "Treść wiadomości nie może być pusta",
         ));
     }
+    if message.chars().count() > MAX_USER_MESSAGE_LEN {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Wiadomość jest za długa (max {MAX_USER_MESSAGE_LEN} znaków — oszczędzamy limit Groq)"
+            ),
+        ));
+    }
 
     let mode = normalize_mode(payload.mode.as_deref());
-    let history = payload.history.unwrap_or_default();
+    let history = payload
+        .history
+        .unwrap_or_default()
+        .into_iter()
+        .rev()
+        .take(MAX_HISTORY_TURNS)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
 
     let mut augmented = String::new();
     augmented.push_str(mode_prefix(mode));
@@ -791,21 +1450,22 @@ pub async fn coach_chat(
 
     augmented.push_str(message);
 
-    let model = if state.gemini_model.trim().is_empty() {
-        "gemini-2.0-flash".to_string()
-    } else {
-        state.gemini_model.trim().to_string()
-    };
-
-    let reply = call_gemini(
+    let llm_res = invoke_llm(
         &state,
+        &claims.sub,
         augmented,
         &history,
         SYSTEM_INSTRUCTION,
         0.65,
         false,
+        MAX_OUTPUT_TOKENS_CHAT,
+        false,
     )
     .await?;
 
-    Ok(Json(AiCoachChatResponse { reply, model }))
+    Ok(Json(AiCoachChatResponse {
+        reply: llm_res.text,
+        model: llm_res.model,
+        key_source: "club".to_string(),
+    }))
 }
