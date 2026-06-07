@@ -115,6 +115,8 @@ async fn post_import_data_returns_three_sources_json() {
         String::new(),
         String::new(),
         String::new(),
+        String::new(),
+        String::new(),
     )
     .await
     .expect("create_app");
@@ -151,6 +153,8 @@ async fn trainer_can_read_system_metrics_and_event_feed() {
     let app = create_app(
         DatabaseBackend::Local(db_path),
         jwt_secret.to_string(),
+        String::new(),
+        String::new(),
         String::new(),
         String::new(),
         String::new(),
@@ -198,6 +202,8 @@ async fn trainer_plan_and_athlete_recovery_flow_works() {
     let app = create_app(
         DatabaseBackend::Local(db_path),
         jwt_secret.to_string(),
+        String::new(),
+        String::new(),
         String::new(),
         String::new(),
         String::new(),

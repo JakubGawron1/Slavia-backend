@@ -418,6 +418,11 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         get(routes::challenges::monthly_training_sessions_leaderboard),
     );
 
+    let ai_coach_routes = Router::new()
+        .route("/status", get(routes::ai_coach::coach_status))
+        .route("/chat", post(routes::ai_coach::coach_chat))
+        .route("/import-plan", post(routes::ai_coach::coach_import_plan));
+
     let cms_routes = Router::new()
         .route("/variables", get(routes::cms::list_variables))
         .route("/variable", post(routes::cms::create_variable))
@@ -461,6 +466,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .nest("/api/recovery", recovery_routes)
         .nest("/api/club-votes", club_votes_routes)
         .nest("/api/challenges", challenges_routes)
+        .nest("/api/ai/coach", ai_coach_routes)
         .nest("/api/cms", cms_routes)
         .nest("/api/system", system_routes)
         .layer(middleware::from_fn(crate::middleware::http_cache::cache_control_middleware))

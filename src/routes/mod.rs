@@ -1,4 +1,5 @@
 pub mod admins;
+pub mod ai_coach;
 pub mod announcements;
 pub mod athletes;
 pub mod attendance;

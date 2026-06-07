@@ -7,14 +7,22 @@ use tokio::net::TcpListener;
 use dotenvy::dotenv;
 use slavia_backend::DatabaseBackend;
 
-type AppConfig = (DatabaseBackend, String, String, String, String);
+type AppConfig = (
+    DatabaseBackend,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+);
 type AppError = Box<dyn std::error::Error + Send + Sync>;
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
     let _ = dotenv();
 
-    let (database, jwt_secret, c_name, c_key, c_secret) = load_config()?;
+    let (database, jwt_secret, c_name, c_key, c_secret, gemini_key, gemini_model) = load_config()?;
 
     match &database {
         DatabaseBackend::Local(p) => {
@@ -25,7 +33,28 @@ async fn main() -> Result<(), AppError> {
         }
     }
 
-    let app = slavia_backend::create_app(database, jwt_secret, c_name, c_key, c_secret)
+    if gemini_key.trim().is_empty() {
+        println!("ℹ️  Trener AI (Gemini): wyłączony — brak GEMINI_API_KEY");
+    } else {
+        println!(
+            "🤖 Trener AI (Gemini): włączony, model {}",
+            if gemini_model.trim().is_empty() {
+                "gemini-2.0-flash"
+            } else {
+                gemini_model.trim()
+            }
+        );
+    }
+
+    let app = slavia_backend::create_app(
+        database,
+        jwt_secret,
+        c_name,
+        c_key,
+        c_secret,
+        gemini_key,
+        gemini_model,
+    )
         .await
         .expect("Failed to create application");
 
@@ -118,5 +147,9 @@ fn load_config() -> Result<AppConfig, AppError> {
         "CLOUDINARY_API_SECRET",
     )
     .unwrap_or_default();
-    Ok((database, jwt_secret, cn, ck, cs))
+    let gemini_key =
+        pick_cfg(secrets.as_ref(), "GEMINI_API_KEY", "GEMINI_API_KEY").unwrap_or_default();
+    let gemini_model =
+        pick_cfg(secrets.as_ref(), "GEMINI_MODEL", "GEMINI_MODEL").unwrap_or_default();
+    Ok((database, jwt_secret, cn, ck, cs, gemini_key, gemini_model))
 }
