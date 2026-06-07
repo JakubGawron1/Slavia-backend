@@ -465,7 +465,8 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             status TEXT DEFAULT 'scheduled',
             external_source TEXT,
             external_ref TEXT,
-            external_url TEXT
+            external_url TEXT,
+            club_participates INTEGER NOT NULL DEFAULT 0
         )",
         "CREATE TABLE IF NOT EXISTS competition_participants (
             competition_id TEXT NOT NULL,
@@ -918,6 +919,12 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         .await;
     let _ = conn
         .execute(
+            "ALTER TABLE competitions ADD COLUMN club_participates INTEGER NOT NULL DEFAULT 0",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_competitions_external_ref ON competitions(external_source, external_ref) WHERE external_source IS NOT NULL AND external_ref IS NOT NULL",
             (),
         )
@@ -1364,7 +1371,8 @@ pub async fn reset_database(
             status TEXT DEFAULT 'scheduled',
             external_source TEXT,
             external_ref TEXT,
-            external_url TEXT
+            external_url TEXT,
+            club_participates INTEGER NOT NULL DEFAULT 0
         )",
         "CREATE TABLE IF NOT EXISTS competition_participants (
             competition_id TEXT NOT NULL,
