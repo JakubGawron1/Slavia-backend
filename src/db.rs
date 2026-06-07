@@ -101,6 +101,24 @@ async fn migrate_cms_schema(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+async fn cms_table_has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
+    let mut cols = conn
+        .query(&format!("PRAGMA table_info({table})"), ())
+        .await
+        .map_err(|e| format!("pragma table_info({table}): {e}"))?;
+    while let Some(row) = cols
+        .next()
+        .await
+        .map_err(|e| format!("pragma table_info({table}) row: {e}"))?
+    {
+        let col: String = row.get(1).unwrap_or_default();
+        if col == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 async fn create_cms_tables(conn: &Connection) -> Result<(), String> {
     let statements = [
         "CREATE TABLE IF NOT EXISTS cms_variables (
@@ -119,7 +137,6 @@ async fn create_cms_tables(conn: &Connection) -> Result<(), String> {
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )",
-        "CREATE INDEX IF NOT EXISTS idx_cms_pages_name ON cms_pages(page_name)",
         "CREATE TABLE IF NOT EXISTS cms_navigation_items (
             id TEXT PRIMARY KEY,
             role TEXT NOT NULL,
@@ -145,6 +162,56 @@ async fn create_cms_tables(conn: &Connection) -> Result<(), String> {
     ];
     for sql in statements {
         exec0_retry(conn, sql, "create_cms_tables").await?;
+    }
+
+    // Stary cms_pages (page_key) mógł przetrwać obok nowych tabel — indeks na page_name by wtedy padał.
+    if cms_table_has_column(conn, "cms_pages", "page_name")
+        .await
+        .unwrap_or(false)
+    {
+        exec0_retry(
+            conn,
+            "CREATE INDEX IF NOT EXISTS idx_cms_pages_name ON cms_pages(page_name)",
+            "create_cms_pages_index",
+        )
+        .await?;
+    } else {
+        let mut exists = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'cms_pages'",
+                (),
+            )
+            .await
+            .map_err(|e| format!("cms_pages exists check: {e}"))?;
+        let n: i64 = exists
+            .next()
+            .await
+            .map_err(|e| format!("cms_pages exists row: {e}"))?
+            .map(|r| r.get(0).unwrap_or(0))
+            .unwrap_or(0);
+        drop(exists);
+        if n > 0 {
+            eprintln!("🔄 Migracja CMS: cms_pages bez page_name — odtwarzam tabelę");
+            exec0_retry(conn, "DROP TABLE IF EXISTS cms_pages", "cms_pages drop stale").await?;
+            exec0_retry(
+                conn,
+                "CREATE TABLE cms_pages (
+                    id TEXT PRIMARY KEY,
+                    page_name TEXT NOT NULL UNIQUE,
+                    fields TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )",
+                "cms_pages recreate",
+            )
+            .await?;
+            exec0_retry(
+                conn,
+                "CREATE INDEX IF NOT EXISTS idx_cms_pages_name ON cms_pages(page_name)",
+                "create_cms_pages_index",
+            )
+            .await?;
+        }
     }
     Ok(())
 }
@@ -1249,7 +1316,10 @@ pub async fn reset_database(
             is_banned INTEGER NOT NULL DEFAULT 0,
             banned_at TEXT,
             banned_by_user_id TEXT,
-            banned_reason TEXT
+            banned_reason TEXT,
+            totp_secret TEXT,
+            totp_enabled INTEGER NOT NULL DEFAULT 0,
+            token_version INTEGER NOT NULL DEFAULT 0
         )",
         "CREATE TABLE IF NOT EXISTS athletes (
             id TEXT PRIMARY KEY,
