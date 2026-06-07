@@ -424,6 +424,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route("/status", get(routes::ai_coach::coach_status))
         .route("/chat", post(routes::ai_coach::coach_chat))
         .route("/import-plan", post(routes::ai_coach::coach_import_plan))
+        .route(
+            "/barbell-path/refine",
+            post(routes::barbell_path_ai::refine_barbell_path),
+        )
         .route("/public/status", get(routes::ai_coach::coach_public_status))
         .route("/public/chat", post(routes::ai_coach::coach_public_chat));
 
