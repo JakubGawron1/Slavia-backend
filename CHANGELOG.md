@@ -1,5 +1,14 @@
 # Changelog
 
+## [5.0.0] — 2026-06-07
+
+### Trener AI (Groq / LLaMA)
+- **`/api/ai/coach/*`**: czat, status, import planu treningowego; provider **Groq** (`GROQ_API_KEY`, model `llama-3.1-70b-versatile` z fallbackiem 3.3).
+- **Limity**: throttling per użytkownik (4/min, 40/dzień czat; 3/h, 10/dzień import) + globalny limit klucza klubu.
+- **Asystent publiczny**: `GET /api/ai/coach/public/status`, `POST /api/ai/coach/public/chat` (bez JWT, limit per IP).
+- Kontekst zawodnika w prompcie: dziennik, wyniki z zawodów, obecności, aktywny plan klubowy.
+- Usunięto endpointy BYOK (`/my-key`).
+
 ## [3.2.5] — 2026-05-19
 
 ### Ulepszone
