@@ -22,7 +22,7 @@ type AppError = Box<dyn std::error::Error + Send + Sync>;
 async fn main() -> Result<(), AppError> {
     let _ = dotenv();
 
-    let (database, jwt_secret, c_name, c_key, c_secret, gemini_key, gemini_model) = load_config()?;
+    let (database, jwt_secret, c_name, c_key, c_secret, groq_key, groq_model) = load_config()?;
 
     match &database {
         DatabaseBackend::Local(p) => {
@@ -33,15 +33,15 @@ async fn main() -> Result<(), AppError> {
         }
     }
 
-    if gemini_key.trim().is_empty() {
-        println!("ℹ️  Trener AI (Gemini): wyłączony — brak GEMINI_API_KEY");
+    if groq_key.trim().is_empty() {
+        println!("ℹ️  Trener AI (Groq): wyłączony — brak GROQ_API_KEY");
     } else {
         println!(
-            "🤖 Trener AI (Gemini): włączony, model {}",
-            if gemini_model.trim().is_empty() {
-                "gemini-2.0-flash"
+            "🤖 Trener AI (Groq): włączony, model {}",
+            if groq_model.trim().is_empty() {
+                "llama-3.1-70b-versatile"
             } else {
-                gemini_model.trim()
+                groq_model.trim()
             }
         );
     }
@@ -52,8 +52,8 @@ async fn main() -> Result<(), AppError> {
         c_name,
         c_key,
         c_secret,
-        gemini_key,
-        gemini_model,
+        groq_key,
+        groq_model,
     )
         .await
         .expect("Failed to create application");
@@ -147,9 +147,9 @@ fn load_config() -> Result<AppConfig, AppError> {
         "CLOUDINARY_API_SECRET",
     )
     .unwrap_or_default();
-    let gemini_key =
-        pick_cfg(secrets.as_ref(), "GEMINI_API_KEY", "GEMINI_API_KEY").unwrap_or_default();
-    let gemini_model =
-        pick_cfg(secrets.as_ref(), "GEMINI_MODEL", "GEMINI_MODEL").unwrap_or_default();
-    Ok((database, jwt_secret, cn, ck, cs, gemini_key, gemini_model))
+    let groq_key =
+        pick_cfg(secrets.as_ref(), "GROQ_API_KEY", "GROQ_API_KEY").unwrap_or_default();
+    let groq_model =
+        pick_cfg(secrets.as_ref(), "GROQ_MODEL", "GROQ_MODEL").unwrap_or_default();
+    Ok((database, jwt_secret, cn, ck, cs, groq_key, groq_model))
 }

@@ -66,10 +66,28 @@
     },
     "/api/ai/coach/status": {
       "get": {
-        "summary": "Status konfiguracji trenera AI (Gemini)",
+        "summary": "Status konfiguracji trenera AI (Groq / LLaMA)",
         "responses": {
           "200": { "description": "OK" },
           "403": { "description": "Brak uprawnień" }
+        }
+      }
+    },
+    "/api/ai/coach/public/status": {
+      "get": {
+        "summary": "Status publicznego asystenta klubu (bez auth)",
+        "responses": {
+          "200": { "description": "OK" }
+        }
+      }
+    },
+    "/api/ai/coach/public/chat": {
+      "post": {
+        "summary": "Czat publiczny — pytania o klub Slavia (bez auth, limit IP)",
+        "responses": {
+          "200": { "description": "OK" },
+          "429": { "description": "Limit wiadomości" },
+          "503": { "description": "Asystent niedostępny" }
         }
       }
     },
@@ -80,7 +98,7 @@
           "200": { "description": "OK" },
           "400": { "description": "Nieprawidłowe żądanie" },
           "403": { "description": "Brak uprawnień" },
-          "503": { "description": "Brak GEMINI_API_KEY" }
+          "503": { "description": "Brak GROQ_API_KEY" }
         }
       }
     },

@@ -102,7 +102,7 @@ pub struct AppState {
     pub cloudinary_cloud_name: String,
     pub cloudinary_api_key: String,
     pub cloudinary_api_secret: String,
-    pub gemini_api_key: String,
-    pub gemini_model: String,
+    pub groq_api_key: String,
+    pub groq_model: String,
     pub worker_metrics: Arc<crate::worker_metrics::WorkerMetrics>,
 }

@@ -46,8 +46,8 @@ pub async fn create_app(
     cloudinary_cloud_name: String,
     cloudinary_api_key: String,
     cloudinary_api_secret: String,
-    gemini_api_key: String,
-    gemini_model: String,
+    groq_api_key: String,
+    groq_model: String,
 ) -> Result<axum::Router, Box<dyn std::error::Error + Send + Sync>> {
     let db = Db::new(database).await?;
     let init_conn = db.raw().await;
@@ -141,8 +141,8 @@ pub async fn create_app(
         cloudinary_cloud_name,
         cloudinary_api_key,
         cloudinary_api_secret,
-        gemini_api_key,
-        gemini_model,
+        groq_api_key,
+        groq_model,
         worker_metrics,
     };
 
