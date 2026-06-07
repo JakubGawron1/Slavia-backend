@@ -1009,13 +1009,19 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         )
         .await;
 
-    let n = sync_all_athletes_bests_from_results(conn)
-        .await
-        .map_err(|e| format!("sync_all_athletes_bests_from_results: {e}"))?;
-    println!(
-        "📊 Migracja: athletes.best_* / total_kg ← najlepszy wynik Approved z `results` (sqlite changes={}).",
-        n
-    );
+    let rebuild_db = std::env::var("REBUILD_DB")
+        .ok()
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+    if rebuild_db {
+        let n = sync_all_athletes_bests_from_results(conn)
+            .await
+            .map_err(|e| format!("sync_all_athletes_bests_from_results: {e}"))?;
+        println!(
+            "📊 REBUILD_DB: athletes.best_* / total_kg ← najlepszy wynik Approved z `results` (sqlite changes={}).",
+            n
+        );
+    }
 
     // Migracja: role → roles (JSON array) — wyłącznie dla starych baz z kolumną `role`
     // (świeże instalacje mają od razu `roles`; SELECT role wtedy kończy się błędem „no such column”).
