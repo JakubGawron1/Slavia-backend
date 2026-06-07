@@ -100,7 +100,7 @@ pub struct AiCoachPlanContext {
 #[derive(Debug, Deserialize)]
 pub struct AiCoachChatRequest {
     pub message: String,
-    /// chat | plan | supplements | recovery
+    /// chat | plan | supplements | recovery | barbell_path
     pub mode: Option<String>,
     pub history: Option<Vec<AiCoachHistoryMessage>>,
     /// Kadra: kontekst zawodnika (PB, regeneracja).
@@ -126,6 +126,11 @@ pub struct AiCoachQuota {
     pub import_limit_per_day: u32,
     pub import_used_this_hour: u32,
     pub import_limit_per_hour: u32,
+    /// Korekta toru sztangi (vision) — osobne limity free tier.
+    pub barbell_path_used_today: u32,
+    pub barbell_path_limit_per_day: u32,
+    pub barbell_path_used_this_minute: u32,
+    pub barbell_path_limit_per_minute: u32,
     pub applies_to_you: bool,
 }
 
@@ -272,6 +277,7 @@ fn normalize_mode(raw: Option<&str>) -> &'static str {
         "plan" | "training_plan" | "plan_treningowy" => "plan",
         "supplements" | "suplementacja" | "suplementy" => "supplements",
         "recovery" | "regeneracja" | "kontuzja" | "kontuzje" => "recovery",
+        "barbell_path" | "barbell" | "tor_sztangi" | "analiza_sztangi" => "barbell_path",
         _ => "chat",
     }
 }
@@ -281,6 +287,7 @@ fn mode_prefix(mode: &str) -> &'static str {
         "plan" => "[Tryb: generator planu treningowego]\nWygeneruj szczegółowy plan tygodniowy dwuboju olimpijskiego (faza eksplozywna). Użyj dni tygodnia, % CM/RPE, serie×powt., akcesoria.\n\n",
         "supplements" => "[Tryb: suplementacja sportowa]\nSkup się na suplementacji pod siłownię i dwubój olimpijski — dawki orientacyjne, timing, bezpieczeństwo, disclaimer medyczny.\n\n",
         "recovery" => "[Tryb: kontuzje i regeneracja]\nSkup się na bezpiecznym powrocie do treningu, regresji obciążeń, mobility i kiedy iść do specjalisty. Nie diagnozuj.\n\n",
+        "barbell_path" => "[Tryb: analiza toru sztangi z wideo]\nMasz metryki numeryczne toru (współrz. znormalizowane 0–1, nagranie z profilu). Oceń technikę rwania/podrzutu: zbliżenie sztangi, kontakt z nogami, płynność toru, faza eksplozywna. Podaj 3–5 konkretnych wskazówek po polsku (lista). Nie powtarzaj surowych liczb bez interpretacji. Heurystyki lokalne mogą być w treści — rozwiń je treningowo. Nie zastępujesz trenera.\n\n",
         _ => "",
     }
 }
@@ -362,6 +369,20 @@ fn build_quota_for_user(user_sub: &str, applies: bool) -> AiCoachQuota {
             "ai_coach_import",
         ) as u32,
         import_limit_per_hour: crate::post_throttle::max_for_bucket("ai_coach_import") as u32,
+        barbell_path_used_today: crate::post_throttle::count_user_post_attempts(
+            user_sub,
+            "ai_coach_barbell_path_daily",
+        ) as u32,
+        barbell_path_limit_per_day: crate::post_throttle::max_for_bucket(
+            "ai_coach_barbell_path_daily",
+        ) as u32,
+        barbell_path_used_this_minute: crate::post_throttle::count_user_post_attempts(
+            user_sub,
+            "ai_coach_barbell_path",
+        ) as u32,
+        barbell_path_limit_per_minute: crate::post_throttle::max_for_bucket(
+            "ai_coach_barbell_path",
+        ) as u32,
         applies_to_you: applies,
     }
 }
@@ -424,6 +445,30 @@ fn import_limit_error(deny: crate::post_throttle::AiCoachLimitDeny) -> ApiError 
 fn enforce_chat_limits(user_sub: &str, include_club_global: bool) -> Result<(), ApiError> {
     crate::post_throttle::reserve_ai_coach_chat(user_sub, include_club_global)
         .map_err(chat_limit_error)
+}
+
+fn barbell_path_limit_error(deny: crate::post_throttle::AiCoachLimitDeny) -> ApiError {
+    let msg = match deny {
+        crate::post_throttle::AiCoachLimitDeny::BarbellPathDaily => {
+            "Dzienny limit korekty toru AI wyczerpany (free tier). Spróbuj jutro lub użyj toru MoveNet."
+        }
+        crate::post_throttle::AiCoachLimitDeny::BarbellPathMinute => {
+            "Zbyt wiele analiz toru AI na minutę (max 2) — odczekaj ~60 s."
+        }
+        crate::post_throttle::AiCoachLimitDeny::ClubBarbellPathDaily => {
+            "Klubowy dzienny limit toru AI wyczerpany. Spróbuj jutro."
+        }
+        crate::post_throttle::AiCoachLimitDeny::ClubBarbellPathMinute => {
+            "Klubowy limit analiz toru na minutę wyczerpany — odczekaj chwilę."
+        }
+        _ => "Limit korekty toru AI wyczerpany.",
+    };
+    api_error(StatusCode::TOO_MANY_REQUESTS, msg)
+}
+
+pub(crate) fn enforce_barbell_path_limits(user_sub: &str) -> Result<(), ApiError> {
+    crate::post_throttle::reserve_ai_coach_barbell_path(user_sub, true)
+        .map_err(barbell_path_limit_error)
 }
 
 fn enforce_import_limits(user_sub: &str, include_club_global: bool) -> Result<(), ApiError> {

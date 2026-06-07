@@ -30,6 +30,11 @@ fn window_for_bucket(bucket: &str) -> (Duration, usize) {
         // Asystent publiczny (anonimowy, per IP)
         "ai_coach_public_chat" => (Duration::from_secs(60), 3),
         "ai_coach_public_chat_daily" => (Duration::from_secs(86_400), 25),
+        // Tor sztangi AI (vision — droższe niż zwykły czat; free tier Groq/Gemini)
+        "ai_coach_barbell_path" => (Duration::from_secs(60), 2),
+        "ai_coach_barbell_path_daily" => (Duration::from_secs(86_400), 10),
+        "ai_coach_club_global_barbell_path" => (Duration::from_secs(60), 3),
+        "ai_coach_club_global_barbell_path_daily" => (Duration::from_secs(86_400), 45),
         _ => (Duration::from_secs(60), 45),
     }
 }
@@ -100,6 +105,10 @@ pub enum AiCoachLimitDeny {
     ClubChatDaily,
     ClubImportHour,
     ClubImportDaily,
+    BarbellPathMinute,
+    BarbellPathDaily,
+    ClubBarbellPathMinute,
+    ClubBarbellPathDaily,
 }
 
 fn count_in_window(g: &HashMap<String, Vec<Instant>>, sub: &str, bucket: &str, now: Instant) -> usize {
@@ -245,6 +254,74 @@ pub fn reserve_ai_coach_import(user_sub: &str, include_club_global: bool) -> Res
     Ok(())
 }
 
+/// Atomowo rezerwuje slot korekty toru sztangi (vision — osobne limity free tier).
+pub fn reserve_ai_coach_barbell_path(
+    user_sub: &str,
+    include_club_global: bool,
+) -> Result<(), AiCoachLimitDeny> {
+    let sub = user_sub.trim();
+    if sub.is_empty() {
+        return Err(AiCoachLimitDeny::BarbellPathMinute);
+    }
+    let mut g = buckets().lock().map_err(|_| AiCoachLimitDeny::BarbellPathMinute)?;
+    let now = Instant::now();
+
+    let user_checks = [
+        (
+            "ai_coach_barbell_path",
+            AiCoachLimitDeny::BarbellPathMinute,
+        ),
+        (
+            "ai_coach_barbell_path_daily",
+            AiCoachLimitDeny::BarbellPathDaily,
+        ),
+    ];
+    for (bucket, deny) in user_checks {
+        let (_, max) = window_for_bucket(bucket);
+        if count_in_window(&g, sub, bucket, now) >= max {
+            return Err(deny);
+        }
+    }
+
+    if include_club_global {
+        let club_checks = [
+            (
+                "ai_coach_club_global_barbell_path",
+                AiCoachLimitDeny::ClubBarbellPathMinute,
+            ),
+            (
+                "ai_coach_club_global_barbell_path_daily",
+                AiCoachLimitDeny::ClubBarbellPathDaily,
+            ),
+        ];
+        for (bucket, deny) in club_checks {
+            let (_, max) = window_for_bucket(bucket);
+            if count_in_window(&g, AI_COACH_CLUB_GLOBAL_SUB, bucket, now) >= max {
+                return Err(deny);
+            }
+        }
+    }
+
+    for (bucket, _) in user_checks {
+        push_in_window(&mut g, sub, bucket, now);
+    }
+    if include_club_global {
+        push_in_window(
+            &mut g,
+            AI_COACH_CLUB_GLOBAL_SUB,
+            "ai_coach_club_global_barbell_path",
+            now,
+        );
+        push_in_window(
+            &mut g,
+            AI_COACH_CLUB_GLOBAL_SUB,
+            "ai_coach_club_global_barbell_path_daily",
+            now,
+        );
+    }
+    Ok(())
+}
+
 /// Atomowa rezerwacja slotu czatu publicznego (per IP).
 pub fn reserve_ai_coach_public_chat(client_ip: &str) -> Result<(), AiCoachLimitDeny> {
     let ip = client_ip.trim();
@@ -324,6 +401,34 @@ mod ai_coach_limit_tests {
         assert_eq!(
             reserve_ai_coach_chat("user-extra", true),
             Err(AiCoachLimitDeny::ClubChatMinute)
+        );
+    }
+
+    #[test]
+    fn barbell_path_limit_blocks_on_third_request_in_minute() {
+        reset_buckets();
+        let sub = "user-test-barbell";
+        for _ in 0..2 {
+            assert!(reserve_ai_coach_barbell_path(sub, false).is_ok());
+        }
+        assert_eq!(
+            reserve_ai_coach_barbell_path(sub, false),
+            Err(AiCoachLimitDeny::BarbellPathMinute)
+        );
+    }
+
+    #[test]
+    fn club_global_barbell_path_limit_is_shared() {
+        reset_buckets();
+        for i in 0..3 {
+            assert!(
+                reserve_ai_coach_barbell_path(&format!("user-bp-{i}"), true).is_ok(),
+                "request {i} should pass"
+            );
+        }
+        assert_eq!(
+            reserve_ai_coach_barbell_path("user-bp-extra", true),
+            Err(AiCoachLimitDeny::ClubBarbellPathMinute)
         );
     }
 }
