@@ -63,6 +63,36 @@
           "400": { "description": "Nieprawidłowy parametr month" }
         }
       }
+    },
+    "/api/ai/coach/status": {
+      "get": {
+        "summary": "Status konfiguracji trenera AI (Gemini)",
+        "responses": {
+          "200": { "description": "OK" },
+          "403": { "description": "Brak uprawnień" }
+        }
+      }
+    },
+    "/api/ai/coach/chat": {
+      "post": {
+        "summary": "Czat z trenerem AI — dwubój, plany, suplementacja, regeneracja",
+        "responses": {
+          "200": { "description": "OK" },
+          "400": { "description": "Nieprawidłowe żądanie" },
+          "403": { "description": "Brak uprawnień" },
+          "503": { "description": "Brak GEMINI_API_KEY" }
+        }
+      }
+    },
+    "/api/ai/coach/import-plan": {
+      "post": {
+        "summary": "Import odpowiedzi AI jako plan treningowy zawodnika",
+        "responses": {
+          "200": { "description": "OK" },
+          "403": { "description": "Brak uprawnień kadry" },
+          "422": { "description": "Błąd parsowania planu" }
+        }
+      }
     }
   }
 }
