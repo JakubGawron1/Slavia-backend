@@ -56,7 +56,7 @@ pub async fn list_competitions_for_athlete(
         .db
         .query(
             "SELECT c.id, c.title, c.date, c.location, c.description, c.category, c.status, \
-                    c.external_source, c.external_ref, c.external_url \
+                    c.external_source, c.external_ref, c.external_url, COALESCE(c.club_participates, 0) AS club_participates \
              FROM competitions c \
              INNER JOIN competition_participants p ON p.competition_id = c.id AND p.athlete_id = ?1 \
              ORDER BY c.date ASC",
@@ -82,6 +82,7 @@ pub async fn list_competitions_for_athlete(
             external_source: row.get(7).ok(),
             external_ref: row.get(8).ok(),
             external_url: row.get(9).ok(),
+            club_participates: row.get::<i64>(10).unwrap_or(0) != 0,
         });
     }
 
@@ -385,7 +386,7 @@ pub async fn my_calendar_for_athlete(
         .db
         .query(
             "SELECT c.id, c.title, c.date, c.location, c.description, c.category, c.status, \
-                    c.external_source, c.external_ref, c.external_url \
+                    c.external_source, c.external_ref, c.external_url, COALESCE(c.club_participates, 0) AS club_participates \
              FROM competitions c \
              INNER JOIN competition_participants p ON p.competition_id = c.id \
              WHERE p.athlete_id = ?1 \
@@ -414,6 +415,7 @@ pub async fn my_calendar_for_athlete(
             external_source: row.get(7).ok(),
             external_ref: row.get(8).ok(),
             external_url: row.get(9).ok(),
+            club_participates: row.get::<i64>(10).unwrap_or(0) != 0,
         };
 
         let mut pr = state

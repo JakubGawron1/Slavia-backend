@@ -22,6 +22,8 @@ pub struct CreateCompetitionRequest {
     pub description: Option<String>,
     pub category: Option<String>,
     pub status: Option<String>,
+    #[serde(default)]
+    pub club_participates: Option<bool>,
 }
 
 fn competition_from_row(row: &Row) -> Result<Competition, libsql::Error> {
@@ -36,6 +38,7 @@ fn competition_from_row(row: &Row) -> Result<Competition, libsql::Error> {
         external_source: row.get(7).ok(),
         external_ref: row.get(8).ok(),
         external_url: row.get(9).ok(),
+        club_participates: row.get::<i64>(10).unwrap_or(0) != 0,
     })
 }
 
@@ -45,7 +48,7 @@ pub async fn list_competitions(
     let mut rows = state
         .db
         .query(
-            "SELECT id, title, date, location, description, COALESCE(category_override, category) AS category, status, external_source, external_ref, external_url \
+            "SELECT id, title, date, location, description, COALESCE(category_override, category) AS category, status, external_source, external_ref, external_url, COALESCE(club_participates, 0) AS club_participates \
              FROM competitions ORDER BY date ASC",
             (),
         )
@@ -81,11 +84,16 @@ pub async fn create_competition(
         .status
         .clone()
         .unwrap_or_else(|| "scheduled".to_string());
+    let club_participates = if payload.club_participates.unwrap_or(false) {
+        1_i64
+    } else {
+        0_i64
+    };
 
     state
         .db
         .execute(
-            "INSERT INTO competitions (id, title, date, location, description, category, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO competitions (id, title, date, location, description, category, status, club_participates) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             (
                 id.clone(),
                 payload.title.clone(),
@@ -94,6 +102,7 @@ pub async fn create_competition(
                 payload.description.clone(),
                 category.clone(),
                 status.clone(),
+                club_participates,
             ),
         )
         .await
@@ -118,6 +127,7 @@ pub async fn create_competition(
         external_source: None,
         external_ref: None,
         external_url: None,
+        club_participates: club_participates != 0,
     }))
 }
 
@@ -201,6 +211,12 @@ pub async fn update_competition(
         }
     };
 
+    let club_participates = if payload.club_participates.unwrap_or(false) {
+        1_i64
+    } else {
+        0_i64
+    };
+
     if ext.is_some() {
         let status = payload.status.unwrap_or_else(|| "scheduled".to_string());
         let category_opt = payload.category.map(|s| s.trim().to_string());
@@ -212,8 +228,8 @@ pub async fn update_competition(
         state
             .db
             .execute(
-                "UPDATE competitions SET status = ?1, category_override = ?2 WHERE id = ?3",
-                (status.clone(), category_override, id.clone()),
+                "UPDATE competitions SET status = ?1, category_override = ?2, club_participates = ?3 WHERE id = ?4",
+                (status.clone(), category_override, club_participates, id.clone()),
             )
             .await
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -223,7 +239,7 @@ pub async fn update_competition(
         state
             .db
             .execute(
-                "UPDATE competitions SET title = ?1, date = ?2, location = ?3, description = ?4, category = ?5, status = ?6 WHERE id = ?7",
+                "UPDATE competitions SET title = ?1, date = ?2, location = ?3, description = ?4, category = ?5, status = ?6, club_participates = ?7 WHERE id = ?8",
                 (
                     payload.title.clone(),
                     payload.date.clone(),
@@ -231,6 +247,7 @@ pub async fn update_competition(
                     payload.description.clone(),
                     category,
                     status.clone(),
+                    club_participates,
                     id.clone(),
                 ),
             )
@@ -241,7 +258,7 @@ pub async fn update_competition(
     let mut rows = state
         .db
         .query(
-            "SELECT id, title, date, location, description, COALESCE(category_override, category) AS category, status, external_source, external_ref, external_url FROM competitions WHERE id = ?1",
+            "SELECT id, title, date, location, description, COALESCE(category_override, category) AS category, status, external_source, external_ref, external_url, COALESCE(club_participates, 0) AS club_participates FROM competitions WHERE id = ?1",
             [id],
         )
         .await

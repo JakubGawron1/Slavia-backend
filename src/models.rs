@@ -200,6 +200,9 @@ pub struct Competition {
     pub external_ref: Option<String>,
     #[serde(default)]
     pub external_url: Option<String>,
+    /// Klub bierze udział w zawodach (niezależnie od przypisanych zawodników).
+    #[serde(default)]
+    pub club_participates: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
