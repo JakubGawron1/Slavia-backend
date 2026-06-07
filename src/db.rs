@@ -763,6 +763,14 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         .await
         .map_err(|e| format!("migrate_attendance_unique_index: {e}"))?;
 
+    for sql in [
+        "CREATE INDEX IF NOT EXISTS idx_results_status_kind ON results(status, kind)",
+        "CREATE INDEX IF NOT EXISTS idx_results_athlete_status ON results(athlete_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_athletes_active ON athletes(is_active)",
+    ] {
+        let _ = conn.execute(sql, ()).await;
+    }
+
     let _ = conn
         .execute(
             "ALTER TABLE recurring_training_cancellations ADD COLUMN status TEXT DEFAULT 'cancelled'",
