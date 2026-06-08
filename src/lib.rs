@@ -57,10 +57,7 @@ pub async fn create_app(
     groq_api_key: String,
     groq_model: String,
 ) -> Result<axum::Router, Box<dyn std::error::Error + Send + Sync>> {
-    let db = Db::new(database).await?;
-    let init_conn = db.raw().await;
-    state::apply_connection_pragmas(&init_conn).await.ok();
-    db::init_db(init_conn.as_ref()).await?;
+    let db = Db::open_with_migrations(database).await?;
 
     let worker_metrics: std::sync::Arc<worker_metrics::WorkerMetrics> =
         std::sync::Arc::new(worker_metrics::WorkerMetrics::new());

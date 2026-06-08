@@ -54,6 +54,36 @@ pub struct Db {
 }
 
 impl Db {
+    /// Otwiera pulę, uruchamia `init_db`; przy uszkodzonej replice (malformed) jednorazowo kasuje pliki SQLite i ponawia.
+    pub async fn open_with_migrations(
+        backend: DatabaseBackend,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let mut wiped_for_migrations = false;
+        loop {
+            let db = Self::new(backend.clone()).await?;
+            let init_conn = db.raw().await;
+            let _ = apply_connection_pragmas(&init_conn).await;
+            match crate::db::init_db(init_conn.as_ref()).await {
+                Ok(()) => return Ok(db),
+                Err(e)
+                    if crate::db::error_indicates_sqlite_malformed(e.as_ref())
+                        && !wiped_for_migrations
+                        && let Some(path) = backend.local_sqlite_path() =>
+                {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "init_db: uszkodzona replika SQLite — usuwam pliki i ponawiam start"
+                    );
+                    wipe_local_sqlite_replica(path);
+                    wiped_for_migrations = true;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     pub async fn new(
         backend: DatabaseBackend,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
@@ -82,7 +112,7 @@ impl Db {
                             error = %err_hint,
                             "SQLite integrity_check nie powiódł się — usuwam lokalną kopię i ponawiam sync z Turso"
                         );
-                        remove_sqlite_db_family(path);
+                        wipe_local_sqlite_replica(path);
                         sqlite_wiped = true;
                         continue;
                     }
@@ -175,7 +205,7 @@ async fn check_sqlite_integrity(conn: &Connection) -> Result<bool, libsql::Error
 }
 
 /// Usuwa plik SQLite i towarzyszące `-wal` / `-shm` (np. uszkodzona replika Turso na Render).
-fn remove_sqlite_db_family(path: &Path) {
+pub(crate) fn wipe_local_sqlite_replica(path: &Path) {
     let base = path.to_string_lossy();
     for candidate in [
         base.to_string(),
