@@ -111,7 +111,7 @@ pub async fn create_exercise_submission(
     let mut ex_rows = state
         .db
         .query(
-            "SELECT name FROM exercises WHERE id = ?1",
+            "SELECT CAST(name AS BLOB) FROM exercises WHERE id = ?1",
             [payload.exercise_id.trim().to_string()],
         )
         .await
@@ -121,7 +121,7 @@ pub async fn create_exercise_submission(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "Ćwiczenie nie istnieje"))?;
-    let exercise_name = sql_row::required_string(&ex_row, 0)
+    let exercise_name = sql_row::required_lossy_string(&ex_row, 0)
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     let id = Uuid::new_v4().to_string();
@@ -180,7 +180,7 @@ pub async fn list_my_exercise_submissions(
     let mut rows = state
         .db
         .query(
-            "SELECT s.id, s.athlete_id, e.id, e.name, s.value, s.unit, s.performed_at, s.notes,
+            "SELECT s.id, s.athlete_id, e.id, CAST(e.name AS BLOB), s.value, s.unit, s.performed_at, s.notes,
                     s.status, s.reviewed_at, s.review_note, s.created_at
              FROM exercise_submissions s
              JOIN exercises e ON e.id = s.exercise_id
@@ -210,7 +210,7 @@ pub async fn list_my_exercise_submissions(
             athlete_name: None,
             exercise_id: sql_row::required_string(&row, 2)
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            exercise_name: sql_row::required_string(&row, 3)
+            exercise_name: sql_row::required_lossy_string(&row, 3)
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
             value: sql_row::required_f64(&row, 4)
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
@@ -242,7 +242,7 @@ pub async fn list_pending_exercise_submissions(
     let mut rows = state
         .db
         .query(
-            "SELECT s.id, s.athlete_id, a.full_name, e.id, e.name, s.value, s.unit, s.performed_at, s.notes,
+            "SELECT s.id, s.athlete_id, CAST(a.full_name AS BLOB), e.id, CAST(e.name AS BLOB), s.value, s.unit, s.performed_at, s.notes,
                     s.status, s.reviewed_at, s.review_note, s.created_at
              FROM exercise_submissions s
              JOIN athletes a ON a.id = s.athlete_id
@@ -266,12 +266,12 @@ pub async fn list_pending_exercise_submissions(
             athlete_id: sql_row::required_string(&row, 1)
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
             athlete_name: Some(
-                sql_row::required_string(&row, 2)
+                sql_row::required_lossy_string(&row, 2)
                     .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
             ),
             exercise_id: sql_row::required_string(&row, 3)
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            exercise_name: sql_row::required_string(&row, 4)
+            exercise_name: sql_row::required_lossy_string(&row, 4)
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
             value: sql_row::required_f64(&row, 5)
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
@@ -313,7 +313,7 @@ async fn load_submission_for_review(
         .db
         .query(
             "SELECT s.athlete_id, s.exercise_id, s.value, s.unit, s.performed_at, s.notes,
-                    s.status, e.name
+                    s.status, CAST(e.name AS BLOB)
              FROM exercise_submissions s
              JOIN exercises e ON e.id = s.exercise_id
              WHERE s.id = ?1",
@@ -332,7 +332,7 @@ async fn load_submission_for_review(
     let status = status_str
         .parse::<ResultStatus>()
         .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Invalid status"))?;
-    let exercise_name = sql_row::required_string(&row, 7)
+    let exercise_name = sql_row::required_lossy_string(&row, 7)
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     Ok((
@@ -506,7 +506,7 @@ pub async fn exercise_board_for_exercise(
     let mut rows = state
         .db
         .query(
-            "SELECT h.athlete_id, a.full_name,
+            "SELECT h.athlete_id, CAST(a.full_name AS BLOB),
                     MAX(h.value) AS best_value,
                     MIN(h.unit) AS unit,
                     COUNT(*) AS entries,
@@ -531,13 +531,15 @@ pub async fn exercise_board_for_exercise(
         out.push(ExerciseBoardRowDto {
             athlete_id: sql_row::required_string(&row, 0)
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            athlete_name: sql_row::required_string(&row, 1)
+            athlete_name: sql_row::required_lossy_string(&row, 1)
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
             best_value: sql_row::required_f64(&row, 2)
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
             unit: sql_row::required_string(&row, 3)
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-            entries: row.get::<i64>(4).unwrap_or(0),
+            entries: sql_row::opt_i64(&row, 4)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                .unwrap_or(0),
             last_performed_at: sql_row::opt_string(&row, 5)
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
         });

@@ -332,7 +332,7 @@ pub async fn delete_path(cfg: &CmsConfig, path: &str) -> Result<(), String> {
     let sha = match fetch_file_sha(&client, cfg, path, token).await? {
         Some(s) => s,
         None => {
-            eprintln!("[cms] delete skip (brak sha na GitHub): {path} (repo={})", cfg.repo);
+            tracing::warn!(path = %path, repo = %cfg.repo, "cms delete skip: brak sha na GitHub");
             return Ok(());
         }
     };
@@ -364,24 +364,28 @@ pub async fn destroy_if_cms(path_or_url: &str) {
     }
     let Some(path) = normalize_cms_path(raw) else {
         if raw.contains("media/") || raw.contains("slavia-cms") {
-            eprintln!("[cms] delete skip (nie rozpoznano ścieżki CMS): {raw}");
+            tracing::warn!(raw = %raw, "cms delete skip: nie rozpoznano ścieżki CMS");
         }
         return;
     };
     let cfg = cms_config();
     if cfg.token.is_none() {
-        eprintln!(
-            "[cms] delete skip (brak GITHUB_TOKEN): {path} — ustaw PAT ze scope `repo`"
+        tracing::warn!(
+            path = %path,
+            "cms delete skip: brak GITHUB_TOKEN — ustaw PAT ze scope `repo`"
         );
         return;
     }
     if let Err(e) = delete_path(&cfg, &path).await {
-        eprintln!(
-            "[cms] delete FAILED path={path} repo={} branch={}: {e}",
-            cfg.repo, cfg.branch
+        tracing::error!(
+            path = %path,
+            repo = %cfg.repo,
+            branch = %cfg.branch,
+            error = %e,
+            "cms delete failed"
         );
     } else {
-        eprintln!("[cms] delete OK: {path}");
+        tracing::info!(path = %path, "cms delete OK");
     }
 }
 

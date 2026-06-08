@@ -98,6 +98,22 @@
         }
       }
     },
+    "/api/ai/coach/settings": {
+      "get": {
+        "summary": "Ustawienia Trenera AI (SuperAdmin)",
+        "responses": {
+          "200": { "description": "OK" },
+          "403": { "description": "Wymaga SuperAdmin" }
+        }
+      },
+      "put": {
+        "summary": "Zapis ustawień Trenera AI — prompty, temperatura (SuperAdmin)",
+        "responses": {
+          "200": { "description": "OK" },
+          "403": { "description": "Wymaga SuperAdmin" }
+        }
+      }
+    },
     "/api/ai/coach/chat": {
       "post": {
         "summary": "Czat z trenerem AI — dwubój, plany, suplementacja, regeneracja",
