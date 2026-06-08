@@ -1,15 +1,19 @@
 //! Składanie drzewa tras Axum — rozdzielone od bootstrapu bazy (`create_app` w `lib.rs`).
 
+use std::time::Duration;
+
 use axum::{
     Router,
     extract::DefaultBodyLimit,
-    http::{HeaderName, HeaderValue},
+    http::{HeaderName, HeaderValue, Request, Response},
     middleware,
     response::Html,
     routing::{delete, get, patch, post, put},
 };
 use tower_http::cors::CorsLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
+use tower_http::trace::TraceLayer;
+use tracing::Level;
 
 use crate::{routes, state::AppState};
 
@@ -422,6 +426,11 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
 
     let ai_coach_routes = Router::new()
         .route("/status", get(routes::ai_coach::coach_status))
+        .route(
+            "/settings",
+            get(routes::ai_coach_settings::coach_get_settings)
+                .put(routes::ai_coach_settings::coach_update_settings),
+        )
         .route("/chat", post(routes::ai_coach::coach_chat))
         .route("/import-plan", post(routes::ai_coach::coach_import_plan))
         .route(
@@ -478,6 +487,34 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .nest("/api/ai/coach", ai_coach_routes)
         .nest("/api/cms", cms_routes)
         .nest("/api/system", system_routes)
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &Request<_>| {
+                    tracing::info_span!(
+                        "http",
+                        method = %request.method(),
+                        uri = %request.uri().path(),
+                    )
+                })
+                .on_request(|_request: &Request<_>, _span: &tracing::Span| {
+                    tracing::event!(Level::DEBUG, "request started");
+                })
+                .on_response(
+                    |response: &Response<_>, latency: Duration, _span: &tracing::Span| {
+                        let status = response.status();
+                        let latency_ms = latency.as_millis();
+                        if status.is_server_error() {
+                            tracing::error!(%status, latency_ms, "request failed");
+                        } else if status.is_client_error() {
+                            tracing::warn!(%status, latency_ms, "client error");
+                        } else if latency_ms >= 2000 {
+                            tracing::warn!(%status, latency_ms, "slow request");
+                        } else {
+                            tracing::info!(%status, latency_ms, "request completed");
+                        }
+                    },
+                ),
+        )
         .layer(middleware::from_fn(crate::middleware::http_cache::cache_control_middleware))
         .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("x-api-version"),

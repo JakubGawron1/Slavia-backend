@@ -41,7 +41,7 @@ where
 {
     tokio::spawn(async move {
         if let Err(e) = fut.await {
-            eprintln!("[notifications] {e}");
+            tracing::error!(error = %e, "notification insert failed");
         }
     });
 }

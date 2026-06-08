@@ -21,39 +21,40 @@ type AppError = Box<dyn std::error::Error + Send + Sync>;
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
     let _ = dotenv();
+    slavia_backend::logging::init();
 
     let (database, jwt_secret, c_name, c_key, c_secret, groq_key, groq_model) = load_config()?;
 
     match &database {
         DatabaseBackend::Local(p) => {
-            println!("📂 Baza lokalna (SQLite): {}", p.display());
+            tracing::info!(path = %p.display(), "Baza lokalna (SQLite)");
         }
         DatabaseBackend::Remote {
             url,
             replica_path: Some(path),
             ..
         } => {
-            println!("☁️  Baza Turso (embedded replica): {url} → {}", path.display());
+            tracing::info!(%url, replica = %path.display(), "Baza Turso (embedded replica)");
         }
         DatabaseBackend::Remote {
             url,
             replica_path: None,
             ..
         } => {
-            println!("☁️  Baza Turso (HTTP remote): {url}");
+            tracing::info!(%url, "Baza Turso (HTTP remote)");
         }
     }
 
     if groq_key.trim().is_empty() {
-        println!("ℹ️  Trener AI (Groq): wyłączony — brak GROQ_API_KEY");
+        tracing::info!("Trener AI (Groq): wyłączony — brak GROQ_API_KEY");
     } else {
-        println!(
-            "🤖 Trener AI (Groq): włączony, model {}",
-            if groq_model.trim().is_empty() {
+        tracing::info!(
+            model = if groq_model.trim().is_empty() {
                 "llama-3.1-70b-versatile"
             } else {
                 groq_model.trim()
-            }
+            },
+            "Trener AI (Groq): włączony"
         );
     }
 
@@ -75,7 +76,7 @@ async fn main() -> Result<(), AppError> {
         .expect("PORT must be a number");
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    println!("🚀 Serwer Slavia-backend startuje na http://{}", addr);
+    tracing::info!(%addr, "Serwer Slavia-backend startuje");
 
     let listener = TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;

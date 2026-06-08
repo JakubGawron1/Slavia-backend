@@ -105,9 +105,11 @@ pub async fn run_standing_orders_for_current_month(conn: &Db) -> Result<usize, l
     let mut created = 0usize;
     for ath in &pending {
         if let Err(e) = insert_auto_approved_payment(conn, &ath.id, &month).await {
-            eprintln!(
-                "[standing-order] błąd insertu dla {} ({}): {e}",
-                ath.full_name, ath.id
+            tracing::error!(
+                athlete_id = %ath.id,
+                athlete_name = %ath.full_name,
+                error = %e,
+                "standing-order: błąd insertu auto-składki"
             );
             continue;
         }
@@ -157,8 +159,9 @@ pub fn spawn_standing_order_task(db: Db, metrics: Arc<WorkerMetrics>) -> JoinHan
                         Some(format!("created_auto_payments={n}")),
                     );
                     if n > 0 {
-                        eprintln!(
-                            "[standing-order] utworzono {n} auto-składek za bieżący miesiąc."
+                        tracing::info!(
+                            created = n,
+                            "standing-order scheduler: utworzono auto-składki"
                         );
                     }
                 }
@@ -169,7 +172,7 @@ pub fn spawn_standing_order_task(db: Db, metrics: Arc<WorkerMetrics>) -> JoinHan
                         false,
                         Some(e.to_string()),
                     );
-                    eprintln!("[standing-order] błąd przebiegu: {e}");
+                    tracing::error!(error = %e, "standing-order scheduler: błąd przebiegu");
                 }
             }
             tokio::time::sleep(interval).await;

@@ -62,9 +62,8 @@ pub async fn cache_control_middleware(
         || path.starts_with("/api/cms/pages")
     {
         Some("public, max-age=60, stale-while-revalidate=120")
-    } else if path.starts_with("/api/cms/") {
-        Some("private, no-store")
-    } else if path.contains("/manage")
+    } else if path.starts_with("/api/cms/")
+        || path.contains("/manage")
         || path.contains("/admin")
         || path.starts_with("/api/auth/")
     {
