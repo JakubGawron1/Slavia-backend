@@ -66,7 +66,7 @@ impl Db {
             match crate::db::init_db(init_conn.as_ref()).await {
                 Ok(()) => return Ok(db),
                 Err(e)
-                    if crate::db::error_indicates_sqlite_malformed(e.as_ref())
+                    if crate::db::error_indicates_sqlite_corrupt(e.as_ref())
                         && !wiped_for_migrations
                         && let Some(path) = backend.local_sqlite_path() =>
                 {
@@ -89,42 +89,79 @@ impl Db {
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let mut sqlite_wiped = false;
         let database = loop {
-            let database = build_database(&backend).await?;
+            if let Some(path) = backend.local_sqlite_path() {
+                maybe_wipe_invalid_sqlite_header(path);
+            }
 
-            if let Some(path) = backend.local_sqlite_path()
-                && let Ok(conn) = database.connect()
-            {
-                    let integrity = check_sqlite_integrity(&conn).await;
-                    drop(conn);
+            let database = match build_database(&backend).await {
+                Ok(db) => db,
+                Err(e)
+                    if crate::db::sqlite_corrupt_message(&e.to_string())
+                        && !sqlite_wiped
+                        && let Some(path) = backend.local_sqlite_path() =>
+                {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "build_database: uszkodzony plik SQLite — usuwam i ponawiam sync z Turso"
+                    );
+                    wipe_local_sqlite_replica(path);
+                    sqlite_wiped = true;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
 
-                    if matches!(&integrity, Ok(true)) {
-                        break database;
-                    }
+            if let Some(path) = backend.local_sqlite_path() {
+                match database.connect() {
+                    Ok(conn) => {
+                        let integrity = check_sqlite_integrity(&conn).await;
+                        drop(conn);
 
-                    let err_hint = match &integrity {
-                        Ok(false) => "integrity_check != ok".to_string(),
-                        Err(e) => e.to_string(),
-                        Ok(true) => String::new(),
-                    };
-                    if !sqlite_wiped {
-                        tracing::warn!(
+                        if matches!(&integrity, Ok(true)) {
+                            break database;
+                        }
+
+                        let err_hint = match &integrity {
+                            Ok(false) => "integrity_check != ok".to_string(),
+                            Err(e) => e.to_string(),
+                            Ok(true) => String::new(),
+                        };
+                        if !sqlite_wiped {
+                            tracing::warn!(
+                                path = %path.display(),
+                                error = %err_hint,
+                                "SQLite integrity_check nie powiódł się — usuwam lokalną kopię i ponawiam sync z Turso"
+                            );
+                            wipe_local_sqlite_replica(path);
+                            sqlite_wiped = true;
+                            continue;
+                        }
+
+                        tracing::error!(
                             path = %path.display(),
                             error = %err_hint,
-                            "SQLite integrity_check nie powiódł się — usuwam lokalną kopię i ponawiam sync z Turso"
+                            "SQLite nadal uszkodzony po wipe — kontynuuję start (migracje best-effort)"
+                        );
+                        break database;
+                    }
+                    Err(e)
+                        if crate::db::sqlite_corrupt_message(&e.to_string()) && !sqlite_wiped =>
+                    {
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %e,
+                            "connect: plik nie jest bazą SQLite — usuwam i ponawiam sync z Turso"
                         );
                         wipe_local_sqlite_replica(path);
                         sqlite_wiped = true;
                         continue;
                     }
-
-                    tracing::error!(
-                        path = %path.display(),
-                        error = %err_hint,
-                        "SQLite nadal uszkodzony po wipe — kontynuuję start (migracje best-effort)"
-                    );
+                    Err(e) => return Err(e.into()),
+                }
+            } else {
+                break database;
             }
-
-            break database;
         };
 
         if backend.uses_local_sqlite_engine()
@@ -202,6 +239,39 @@ async fn check_sqlite_integrity(conn: &Connection) -> Result<bool, libsql::Error
     };
     let status = crate::sql_row::flex_string(&row, 0)?;
     Ok(status.eq_ignore_ascii_case("ok"))
+}
+
+/// Plik istnieje, ale nie zaczyna się od magicznego nagłówka SQLite (np. przerwany sync na Render).
+fn local_sqlite_header_invalid(path: &Path) -> bool {
+    use std::io::Read;
+
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    if meta.len() == 0 {
+        return false;
+    }
+    if meta.len() < 16 {
+        return true;
+    }
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut header = [0u8; 16];
+    if file.read_exact(&mut header).is_err() {
+        return true;
+    }
+    &header[..15] != b"SQLite format 3"
+}
+
+fn maybe_wipe_invalid_sqlite_header(path: &Path) {
+    if path.exists() && local_sqlite_header_invalid(path) {
+        tracing::warn!(
+            path = %path.display(),
+            "Plik SQLite bez poprawnego nagłówka — usuwam przed otwarciem repliki"
+        );
+        wipe_local_sqlite_replica(path);
+    }
 }
 
 /// Usuwa plik SQLite i towarzyszące `-wal` / `-shm` (np. uszkodzona replika Turso na Render).
