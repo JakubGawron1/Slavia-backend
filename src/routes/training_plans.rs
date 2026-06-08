@@ -10,12 +10,14 @@ use uuid::Uuid;
 use crate::api_error::{ApiError, api_error};
 use crate::audit::write_audit_log;
 use crate::middleware::auth::{Claims, claims_has_staff_access};
+use crate::sql_row;
 use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TrainingPlanItemDto {
     pub id: String,
     pub plan_id: String,
+    pub week_number: i32,
     pub day_of_week: i32,
     pub exercise_id: Option<String>,
     pub custom_exercise_name: Option<String>,
@@ -30,6 +32,7 @@ pub struct TrainingPlanItemDto {
 
 #[derive(Debug, Deserialize)]
 pub struct PlanItemPayload {
+    pub week_number: Option<i32>,
     pub day_of_week: i32,
     pub exercise_id: Option<String>,
     pub custom_exercise_name: Option<String>,
@@ -53,6 +56,7 @@ pub struct TrainingPlanDto {
     pub title: String,
     pub goal: Option<String>,
     pub week_start: String,
+    pub duration_weeks: i64,
     pub status: String,
     pub coach_note: Option<String>,
     pub athlete_note: Option<String>,
@@ -68,6 +72,7 @@ pub struct CreateTrainingPlanRequest {
     pub title: String,
     pub goal: Option<String>,
     pub week_start: String,
+    pub duration_weeks: Option<i64>,
     pub status: Option<String>,
     pub coach_note: Option<String>,
 }
@@ -77,6 +82,7 @@ pub struct UpdateTrainingPlanRequest {
     pub title: Option<String>,
     pub goal: Option<String>,
     pub week_start: Option<String>,
+    pub duration_weeks: Option<i64>,
     pub status: Option<String>,
     pub coach_note: Option<String>,
 }
@@ -122,6 +128,18 @@ fn actor_role_label(claims: &Claims) -> &'static str {
     "athlete"
 }
 
+fn clamp_duration_weeks(n: i64) -> i64 {
+    n.clamp(1, 52)
+}
+
+fn clamp_week_number(n: i32) -> i32 {
+    n.clamp(1, 52)
+}
+
+fn clamp_day_of_week(d: i32) -> i32 {
+    d.clamp(1, 7)
+}
+
 fn row_to_dto(row: &libsql::Row) -> TrainingPlanDto {
     TrainingPlanDto {
         id: row.get(0).unwrap(),
@@ -129,15 +147,19 @@ fn row_to_dto(row: &libsql::Row) -> TrainingPlanDto {
         title: row.get(2).unwrap(),
         goal: row.get(3).ok(),
         week_start: row.get(4).unwrap(),
-        status: row.get(5).unwrap(),
-        coach_note: row.get(6).ok(),
-        athlete_note: row.get(7).ok(),
-        progress_percent: row.get(8).unwrap_or(0),
-        created_by: row.get(9).ok(),
-        created_at: row.get(10).unwrap(),
-        updated_at: row.get(11).unwrap(),
+        duration_weeks: row.get(5).unwrap_or(1),
+        status: row.get(6).unwrap(),
+        coach_note: row.get(7).ok(),
+        athlete_note: row.get(8).ok(),
+        progress_percent: row.get(9).unwrap_or(0),
+        created_by: row.get(10).ok(),
+        created_at: row.get(11).unwrap(),
+        updated_at: row.get(12).unwrap(),
     }
 }
+
+const PLAN_SELECT: &str = "SELECT id, athlete_id, title, goal, week_start, duration_weeks, status, coach_note, athlete_note, progress_percent, created_by, created_at, updated_at \
+             FROM training_plans";
 
 async fn athlete_id_for_user(state: &AppState, user_id: &str) -> Result<Option<String>, ApiError> {
     let mut rows = state
@@ -166,8 +188,7 @@ pub async fn list_my_training_plans(
     let mut rows = state
         .db
         .query(
-            "SELECT id, athlete_id, title, goal, week_start, status, coach_note, athlete_note, progress_percent, created_by, created_at, updated_at \
-             FROM training_plans WHERE athlete_id = ?1 ORDER BY week_start DESC, updated_at DESC",
+            &format!("{PLAN_SELECT} WHERE athlete_id = ?1 ORDER BY week_start DESC, updated_at DESC"),
             [athlete_id],
         )
         .await
@@ -195,8 +216,7 @@ pub async fn list_athlete_training_plans(
     let mut rows = state
         .db
         .query(
-            "SELECT id, athlete_id, title, goal, week_start, status, coach_note, athlete_note, progress_percent, created_by, created_at, updated_at \
-             FROM training_plans WHERE athlete_id = ?1 ORDER BY week_start DESC, updated_at DESC",
+            &format!("{PLAN_SELECT} WHERE athlete_id = ?1 ORDER BY week_start DESC, updated_at DESC"),
             [athlete_id],
         )
         .await
@@ -230,6 +250,7 @@ pub async fn create_training_plan(
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let status = normalize_status(payload.status.as_deref());
+    let duration_weeks = clamp_duration_weeks(payload.duration_weeks.unwrap_or(1));
     let goal = payload
         .goal
         .as_ref()
@@ -244,14 +265,15 @@ pub async fn create_training_plan(
     state
         .db
         .execute(
-            "INSERT INTO training_plans (id, athlete_id, title, goal, week_start, status, coach_note, progress_percent, created_by, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?9)",
+            "INSERT INTO training_plans (id, athlete_id, title, goal, week_start, duration_weeks, status, coach_note, progress_percent, created_by, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?10, ?10)",
             (
                 id.clone(),
                 payload.athlete_id.clone(),
                 payload.title.trim().to_string(),
                 goal.clone(),
                 payload.week_start.trim().to_string(),
+                duration_weeks,
                 status.clone(),
                 coach_note.clone(),
                 claims.sub.clone(),
@@ -292,6 +314,7 @@ pub async fn create_training_plan(
         title: payload.title.trim().to_string(),
         goal,
         week_start: payload.week_start.trim().to_string(),
+        duration_weeks,
         status,
         coach_note,
         athlete_note: None,
@@ -313,6 +336,7 @@ pub async fn update_training_plan(
     }
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let status = payload.status.as_deref().map(|s| normalize_status(Some(s)));
+    let duration_weeks = payload.duration_weeks.map(clamp_duration_weeks);
     state
         .db
         .execute(
@@ -320,10 +344,11 @@ pub async fn update_training_plan(
                title = COALESCE(?1, title),
                goal = COALESCE(?2, goal),
                week_start = COALESCE(?3, week_start),
-               status = COALESCE(?4, status),
-               coach_note = COALESCE(?5, coach_note),
-               updated_at = ?6
-             WHERE id = ?7",
+               duration_weeks = COALESCE(?4, duration_weeks),
+               status = COALESCE(?5, status),
+               coach_note = COALESCE(?6, coach_note),
+               updated_at = ?7
+             WHERE id = ?8",
             (
                 payload
                     .title
@@ -340,6 +365,7 @@ pub async fn update_training_plan(
                     .as_ref()
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty()),
+                duration_weeks,
                 status,
                 payload
                     .coach_note
@@ -521,10 +547,10 @@ pub async fn list_plan_items(
     let mut rows = state
         .db
         .query(
-            "SELECT i.id, i.plan_id, i.day_of_week, i.exercise_id, i.custom_exercise_name, i.sets, i.reps, i.intensity_percent, i.weight_kg, i.notes, i.sort_order, e.name \
+            "SELECT i.id, i.plan_id, i.week_number, i.day_of_week, i.exercise_id, i.custom_exercise_name, i.sets, i.reps, i.intensity_percent, i.weight_kg, i.notes, i.sort_order, CAST(e.name AS BLOB) \
              FROM training_plan_items i \
              LEFT JOIN exercises e ON i.exercise_id = e.id \
-             WHERE i.plan_id = ?1 ORDER BY i.day_of_week ASC, i.sort_order ASC",
+             WHERE i.plan_id = ?1 ORDER BY i.week_number ASC, i.day_of_week ASC, i.sort_order ASC",
             [plan_id],
         )
         .await
@@ -539,16 +565,18 @@ pub async fn list_plan_items(
         out.push(TrainingPlanItemDto {
             id: row.get(0).unwrap(),
             plan_id: row.get(1).unwrap(),
-            day_of_week: row.get(2).unwrap(),
-            exercise_id: row.get(3).ok(),
-            custom_exercise_name: row.get(4).ok(),
-            sets: row.get(5).ok(),
-            reps: row.get(6).ok(),
-            intensity_percent: row.get(7).ok(),
-            weight_kg: row.get(8).ok(),
-            notes: row.get(9).ok(),
-            sort_order: row.get(10).unwrap(),
-            exercise_name: row.get(11).ok(),
+            week_number: row.get(2).unwrap_or(1),
+            day_of_week: row.get(3).unwrap(),
+            exercise_id: row.get(4).ok(),
+            custom_exercise_name: row.get(5).ok(),
+            sets: row.get(6).ok(),
+            reps: row.get(7).ok(),
+            intensity_percent: row.get(8).ok(),
+            weight_kg: row.get(9).ok(),
+            notes: row.get(10).ok(),
+            sort_order: row.get(11).unwrap(),
+            exercise_name: sql_row::lossy_opt_string(&row, 12)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
         });
     }
     Ok(Json(out))
@@ -583,6 +611,22 @@ pub async fn update_plan_items(
         .get(1)
         .unwrap_or_else(|_| "Plan treningowy".to_string());
 
+    let mut duration_rows = state
+        .db
+        .query(
+            "SELECT duration_weeks FROM training_plans WHERE id = ?1",
+            [plan_id.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let duration_row = duration_rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let duration_weeks = duration_row
+        .and_then(|r| r.get::<i64>(0).ok())
+        .unwrap_or(1);
+
     state
         .db
         .execute(
@@ -596,14 +640,24 @@ pub async fn update_plan_items(
 
     let items_count = payload.items.len();
     for item in payload.items {
+        let week_number = clamp_week_number(item.week_number.unwrap_or(1));
+        if i64::from(week_number) > duration_weeks {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "week_number {week_number} exceeds plan duration ({duration_weeks} weeks)"
+                ),
+            ));
+        }
         let id = Uuid::new_v4().to_string();
         state.db.execute(
-            "INSERT INTO training_plan_items (id, plan_id, day_of_week, exercise_id, custom_exercise_name, sets, reps, intensity_percent, weight_kg, notes, sort_order, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO training_plan_items (id, plan_id, week_number, day_of_week, exercise_id, custom_exercise_name, sets, reps, intensity_percent, weight_kg, notes, sort_order, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             (
                 id,
                 plan_id.clone(),
-                item.day_of_week,
+                week_number,
+                clamp_day_of_week(item.day_of_week),
                 item.exercise_id,
                 item.custom_exercise_name,
                 item.sets,
