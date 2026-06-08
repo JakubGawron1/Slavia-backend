@@ -78,10 +78,9 @@ async fn migrate_cms_schema(conn: &Connection) -> Result<(), String> {
         return Ok(());
     }
 
-    eprintln!(
-        "🔄 Migracja CMS: stary schemat (dev-cms) — usuwam cms_fields/cms_sections/cms_navigation…"
+    tracing::warn!(
+        "Migracja CMS: stary schemat (dev-cms) — usuwam cms_fields/cms_sections/cms_navigation (jeśli wisi: zamknij inne instancje trzymające slavia.db)"
     );
-    eprintln!("   (jeśli wisi: zamknij inne instancje Slavia-backend trzymające slavia.db)");
     let _ = conn.execute("PRAGMA busy_timeout = 3000", ()).await;
     exec0_retry_with_limit(conn, "PRAGMA foreign_keys = OFF", "cms foreign_keys off", 12).await?;
 
@@ -191,7 +190,7 @@ async fn create_cms_tables(conn: &Connection) -> Result<(), String> {
             .unwrap_or(0);
         drop(exists);
         if n > 0 {
-            eprintln!("🔄 Migracja CMS: cms_pages bez page_name — odtwarzam tabelę");
+            tracing::warn!("Migracja CMS: cms_pages bez page_name — odtwarzam tabelę");
             exec0_retry(conn, "DROP TABLE IF EXISTS cms_pages", "cms_pages drop stale").await?;
             exec0_retry(
                 conn,
@@ -259,8 +258,9 @@ async fn migrate_attendance_unique_index(conn: &Connection) -> Result<(), String
         .await
         .map_err(|e| format!("attendance dedupe: {e}"))?;
     if deduped > 0 {
-        println!(
-            "🔄 Migracja: usunięto {deduped} zduplikowanych wpisów attendance_records (przed UNIQUE INDEX)."
+        tracing::info!(
+            deduped,
+            "Migracja: usunięto zduplikowane wpisy attendance_records (przed UNIQUE INDEX)"
         );
     }
 
@@ -342,7 +342,127 @@ use argon2::{
     Argon2,
     password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
 };
+use chrono::{SecondsFormat, Utc};
+use serde::Deserialize;
 use uuid::Uuid;
+
+#[derive(Debug, Deserialize)]
+struct ExerciseDictionarySeedRow {
+    id: String,
+    name: String,
+    category: String,
+    description: String,
+}
+
+const EXERCISE_DICTIONARY_SEED_JSON: &str = include_str!("embed/exercise-dictionary-seed.json");
+
+async fn insert_default_exercises(
+    conn: &Connection,
+) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+    let rows: Vec<ExerciseDictionarySeedRow> = serde_json::from_str(EXERCISE_DICTIONARY_SEED_JSON)?;
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let mut inserted = 0u64;
+    for row in rows {
+        let n = conn
+            .execute(
+                "INSERT OR IGNORE INTO exercises (id, name, category, description, video_url, created_at) VALUES (?1, ?2, ?3, ?4, NULL, ?5)",
+                (row.id, row.name, row.category, row.description, now.clone()),
+            )
+            .await?;
+        inserted += n;
+    }
+    Ok(inserted)
+}
+
+/// Domyślny słownik ćwiczeń (plany treningowe) — `INSERT OR IGNORE` po stałych `id`.
+async fn seed_default_exercises(conn: &Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let n = insert_default_exercises(conn).await?;
+    if n > 0 {
+        tracing::info!(inserted = n, "Uzupełniono domyślny słownik ćwiczeń");
+    }
+    Ok(())
+}
+
+/// Przepisuje pola tekstowe `exercises` na poprawne UTF-8 (libsql panikuje na uszkodzonym TEXT).
+async fn migrate_sanitize_exercises_utf8(conn: &Connection) -> Result<u64, String> {
+    let mut rows = conn
+        .query(
+            "SELECT id,
+                    CAST(name AS BLOB),
+                    CAST(category AS BLOB),
+                    CAST(description AS BLOB),
+                    CAST(video_url AS BLOB),
+                    CAST(created_at AS BLOB)
+             FROM exercises",
+            (),
+        )
+        .await
+        .map_err(|e| format!("migrate_sanitize_exercises_utf8 select: {e}"))?;
+
+    let mut updated = 0u64;
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("migrate_sanitize_exercises_utf8 row: {e}"))?
+    {
+        let id = crate::sql_row::required_lossy_string(&row, 0)
+            .map_err(|e| format!("migrate_sanitize_exercises_utf8 id: {e}"))?;
+        let name = crate::sql_row::required_lossy_string(&row, 1)
+            .map_err(|e| format!("migrate_sanitize_exercises_utf8 name: {e}"))?;
+        let category = crate::sql_row::lossy_opt_string(&row, 2)
+            .map_err(|e| format!("migrate_sanitize_exercises_utf8 category: {e}"))?;
+        let description = crate::sql_row::lossy_opt_string(&row, 3)
+            .map_err(|e| format!("migrate_sanitize_exercises_utf8 description: {e}"))?;
+        let video_url = crate::sql_row::lossy_opt_string(&row, 4)
+            .map_err(|e| format!("migrate_sanitize_exercises_utf8 video_url: {e}"))?;
+        let created_at = crate::sql_row::required_lossy_string(&row, 5)
+            .map_err(|e| format!("migrate_sanitize_exercises_utf8 created_at: {e}"))?;
+
+        let n = conn
+            .execute(
+                "UPDATE exercises SET name = ?1, category = ?2, description = ?3, video_url = ?4, created_at = ?5 WHERE id = ?6",
+                (name, category, description, video_url, created_at, id),
+            )
+            .await
+            .map_err(|e| format!("migrate_sanitize_exercises_utf8 update: {e}"))?;
+        updated += n;
+    }
+
+    if updated > 0 {
+        tracing::info!(updated, "Migracja: sanityzacja UTF-8 w tabeli exercises");
+    }
+    Ok(updated)
+}
+
+/// Przywraca polskie znaki w wpisach słownika (`dict-*`) z embed JSON, gdy w bazie są `U+FFFD`.
+async fn migrate_refresh_corrupt_exercise_dictionary_seed(
+    conn: &Connection,
+) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+    let rows: Vec<ExerciseDictionarySeedRow> = serde_json::from_str(EXERCISE_DICTIONARY_SEED_JSON)?;
+    let mut updated = 0u64;
+    for row in rows {
+        let n = conn
+            .execute(
+                "UPDATE exercises SET name = ?1, category = ?2, description = ?3
+                 WHERE id = ?4
+                   AND (
+                     instr(name, char(65533)) > 0
+                     OR instr(COALESCE(category, ''), char(65533)) > 0
+                     OR instr(COALESCE(description, ''), char(65533)) > 0
+                   )",
+                (row.name, row.category, row.description, row.id),
+            )
+            .await?;
+        updated += n;
+    }
+    if updated > 0 {
+        tracing::info!(
+            updated,
+            "Migracja: naprawiono polskie znaki w słowniku ćwiczeń (seed dict-*)"
+        );
+    }
+    Ok(updated)
+}
 
 /// Najlepszy zatwierdzony start (max `total`, przy remisie nowsza `date`) → rekord zawodnika.
 pub async fn sync_athlete_bests_from_approved_conn(
@@ -415,7 +535,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
     let rebuild = std::env::var("REBUILD_DB").unwrap_or_default() == "true";
 
     if rebuild {
-        println!("🧹 REBUILD_DB=true: Czyszczenie bazy danych...");
+        tracing::warn!("REBUILD_DB=true: czyszczenie bazy danych");
         reset_database(conn).await?;
         return Ok(());
     }
@@ -648,6 +768,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             title TEXT NOT NULL,
             goal TEXT,
             week_start TEXT NOT NULL,
+            duration_weeks INTEGER NOT NULL DEFAULT 1,
             status TEXT NOT NULL DEFAULT 'planned',
             coach_note TEXT,
             athlete_note TEXT,
@@ -703,6 +824,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         "CREATE TABLE IF NOT EXISTS training_plan_items (
             id TEXT PRIMARY KEY,
             plan_id TEXT NOT NULL REFERENCES training_plans(id) ON DELETE CASCADE,
+            week_number INTEGER NOT NULL DEFAULT 1,
             day_of_week INTEGER NOT NULL,
             exercise_id TEXT REFERENCES exercises(id),
             custom_exercise_name TEXT,
@@ -999,6 +1121,18 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         .await;
     let _ = conn
         .execute(
+            "ALTER TABLE training_plans ADD COLUMN duration_weeks INTEGER NOT NULL DEFAULT 1",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
+            "ALTER TABLE training_plan_items ADD COLUMN week_number INTEGER NOT NULL DEFAULT 1",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
             "CREATE TABLE IF NOT EXISTS chat_message_reactions (
                 id TEXT PRIMARY KEY,
                 message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
@@ -1024,9 +1158,9 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         let n = sync_all_athletes_bests_from_results(conn)
             .await
             .map_err(|e| format!("sync_all_athletes_bests_from_results: {e}"))?;
-        println!(
-            "📊 REBUILD_DB: athletes.best_* / total_kg ← najlepszy wynik Approved z `results` (sqlite changes={}).",
-            n
+        tracing::info!(
+            sqlite_changes = n,
+            "REBUILD_DB: zsynchronizowano athletes.best_* / total_kg z results"
         );
     }
 
@@ -1093,14 +1227,11 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             migrated += 1;
         }
     }
-    println!(
-        "🔄 Migracja: users.role → users.roles (JSON array) (migrated {} users).",
-        migrated
-    );
+    tracing::info!(migrated, "Migracja: users.role → users.roles (JSON array)");
 
     // Usunięcie legacy kolumny `users.role` (SQLite nie wspiera DROP COLUMN -> rekonstrukcja tabeli)
     if role_column_exists > 0 {
-        println!("🧱 Migracja: usuwanie legacy kolumny users.role (rekonstrukcja tabeli users)...");
+        tracing::info!("Migracja: usuwanie legacy kolumny users.role (rekonstrukcja tabeli users)");
         // Wyłącz FK na czas rekonstrukcji.
         let _ = conn.execute("PRAGMA foreign_keys = OFF", ()).await;
         // BEGIN IMMEDIATE — weź write-lock od razu (mniej szans na DROP/ALTER lock).
@@ -1173,16 +1304,29 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
 
         exec0_retry(conn, "COMMIT", "COMMIT drop users.role migration").await?;
         let _ = conn.execute("PRAGMA foreign_keys = ON", ()).await;
-        println!("✅ Migracja: users.role usunięta.");
+        tracing::info!("Migracja: users.role usunięta");
     }
 
     let trainer_admin_fix = migrate_remove_trainer_admin_role(conn)
         .await
         .map_err(|e| format!("migrate_remove_trainer_admin_role: {e}"))?;
-    println!(
-        "🔄 Migracja: TrainerAdmin → Admin + Trainer w JSON roles (zaktualizowano {} kont).",
-        trainer_admin_fix
+    tracing::info!(
+        updated = trainer_admin_fix,
+        "Migracja: TrainerAdmin → Admin + Trainer w JSON roles"
     );
+
+    let _ = conn
+        .execute(
+            "UPDATE feature_flags SET name = 'olympic_coach' WHERE name = 'gemini_olympic_coach'",
+            (),
+        )
+        .await;
+    let _ = conn
+        .execute(
+            "UPDATE feature_flag_events SET name = 'olympic_coach' WHERE name = 'gemini_olympic_coach'",
+            (),
+        )
+        .await;
 
     // Migracja: usunięcie users.email (nie używamy maili) — zachowaj wszystkie inne dane kont.
     {
@@ -1204,7 +1348,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         drop(pragma);
 
         if email_column_exists > 0 {
-            println!("🧱 Migracja: usuwanie users.email (rekonstrukcja tabeli users)...");
+            tracing::info!("Migracja: usuwanie users.email (rekonstrukcja tabeli users)");
             let _ = conn.execute("PRAGMA foreign_keys = OFF", ()).await;
             exec0_retry(
                 conn,
@@ -1255,7 +1399,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             .await?;
             exec0_retry(conn, "COMMIT", "COMMIT drop users.email migration").await?;
             let _ = conn.execute("PRAGMA foreign_keys = ON", ()).await;
-            println!("✅ Migracja: users.email usunięta (pozostałe dane zachowane).");
+            tracing::info!("Migracja: users.email usunięta (pozostałe dane zachowane)");
         }
     }
 
@@ -1279,12 +1423,22 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         drop(pragma);
 
         if email_column_exists == 0 {
-            println!("🧱 Migracja: dodawanie contact_messages.email...");
+            tracing::info!("Migracja: dodawanie contact_messages.email");
             let _ = conn
                 .execute("ALTER TABLE contact_messages ADD COLUMN email TEXT", ())
                 .await;
         }
     }
+
+    seed_default_exercises(conn).await?;
+
+    migrate_sanitize_exercises_utf8(conn)
+        .await
+        .map_err(|e| format!("migrate_sanitize_exercises_utf8: {e}"))?;
+
+    migrate_refresh_corrupt_exercise_dictionary_seed(conn)
+        .await
+        .map_err(|e| format!("migrate_refresh_corrupt_exercise_dictionary_seed: {e}"))?;
 
     Ok(())
 }
@@ -1552,6 +1706,7 @@ pub async fn reset_database(
             title TEXT NOT NULL,
             goal TEXT,
             week_start TEXT NOT NULL,
+            duration_weeks INTEGER NOT NULL DEFAULT 1,
             status TEXT NOT NULL DEFAULT 'planned',
             coach_note TEXT,
             athlete_note TEXT,
@@ -1683,7 +1838,7 @@ pub async fn reset_database(
         .await;
 
     seed_data(conn).await?;
-    println!("✅ Baza danych zrekonstruowana i zasilona danymi!");
+    tracing::info!("Baza danych zrekonstruowana i zasilona danymi");
     Ok(())
 }
 
@@ -1814,6 +1969,9 @@ async fn seed_data(conn: &Connection) -> Result<(), Box<dyn std::error::Error + 
         "INSERT INTO posts (id, title, content, author_id, image_url, created_at, published) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)",
         (Uuid::new_v4().to_string(), "Nowa strona klubu!", "Witajcie w nowym systemie. Cieszcie się pięknym designem i nowymi funkcjami!", super_id, Some("https://res.cloudinary.com/dbm5i0jad/image/upload/v1/samples/landscapes/nature-mountains".to_string()), "2026-05-01T09:00:00Z"),
     ).await?;
+
+    let n = insert_default_exercises(conn).await?;
+    tracing::info!(inserted = n, "REBUILD_DB: zasiano domyślny słownik ćwiczeń");
 
     Ok(())
 }
