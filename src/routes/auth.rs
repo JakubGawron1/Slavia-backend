@@ -31,6 +31,7 @@ pub async fn login_handler(
 ) -> Result<Json<LoginResponse>, ApiError> {
     let username_trim = payload.username.trim().to_string();
     if let Err(()) = crate::login_throttle::record_login_attempt(&username_trim) {
+        tracing::warn!(username = %username_trim, "login throttled");
         return Err(api_error(
             StatusCode::TOO_MANY_REQUESTS,
             "Zbyt wiele prób logowania. Spróbuj ponownie za kilka minut.",
@@ -54,6 +55,7 @@ pub async fn login_handler(
     let row = match row {
         Some(r) => r,
         None => {
+            tracing::warn!(username = %username_trim, "login failed: unknown user");
             return Err(api_error(
                 StatusCode::UNAUTHORIZED,
                 "Invalid username or password",
@@ -98,6 +100,7 @@ pub async fn login_handler(
         .verify_password(payload.password.as_bytes(), &parsed_hash)
         .is_err()
     {
+        tracing::warn!(username = %username_trim, "login failed: bad password");
         return Err(api_error(
             StatusCode::UNAUTHORIZED,
             "Invalid username or password",
@@ -124,6 +127,7 @@ pub async fn login_handler(
             return Err(api_error(StatusCode::BAD_REQUEST, "totp_required"));
         };
         if !crate::routes::totp::totp_verify(&raw, code) {
+            tracing::warn!(username = %username_trim, user_id = %user_id, "login failed: invalid TOTP");
             return Err(api_error(
                 StatusCode::UNAUTHORIZED,
                 "Invalid username or password",
@@ -151,6 +155,13 @@ pub async fn login_handler(
         &EncodingKey::from_secret(state.jwt_secret.as_ref()),
     )
     .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error creating token"))?;
+
+    tracing::info!(
+        user_id = %user_id,
+        username = %username_trim,
+        roles = ?roles,
+        "login successful"
+    );
 
     Ok(Json(LoginResponse {
         token,

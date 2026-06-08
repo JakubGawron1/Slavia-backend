@@ -4,12 +4,24 @@ use axum::{
     http::StatusCode,
 };
 use chrono::{SecondsFormat, Utc};
+use libsql::Row;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api_error::{ApiError, api_error};
 use crate::middleware::auth::{Claims, claims_has_staff_access};
+use crate::sql_row;
 use crate::state::AppState;
+
+/// Odczyt TEXT jako BLOB — omija panikę libsql przy uszkodzonym UTF-8 w SQLite TEXT.
+const EXERCISES_SELECT_SQL: &str = "\
+    SELECT id,
+           CAST(name AS BLOB) AS name,
+           CAST(category AS BLOB) AS category,
+           CAST(description AS BLOB) AS description,
+           CAST(video_url AS BLOB) AS video_url,
+           CAST(created_at AS BLOB) AS created_at
+    FROM exercises";
 
 #[derive(Debug, Serialize)]
 pub struct ExerciseBoardRow {
@@ -29,11 +41,10 @@ pub async fn list_exercises_board(
     State(state): State<AppState>,
     _claims: Claims,
 ) -> Result<Json<Vec<ExerciseBoardRow>>, ApiError> {
-    // Prosta wersja: wyciągamy najlepsze Squat/Bench/Deadlift z tabeli results (Approved) dla każdego zawodnika.
     let mut rows = state
         .db
         .query(
-            "SELECT a.id, a.full_name, \
+            "SELECT a.id, CAST(a.full_name AS BLOB), \
              MAX(r.squat_kg), MAX(r.bench_kg), MAX(r.deadlift_kg), \
              COUNT(CASE WHEN r.status = 'Pending' THEN 1 END) as pending_count, \
              COUNT(CASE WHEN r.status = 'Approved' THEN 1 END) as approved_count \
@@ -52,15 +63,24 @@ pub async fn list_exercises_board(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
         out.push(ExerciseBoardRow {
-            athlete_id: row.get(0).unwrap(),
-            athlete_name: row.get(1).unwrap(),
-            squat_kg: row.get(2).ok(),
-            bench_kg: row.get(3).ok(),
-            deadlift_kg: row.get(4).ok(),
-            source_trainer_direct: true, // placeholder
-            source_athlete_pending_count: row.get(5).unwrap_or(0),
-            source_approved_results_count: row.get(6).unwrap_or(0),
-            source_training_log_count: 0, // placeholder
+            athlete_id: sql_row::required_lossy_string(&row, 0)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            athlete_name: sql_row::required_lossy_string(&row, 1)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            squat_kg: sql_row::opt_f64(&row, 2)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            bench_kg: sql_row::opt_f64(&row, 3)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            deadlift_kg: sql_row::opt_f64(&row, 4)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            source_trainer_direct: true,
+            source_athlete_pending_count: sql_row::opt_i64(&row, 5)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                .unwrap_or(0),
+            source_approved_results_count: sql_row::opt_i64(&row, 6)
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                .unwrap_or(0),
+            source_training_log_count: 0,
             source_last_approved_date: None,
         });
     }
@@ -93,13 +113,31 @@ pub struct UpdateExerciseRequest {
     pub video_url: Option<String>,
 }
 
+fn row_to_exercise_dto(row: &Row) -> Result<ExerciseDto, ApiError> {
+    Ok(ExerciseDto {
+        id: sql_row::required_lossy_string(row, 0)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+        name: sql_row::required_lossy_string(row, 1)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+        category: sql_row::lossy_opt_string(row, 2)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        description: sql_row::lossy_opt_string(row, 3)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        video_url: sql_row::lossy_opt_string(row, 4)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        created_at: sql_row::required_lossy_string(row, 5)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+    })
+}
+
 pub async fn list_exercises(
     State(state): State<AppState>,
     _claims: Claims,
 ) -> Result<Json<Vec<ExerciseDto>>, ApiError> {
+    let sql = format!("{EXERCISES_SELECT_SQL} ORDER BY name ASC");
     let mut rows = state
         .db
-        .query("SELECT id, name, category, description, video_url, created_at FROM exercises ORDER BY name ASC", ())
+        .query(&sql, ())
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -109,14 +147,7 @@ pub async fn list_exercises(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        out.push(ExerciseDto {
-            id: row.get(0).unwrap(),
-            name: row.get(1).unwrap(),
-            category: row.get(2).ok(),
-            description: row.get(3).ok(),
-            video_url: row.get(4).ok(),
-            created_at: row.get(5).unwrap(),
-        });
+        out.push(row_to_exercise_dto(&row)?);
     }
     Ok(Json(out))
 }
@@ -174,12 +205,10 @@ pub async fn update_exercise(
         return Err(api_error(StatusCode::BAD_REQUEST, "Name is required"));
     }
 
+    let sql = format!("{EXERCISES_SELECT_SQL} WHERE id = ?1");
     let mut rows = state
         .db
-        .query(
-            "SELECT id, name, category, description, video_url, created_at FROM exercises WHERE id = ?1",
-            [id.clone()],
-        )
+        .query(&sql, [id.clone()])
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let existing = rows
@@ -207,10 +236,7 @@ pub async fn update_exercise(
 
     let mut rows = state
         .db
-        .query(
-            "SELECT id, name, category, description, video_url, created_at FROM exercises WHERE id = ?1",
-            [id],
-        )
+        .query(&sql, [id])
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let row = rows
@@ -219,14 +245,7 @@ pub async fn update_exercise(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Exercise row missing"))?;
 
-    Ok(Json(ExerciseDto {
-        id: row.get(0).unwrap(),
-        name: row.get(1).unwrap(),
-        category: row.get(2).ok(),
-        description: row.get(3).ok(),
-        video_url: row.get(4).ok(),
-        created_at: row.get(5).unwrap(),
-    }))
+    Ok(Json(row_to_exercise_dto(&row)?))
 }
 
 pub async fn delete_exercise(
