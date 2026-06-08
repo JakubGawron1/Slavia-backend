@@ -383,6 +383,36 @@ async fn seed_default_exercises(conn: &Connection) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
+const MIGRATION_SANITIZE_EXERCISES_UTF8_KEY: &str = "migration:sanitize_exercises_utf8_v1";
+
+async fn migration_flag_is_set(conn: &Connection, key: &str) -> bool {
+    let Ok(mut rows) = conn
+        .query(
+            "SELECT value FROM system_settings WHERE key = ?1 LIMIT 1",
+            [key.to_string()],
+        )
+        .await
+    else {
+        return false;
+    };
+    let Ok(Some(row)) = rows.next().await else {
+        return false;
+    };
+    crate::sql_row::flex_string(&row, 0)
+        .map(|v| v.trim() == "1")
+        .unwrap_or(false)
+}
+
+async fn set_migration_flag(conn: &Connection, key: &str) -> Result<(), libsql::Error> {
+    conn.execute(
+        "INSERT INTO system_settings (key, value) VALUES (?1, '1')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [key.to_string()],
+    )
+    .await?;
+    Ok(())
+}
+
 /// Przepisuje pola tekstowe `exercises` na poprawne UTF-8 (libsql panikuje na uszkodzonym TEXT).
 async fn migrate_sanitize_exercises_utf8(conn: &Connection) -> Result<u64, String> {
     let mut rows = conn
@@ -432,6 +462,27 @@ async fn migrate_sanitize_exercises_utf8(conn: &Connection) -> Result<u64, Strin
         tracing::info!(updated, "Migracja: sanityzacja UTF-8 w tabeli exercises");
     }
     Ok(updated)
+}
+
+/// Jednorazowa migracja UTF-8 — nie blokuje startu przy uszkodzonej replice (Render/Turso).
+async fn try_migrate_sanitize_exercises_utf8(conn: &Connection) {
+    if migration_flag_is_set(conn, MIGRATION_SANITIZE_EXERCISES_UTF8_KEY).await {
+        return;
+    }
+
+    match migrate_sanitize_exercises_utf8(conn).await {
+        Ok(_) => {
+            if let Err(e) = set_migration_flag(conn, MIGRATION_SANITIZE_EXERCISES_UTF8_KEY).await {
+                tracing::warn!(error = %e, "nie udało się zapisać flagi migrate_sanitize_exercises_utf8");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "migrate_sanitize_exercises_utf8 pominięto (best-effort) — słownik dict-* nadal naprawia migrate_refresh_corrupt_exercise_dictionary_seed"
+            );
+        }
+    }
 }
 
 /// Przywraca polskie znaki w wpisach słownika (`dict-*`) z embed JSON, gdy w bazie są `U+FFFD`.
@@ -1432,13 +1483,14 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
 
     seed_default_exercises(conn).await?;
 
-    migrate_sanitize_exercises_utf8(conn)
-        .await
-        .map_err(|e| format!("migrate_sanitize_exercises_utf8: {e}"))?;
+    try_migrate_sanitize_exercises_utf8(conn).await;
 
-    migrate_refresh_corrupt_exercise_dictionary_seed(conn)
-        .await
-        .map_err(|e| format!("migrate_refresh_corrupt_exercise_dictionary_seed: {e}"))?;
+    if let Err(e) = migrate_refresh_corrupt_exercise_dictionary_seed(conn).await {
+        tracing::warn!(
+            error = %e,
+            "migrate_refresh_corrupt_exercise_dictionary_seed pominięto (best-effort)"
+        );
+    }
 
     Ok(())
 }

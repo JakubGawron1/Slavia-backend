@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use deadpool_libsql::{Manager, Pool, Runtime};
@@ -56,7 +57,45 @@ impl Db {
     pub async fn new(
         backend: DatabaseBackend,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let database = build_database(&backend).await?;
+        let mut sqlite_wiped = false;
+        let database = loop {
+            let database = build_database(&backend).await?;
+
+            if let Some(path) = backend.local_sqlite_path()
+                && let Ok(conn) = database.connect()
+            {
+                    let integrity = check_sqlite_integrity(&conn).await;
+                    drop(conn);
+
+                    if matches!(&integrity, Ok(true)) {
+                        break database;
+                    }
+
+                    let err_hint = match &integrity {
+                        Ok(false) => "integrity_check != ok".to_string(),
+                        Err(e) => e.to_string(),
+                        Ok(true) => String::new(),
+                    };
+                    if !sqlite_wiped {
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %err_hint,
+                            "SQLite integrity_check nie powiódł się — usuwam lokalną kopię i ponawiam sync z Turso"
+                        );
+                        remove_sqlite_db_family(path);
+                        sqlite_wiped = true;
+                        continue;
+                    }
+
+                    tracing::error!(
+                        path = %path.display(),
+                        error = %err_hint,
+                        "SQLite nadal uszkodzony po wipe — kontynuuję start (migracje best-effort)"
+                    );
+            }
+
+            break database;
+        };
 
         if backend.uses_local_sqlite_engine()
             && let Ok(conn) = database.connect()
@@ -126,6 +165,31 @@ impl Db {
     }
 }
 
+async fn check_sqlite_integrity(conn: &Connection) -> Result<bool, libsql::Error> {
+    let mut rows = conn.query("PRAGMA integrity_check", ()).await?;
+    let Some(row) = rows.next().await? else {
+        return Ok(false);
+    };
+    let status = crate::sql_row::flex_string(&row, 0)?;
+    Ok(status.eq_ignore_ascii_case("ok"))
+}
+
+/// Usuwa plik SQLite i towarzyszące `-wal` / `-shm` (np. uszkodzona replika Turso na Render).
+fn remove_sqlite_db_family(path: &Path) {
+    let base = path.to_string_lossy();
+    for candidate in [
+        base.to_string(),
+        format!("{base}-wal"),
+        format!("{base}-shm"),
+    ] {
+        if let Err(e) = std::fs::remove_file(&candidate)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(file = %candidate, error = %e, "nie udało się usunąć pliku SQLite");
+        }
+    }
+}
+
 async fn build_database(
     backend: &DatabaseBackend,
 ) -> Result<libsql::Database, Box<dyn std::error::Error + Send + Sync>> {
@@ -178,6 +242,19 @@ pub async fn apply_connection_pragmas(conn: &Connection) -> Result<(), libsql::E
 }
 
 impl DatabaseBackend {
+    pub fn local_sqlite_path(&self) -> Option<&Path> {
+        match self {
+            DatabaseBackend::Local(path) => Some(path.as_path()),
+            DatabaseBackend::Remote {
+                replica_path: Some(path),
+                ..
+            } => Some(path.as_path()),
+            DatabaseBackend::Remote {
+                replica_path: None, ..
+            } => None,
+        }
+    }
+
     pub fn uses_local_sqlite_engine(&self) -> bool {
         matches!(self, DatabaseBackend::Local(_) | DatabaseBackend::Remote { replica_path: Some(_), .. })
     }
