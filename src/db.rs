@@ -385,6 +385,15 @@ async fn seed_default_exercises(conn: &Connection) -> Result<(), Box<dyn std::er
 
 const MIGRATION_SANITIZE_EXERCISES_UTF8_KEY: &str = "migration:sanitize_exercises_utf8_v1";
 
+pub(crate) fn error_indicates_sqlite_malformed(err: &dyn std::error::Error) -> bool {
+    sqlite_malformed_message(&err.to_string())
+}
+
+fn sqlite_malformed_message(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("malformed") || m.contains("disk image")
+}
+
 async fn migration_flag_is_set(conn: &Connection, key: &str) -> bool {
     let Ok(mut rows) = conn
         .query(
@@ -423,7 +432,8 @@ async fn migrate_sanitize_exercises_utf8(conn: &Connection) -> Result<u64, Strin
                     CAST(description AS BLOB),
                     CAST(video_url AS BLOB),
                     CAST(created_at AS BLOB)
-             FROM exercises",
+             FROM exercises
+             WHERE id NOT LIKE 'dict-%'",
             (),
         )
         .await
@@ -464,6 +474,18 @@ async fn migrate_sanitize_exercises_utf8(conn: &Connection) -> Result<u64, Strin
     Ok(updated)
 }
 
+/// Usuwa wpisy słownika `dict-*` i wstawia je ponownie z embed JSON (bez skanu całej tabeli).
+async fn try_reseed_exercise_dictionary(conn: &Connection) -> Result<u64, String> {
+    let deleted = conn
+        .execute("DELETE FROM exercises WHERE id LIKE 'dict-%'", ())
+        .await
+        .map_err(|e| format!("reseed delete dict: {e}"))?;
+    let inserted = insert_default_exercises(conn)
+        .await
+        .map_err(|e| format!("reseed insert dict: {e}"))?;
+    Ok(deleted + inserted)
+}
+
 /// Jednorazowa migracja UTF-8 — nie blokuje startu przy uszkodzonej replice (Render/Turso).
 async fn try_migrate_sanitize_exercises_utf8(conn: &Connection) {
     if migration_flag_is_set(conn, MIGRATION_SANITIZE_EXERCISES_UTF8_KEY).await {
@@ -479,8 +501,21 @@ async fn try_migrate_sanitize_exercises_utf8(conn: &Connection) {
         Err(e) => {
             tracing::warn!(
                 error = %e,
-                "migrate_sanitize_exercises_utf8 pominięto (best-effort) — słownik dict-* nadal naprawia migrate_refresh_corrupt_exercise_dictionary_seed"
+                "migrate_sanitize_exercises_utf8 pominięto (best-effort) — słownik dict-* naprawia migrate_refresh_corrupt_exercise_dictionary_seed lub reseed"
             );
+            if sqlite_malformed_message(&e) {
+                match try_reseed_exercise_dictionary(conn).await {
+                    Ok(n) if n > 0 => tracing::info!(
+                        affected = n,
+                        "Odtworzono słownik dict-* po wykryciu uszkodzonej repliki exercises"
+                    ),
+                    Ok(_) => {}
+                    Err(re) => tracing::warn!(
+                        error = %re,
+                        "reseed dict-* po malformed nie powiódł się"
+                    ),
+                }
+            }
         }
     }
 }
@@ -1492,6 +1527,30 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         );
     }
 
+    if let Err(e) = exercises_table_probe(conn).await {
+        if sqlite_malformed_message(&e) {
+            return Err(format!("replika SQLite uszkodzona (exercises): {e}").into());
+        }
+        tracing::warn!(error = %e, "exercises_table_probe po migracjach — kontynuuję start");
+    }
+
+    Ok(())
+}
+
+/// Lekki odczyt kilku wierszy — wykrywa uszkodzoną replikę, której `integrity_check` nie złapał.
+async fn exercises_table_probe(conn: &Connection) -> Result<(), String> {
+    let mut rows = conn
+        .query("SELECT id FROM exercises ORDER BY id LIMIT 5", ())
+        .await
+        .map_err(|e| format!("exercises probe: {e}"))?;
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("exercises probe row: {e}"))?
+    {
+        crate::sql_row::flex_string(&row, 0)
+            .map_err(|e| format!("exercises probe id: {e}"))?;
+    }
     Ok(())
 }
 
