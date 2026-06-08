@@ -117,9 +117,6 @@ async fn post_import_data_returns_three_sources_json() {
         String::new(),
         String::new(),
         String::new(),
-        None,
-        None,
-        "mailto:test@example.com".to_string(),
     )
     .await
     .expect("create_app");
@@ -161,9 +158,6 @@ async fn trainer_can_read_system_metrics_and_event_feed() {
         String::new(),
         String::new(),
         String::new(),
-        None,
-        None,
-        "mailto:test@example.com".to_string(),
     )
     .await
     .expect("create_app");
@@ -213,9 +207,6 @@ async fn trainer_plan_and_athlete_recovery_flow_works() {
         String::new(),
         String::new(),
         String::new(),
-        None,
-        None,
-        "mailto:test@example.com".to_string(),
     )
     .await
     .expect("create_app");

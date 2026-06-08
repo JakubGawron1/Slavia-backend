@@ -1,5 +1,6 @@
 pub mod admins;
 pub mod ai_coach;
+pub mod ai_coach_settings;
 pub mod barbell_path_ai;
 pub mod announcements;
 pub mod athletes;
