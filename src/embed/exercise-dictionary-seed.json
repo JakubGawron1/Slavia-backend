@@ -1,0 +1,320 @@
+[
+  {
+    "id": "dict-snatch",
+    "name": "Rwanie",
+    "category": "Dwubój — rwanie",
+    "description": "Pełne rwanie z podłogi. Utrzymuj sztangę blisko ciała, agresywny kontakt z udem i szybkie zejście pod sztangę."
+  },
+  {
+    "id": "dict-power-snatch",
+    "name": "Rwanie siłowe",
+    "category": "Dwubój — rwanie",
+    "description": "Przyjęcie powyżej pasa bez pełnego przysiadu. Buduje dynamikę drugiej fazy i pewność w wybiciu."
+  },
+  {
+    "id": "dict-hang-snatch",
+    "name": "Rwanie z kolan",
+    "category": "Dwubój — rwanie",
+    "description": "Start z pozycji kolan. Skup się na tempie, kontakcie z udem i stabilnym przyjęciu nad głową."
+  },
+  {
+    "id": "dict-snatch-blocks",
+    "name": "Rwanie z bloków",
+    "category": "Dwubój — rwanie",
+    "description": "Start z bloków — izoluje drugą fazę i przyjęcie. Utrzymuj pionowy tor i zamknięty bark."
+  },
+  {
+    "id": "dict-snatch-deficit",
+    "name": "Rwanie z deficytu",
+    "category": "Dwubój — rwanie",
+    "description": "Wydłużony pierwszy ciąg z podwyższenia. Wzmacnia pozycję startową i siłę nóg w dolnym zakresie."
+  },
+  {
+    "id": "dict-snatch-balance",
+    "name": "Wybijanie do rwania",
+    "category": "Dwubój — rwanie",
+    "description": "Sztanga na barkach — szybkie zejście w głębokie przyjęcie rwaniowe. Kluczowe dla pewności pod sztangą."
+  },
+  {
+    "id": "dict-drop-snatch",
+    "name": "Zejście pod sztangę (drop snatch)",
+    "category": "Dwubój — rwanie",
+    "description": "Sztanga z góry lub z bloków barkowych — trening szybkości zejścia i stabilizacji w dole."
+  },
+  {
+    "id": "dict-overhead-squat",
+    "name": "Przysiad rwaniowy",
+    "category": "Przysiady",
+    "description": "Przysiad ze sztangą nad głową. Mobilność kostek i bioder, stabilizacja core i barków."
+  },
+  {
+    "id": "dict-muscle-snatch",
+    "name": "Zarzut rwaniowy na mięśnie",
+    "category": "Dwubój — rwanie",
+    "description": "Ciąg rwaniowy bez zejścia pod sztangę. Uczy pionowego toru łokci i kontroli nad głową."
+  },
+  {
+    "id": "dict-clean",
+    "name": "Zarzut",
+    "category": "Dwubój — zarzut i wybijanie",
+    "description": "Pełny zarzut z podłogi do pozycji rack. Szybkie wejście pod sztangę i stabilny łokieć w górę."
+  },
+  {
+    "id": "dict-power-clean",
+    "name": "Zarzut siłowy",
+    "category": "Dwubój — zarzut i wybijanie",
+    "description": "Zarzut z przyjęciem powyżej pasa. Rozwija dynamikę wybicia i szybkość pod sztangę."
+  },
+  {
+    "id": "dict-hang-clean",
+    "name": "Zarzut z kolan",
+    "category": "Dwubój — zarzut i wybijanie",
+    "description": "Start z kolan — technika kontaktu z udem i agresywnego wejścia w rack."
+  },
+  {
+    "id": "dict-clean-blocks",
+    "name": "Zarzut z bloków",
+    "category": "Dwubój — zarzut i wybijanie",
+    "description": "Zarzut z bloków. Pozwala skupić się na drugiej fazie bez obciążenia pierwszego ciągu."
+  },
+  {
+    "id": "dict-clean-jerk",
+    "name": "Podrzut",
+    "category": "Dwubój — zarzut i wybijanie",
+    "description": "Pełny boj: zarzut + wybijanie. Płynne przejście z rack do dip&drive i stabilnego lockoutu."
+  },
+  {
+    "id": "dict-split-jerk",
+    "name": "Wybijanie w nożyce",
+    "category": "Dwubój — zarzut i wybijanie",
+    "description": "Wybijanie ze splitu. Pionowy dip, szybki drive i stabilna pozycja nóg pod sztangą."
+  },
+  {
+    "id": "dict-power-jerk",
+    "name": "Wybijanie siłowe",
+    "category": "Dwubój — zarzut i wybijanie",
+    "description": "Wybijanie z niewielkim zejściiem nóg. Buduje siłę dip&drive i stabilizację nad głową."
+  },
+  {
+    "id": "dict-jerk-rack",
+    "name": "Wybijanie z przodu (rack)",
+    "category": "Dwubój — zarzut i wybijanie",
+    "description": "Wybijanie ze sztangi na barkach — bez clean. Technika dip, drive i lockout bez zmęczenia zarzutu."
+  },
+  {
+    "id": "dict-jerk-balance",
+    "name": "Jerk balance",
+    "category": "Dwubój — zarzut i wybijanie",
+    "description": "Wybijanie z kroku w przód. Uczy stabilizacji w nożycach i pewności nad głową."
+  },
+  {
+    "id": "dict-back-squat",
+    "name": "Przysiad z tyłu",
+    "category": "Przysiady",
+    "description": "Podstawowy przysiad siłowy. Głębokość pod kolano, stabilny core, kolana zgodne z palcami."
+  },
+  {
+    "id": "dict-front-squat",
+    "name": "Przysiad z przodu",
+    "category": "Przysiady",
+    "description": "Przysiad w racku z przodu. Mobilność nadgarstków, pionowy tułów, siła czwórek."
+  },
+  {
+    "id": "dict-box-squat",
+    "name": "Przysiad na skrzynię",
+    "category": "Przysiady",
+    "description": "Kontrolowane zejście na skrzynię i wybicie. Wzmacnia tylne uda i siłę w wybiciu z dołu."
+  },
+  {
+    "id": "dict-pause-squat",
+    "name": "Przysiad z pauzą",
+    "category": "Przysiady",
+    "description": "Pauza 2–3 s w dole przysiadu. Eliminuje odbicie i buduje siłę w najtrudniejszej pozycji."
+  },
+  {
+    "id": "dict-bulgarian-split-squat",
+    "name": "Przysiad bułgarski",
+    "category": "Przysiady",
+    "description": "Jednonóż z tylną stopą uniesioną. Równowaga, siła nóg i stabilizacja bioder."
+  },
+  {
+    "id": "dict-snatch-pull",
+    "name": "Ciągi do rwania",
+    "category": "Ciągi i ruchy pomocnicze",
+    "description": "Ciąg rwaniowy bez przyjęcia. Wzmacnia pierwszą i drugą fazę, pozycję pleców i kontakt z udem."
+  },
+  {
+    "id": "dict-hang-snatch-pull",
+    "name": "Ciągi do rwania z kolan",
+    "category": "Ciągi i ruchy pomocnicze",
+    "description": "Ciąg rwaniowy z pozycji kolan. Skupienie na agresywnym wybiciu bioder i prowadzeniu łokci."
+  },
+  {
+    "id": "dict-snatch-high-pull",
+    "name": "High pull rwaniowy",
+    "category": "Ciągi i ruchy pomocnicze",
+    "description": "Wybicie sztangi rwaniowym chwytem do wysokości klatki. Dynamika bioder i wysokie łokcie."
+  },
+  {
+    "id": "dict-clean-pull",
+    "name": "Ciągi do podrzutu",
+    "category": "Ciągi i ruchy pomocnicze",
+    "description": "Ciąg zarzutowy bez przyjęcia. Siła nóg, stabilny grzbiet i pełna ekstensja bioder."
+  },
+  {
+    "id": "dict-hang-clean-pull",
+    "name": "Ciągi do podrzutu z kolan",
+    "category": "Ciągi i ruchy pomocnicze",
+    "description": "Ciąg zarzutowy z kolan. Technika drugiej fazy bez zmęczenia pełnego clean."
+  },
+  {
+    "id": "dict-clean-high-pull",
+    "name": "High pull do zarzutu",
+    "category": "Ciągi i ruchy pomocnicze",
+    "description": "Wybicie sztangi klasycznym chwytem do wysokości klatki. Transfer mocy z nóg na sztangę."
+  },
+  {
+    "id": "dict-strict-press",
+    "name": "Wyciskanie żołnierskie",
+    "category": "Wyciskania",
+    "description": "Wyciskanie ze sztangi stojąc bez pomocy nóg. Siła barków, tricepsa i stabilizacji core."
+  },
+  {
+    "id": "dict-push-press",
+    "name": "Wycisko-podrzut",
+    "category": "Wyciskania",
+    "description": "Wyciskanie z lekkim dip&drive. Buduje siłę nad głową i timing pod wybijanie."
+  },
+  {
+    "id": "dict-snatch-press",
+    "name": "Wyciskanie rwaniowe",
+    "category": "Wyciskania",
+    "description": "Wyciskanie rwaniowym chwytem. Mobilność barków i stabilizacja nad głową w szerokim chwycie."
+  },
+  {
+    "id": "dict-push-jerk",
+    "name": "Wycisko-wybijanie",
+    "category": "Wyciskania",
+    "description": "Push press z ponownym zejściem nóg pod sztangę. Most między push press a pełnym jerk."
+  },
+  {
+    "id": "dict-deadlift",
+    "name": "Martwy ciąg",
+    "category": "Siła ogólna",
+    "description": "Martwy ciąg klasyczny. Neutralny kręgosłup, sztanga blisko nóg, pełna ekstensja bioder na górze."
+  },
+  {
+    "id": "dict-snatch-grip-deadlift",
+    "name": "Martwy ciąg rwaniowym chwytem",
+    "category": "Siła ogólna",
+    "description": "Martwy ciąg szerokim chwytem. Wzmacnia chwyt, górę pleców i pozycję startową pod rwanie."
+  },
+  {
+    "id": "dict-romanian-deadlift",
+    "name": "Rumuński martwy ciąg",
+    "category": "Siła ogólna",
+    "description": "Martwy z lekkim ugięciem kolan — nacisk na tylne uda i pośladki. Kontroluj ruch w dolnej fazie."
+  },
+  {
+    "id": "dict-hip-thrust",
+    "name": "Hip thrust",
+    "category": "Siła ogólna",
+    "description": "Unos bioder ze sztangą. Siła pośladków i ekstensja bioder — transfer na wybicie w bojach."
+  },
+  {
+    "id": "dict-pull-up",
+    "name": "Podciąganie na drążku",
+    "category": "Plecy i chwyt",
+    "description": "Podciąganie nachwytem. Siła chwytu, łopatek i mięśni grzbietu — fundament pod ciągi olimpijskie."
+  },
+  {
+    "id": "dict-snatch-grip-pull-up",
+    "name": "Podciąganie rwaniowym chwytem",
+    "category": "Plecy i chwyt",
+    "description": "Podciąganie szerokim chwytem rwaniowym. Mobilność barków i siła górnej części pleców."
+  },
+  {
+    "id": "dict-barbell-row",
+    "name": "Wiosłowanie sztangą",
+    "category": "Plecy i chwyt",
+    "description": "Wiosłowanie w opadzie tułowia. Stabilny core, ściąganie łopatek, kontrola pozycji pleców."
+  },
+  {
+    "id": "dict-pendlay-row",
+    "name": "Wiosłowanie z podłogi (Pendlay)",
+    "category": "Plecy i chwyt",
+    "description": "Wiosłowanie z resetem sztangi na podłodze. Eksplozywność i siła górnej części pleców."
+  },
+  {
+    "id": "dict-face-pull",
+    "name": "Face pull",
+    "category": "Plecy i chwyt",
+    "description": "Przyciąganie liny do twarzy. Rotatory barków, zdrowie łopatek — profilaktyka kontuzji."
+  },
+  {
+    "id": "dict-shrug",
+    "name": "Wzruszenia barkami",
+    "category": "Plecy i chwyt",
+    "description": "Wzruszenia ze sztangą lub hantlami. Siła górnej części trapezu i stabilizacja barków."
+  },
+  {
+    "id": "dict-plank",
+    "name": "Plank",
+    "category": "Core i stabilizacja",
+    "description": "Deska na przedramionach. Neutralna pozycja miednicy, napięty brzuch i pośladki."
+  },
+  {
+    "id": "dict-hollow-hold",
+    "name": "Hollow hold",
+    "category": "Core i stabilizacja",
+    "description": "Pozycja „łódki” — dolna część pleców przy podłodze. Fundament stabilizacji w bojach."
+  },
+  {
+    "id": "dict-pallof-press",
+    "name": "Pallof press",
+    "category": "Core i stabilizacja",
+    "description": "Wyciskanie liny/oporu przed klatką stojąc bokiem do maszyny. Antyrotacja — stabilny core."
+  },
+  {
+    "id": "dict-turkish-get-up",
+    "name": "Turkish get-up",
+    "category": "Core i stabilizacja",
+    "description": "Wstawanie z leżenia z ciężarem nad głową. Koordynacja, stabilizacja barków i mobilność."
+  },
+  {
+    "id": "dict-hanging-leg-raise",
+    "name": "Unoszenie nóg w zwisie",
+    "category": "Core i stabilizacja",
+    "description": "Unoszenie nóg do poziomu bioder lub wyżej w zwisie. Siła dolnego brzucha i chwyt."
+  },
+  {
+    "id": "dict-band-shoulder-rotation",
+    "name": "Rotacja barków z taśmą",
+    "category": "Mobilizacja i aktywacja",
+    "description": "Ćwiczenia rotacji barków z gumą oporową. Rozgrzewka przed bojami i wyciskaniami."
+  },
+  {
+    "id": "dict-goblet-squat-stretch",
+    "name": "Głęboki przysiad z kettlebellem (mobilizacja)",
+    "category": "Mobilizacja i aktywacja",
+    "description": "Głęboki przysiad z ciężarem przy klatce — mobilizacja kostek, bioder i odcinka piersiowego."
+  },
+  {
+    "id": "dict-cat-camel",
+    "name": "Cat-camel (mobilizacja kręgosłupa)",
+    "category": "Mobilizacja i aktywacja",
+    "description": "Naprzemienna wygięcie i prostowanie kręgosłupa w klęku. Rozgrzewka przed cięższą pracą."
+  },
+  {
+    "id": "dict-bench-press",
+    "name": "Wyciskanie leżąc",
+    "category": "Siła ogólna",
+    "description": "Wyciskanie sztangi na ławce. Użyteczne w programach uzupełniających i module „Inne ćwiczenia”."
+  },
+  {
+    "id": "dict-dips",
+    "name": "Pompki na poręczach (dipsy)",
+    "category": "Siła ogólna",
+    "description": "Dipsy na poręczach lub ringach. Siła tricepsa, klatki i stabilizacji barków."
+  }
+]
