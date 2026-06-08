@@ -14,7 +14,7 @@ fn pool_size() -> usize {
     std::env::var("DATABASE_POOL_SIZE")
         .ok()
         .and_then(|v| v.parse().ok())
-        .filter(|&n| n >= 1 && n <= 64)
+        .filter(|&n| (1..=64).contains(&n))
         .unwrap_or_else(|| {
             std::thread::available_parallelism()
                 .map(|n| (n.get() * 2).clamp(4, 16))
@@ -58,10 +58,10 @@ impl Db {
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let database = build_database(&backend).await?;
 
-        if backend.uses_local_sqlite_engine() {
-            if let Ok(conn) = database.connect() {
-                let _ = apply_connection_pragmas(&conn).await;
-            }
+        if backend.uses_local_sqlite_engine()
+            && let Ok(conn) = database.connect()
+        {
+            let _ = apply_connection_pragmas(&conn).await;
         }
 
         let manager = Manager::from_libsql_database(database);
@@ -70,10 +70,10 @@ impl Db {
             .runtime(Runtime::Tokio1)
             .build()?;
 
-        eprintln!(
-            "[db] pool size={} mode={}",
-            pool_size(),
-            backend.describe()
+        tracing::info!(
+            pool_size = pool_size(),
+            mode = backend.describe(),
+            "database pool ready"
         );
 
         Ok(Self { pool, backend })
@@ -101,6 +101,7 @@ impl Db {
         match conn.execute(sql, params.clone()).await {
             Ok(v) => Ok(v),
             Err(e) if is_stream_not_found_error(&e) => {
+                tracing::warn!(error = %e, "db execute: stream not found — retry");
                 let conn2 = self.raw().await;
                 conn2.execute(sql, params).await
             }
@@ -116,6 +117,7 @@ impl Db {
         match conn.query(sql, params.clone()).await {
             Ok(v) => Ok(v),
             Err(e) if is_stream_not_found_error(&e) => {
+                tracing::warn!(error = %e, "db query: stream not found — retry");
                 let conn2 = self.raw().await;
                 conn2.query(sql, params).await
             }

@@ -137,9 +137,10 @@ pub fn spawn_chat_pruner_task(db: Db, metrics: Arc<WorkerMetrics>) -> JoinHandle
                         Some(format!("deleted_threads={n}")),
                     );
                     if n > 0 {
-                        eprintln!(
-                            "[chat-pruner] usunięto {n} nieaktywnych wątków czatu (>{} dni bez wiadomości)",
-                            CHAT_INACTIVITY_DAYS
+                        tracing::info!(
+                            deleted_threads = n,
+                            inactivity_days = CHAT_INACTIVITY_DAYS,
+                            "chat-pruner scheduler: usunięto nieaktywne wątki"
                         );
                     }
                 }
@@ -150,7 +151,7 @@ pub fn spawn_chat_pruner_task(db: Db, metrics: Arc<WorkerMetrics>) -> JoinHandle
                         false,
                         Some(e.to_string()),
                     );
-                    eprintln!("[chat-pruner] błąd przebiegu: {e}");
+                    tracing::error!(error = %e, "chat-pruner scheduler: błąd przebiegu");
                 }
             }
             tokio::time::sleep(interval).await;

@@ -49,12 +49,9 @@ pub async fn ping_backend() -> Json<PingDto> {
     let instance = std::env::var("BACKEND_INSTANCE_LABEL")
         .ok()
         .filter(|s| !s.trim().is_empty());
-    println!(
-        "[slavia-backend] GET /api/system/ping — ok{}",
-        instance
-            .as_ref()
-            .map(|s| format!(" · instance={s:?}"))
-            .unwrap_or_default()
+    tracing::debug!(
+        instance = instance.as_deref(),
+        "GET /api/system/ping"
     );
     Json(PingDto { ok: true, instance })
 }

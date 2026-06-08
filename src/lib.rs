@@ -8,6 +8,7 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 pub mod audit;
 pub mod chat_cleanup;
 pub mod db;
+pub mod logging;
 pub mod dto;
 pub mod middleware;
 pub mod models;
@@ -84,9 +85,10 @@ pub async fn create_app(
                         Some(format!("deleted_threads={n}")),
                     );
                     if n > 0 {
-                        eprintln!(
-                            "[chat-pruner] start: usunięto {n} nieaktywnych wątków czatu (>{} dni)",
-                            chat_cleanup::CHAT_INACTIVITY_DAYS
+                        tracing::info!(
+                            deleted_threads = n,
+                            inactivity_days = chat_cleanup::CHAT_INACTIVITY_DAYS,
+                            "chat-pruner startup: usunięto nieaktywne wątki"
                         );
                     }
                 }
@@ -97,7 +99,7 @@ pub async fn create_app(
                         false,
                         Some(e.to_string()),
                     );
-                    eprintln!("[chat-pruner] start: błąd: {e}");
+                    tracing::error!(error = %e, "chat-pruner startup: błąd");
                 }
             }
         });
@@ -123,8 +125,9 @@ pub async fn create_app(
                         Some(format!("created_auto_payments={n}")),
                     );
                     if n > 0 {
-                        eprintln!(
-                            "[standing-order] start: utworzono {n} auto-składek za bieżący miesiąc."
+                        tracing::info!(
+                            created = n,
+                            "standing-order startup: utworzono auto-składki za bieżący miesiąc"
                         );
                     }
                 }
@@ -135,7 +138,7 @@ pub async fn create_app(
                         false,
                         Some(e.to_string()),
                     );
-                    eprintln!("[standing-order] start: błąd: {e}");
+                    tracing::error!(error = %e, "standing-order startup: błąd");
                 }
             }
         });
