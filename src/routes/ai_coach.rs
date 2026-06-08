@@ -1,5 +1,7 @@
 //! Trener AI (Groq + LLaMA) — czat, plany treningowe, suplementacja, regeneracja.
 
+#![allow(clippy::too_many_arguments)]
+
 use axum::{
     Json,
     extract::State,
@@ -15,7 +17,16 @@ use crate::middleware::auth::{Claims, claims_has_staff_access};
 use crate::models::Role;
 use crate::state::AppState;
 
-const SYSTEM_INSTRUCTION: &str = r#"Jesteś Slavia AI Trener — wirtualny trener dwuboju olimpijskiego (weightlifting) w ekosystemie klubu CKS Slavia Ruda Śląska.
+pub(crate) const SYSTEM_INSTRUCTION: &str = r#"Jesteś Slavia AI Trener — wirtualny trener dwuboju olimpijskiego (weightlifting) w ekosystemie klubu CKS Slavia Ruda Śląska. Mówisz jak trener z hali, który jednocześnie zna się na rzeczy i naprawdę kibicuje zawodnikowi.
+
+## Osobowość i ton (priorytet)
+- Pisz do użytkownika na **Ty**, ciepło i bezpośrednio — jak mentor z platformy, nie jak podręcznik.
+- Bądź **motywujący**: doceniaj wysiłek, normalizuj nieudane próby („spadła? OK, następna — uczymy się z każdej”), podkreślaj progres i sens pracy.
+- Bądź **emocjonalny z umiarem**: entuzjazm przy sukcesach, spokój i wsparcie przy kontuzjach i frustracji — bez taniego patosu.
+- **Żarty dwubojowe** — tak, ale z klasą: lekkie nawiązania do hali (sztanga nie negocjuje, hole to nie kanapa, bent arm to nie „kreatywna interpretacja reguł”, walkout dłuższy niż serial). Max **jeden** krótki żart lub żartobliwa metafora na odpowiedź; przy bólu, kontuzji lub poważnym pytaniu — **zero** żartów.
+- Używaj **języka dwuboju** naturalnie: rwanie / snatch, podrzut / clean & jerk, gryf, platforma, hole, punch, turnover, catch, front rack, dip-drive, triple extension, walkout, PR, CM, RPE — po polsku z angielskim w nawiasie przy pierwszym użyciu w wątku.
+- Gdy masz **profil zawodnika** w kontekście — odwołuj się do niego po imieniu, wyników, dziennika i planu; pokaż, że „pamiętasz” jego drogę.
+- Zakończ często krótką **zachętą do działania** (jedno zdanie), np. konkretny fokus na następny trening.
 
 Twoja ekspertyza obejmuje:
 
@@ -41,11 +52,12 @@ Twoja ekspertyza obejmuje:
    - Nie stawiaj diagnoz medycznych — przy ostrym bólu, obrzęku, drętwieniu, utracie siły: natychmiast specjalista.
 
 Zasady odpowiedzi:
-- Pisz po polsku, konkretnie, z nagłówkami i listami; przy planach używaj tabel lub sekcji per dzień (pon–nd).
-- Używaj terminologii PL + EN w nawiasie przy pierwszym użyciu (np. rwanie / snatch).
-- Jesteś trenerem pomocniczym — przy ważnych decyzjach zachęcaj do konsultacji z trenerem klubu.
+- Pisz po polsku, konkretnie, w formacie Markdown (nagłówki ##, listy, **pogrubienia**, tabele); przy planach używaj tabel lub sekcji per dzień (pon–nd).
+- Mieszaj wiedzę z ludzkim tonem — najpierw konkret (co robić), potem krótkie „dlaczego to ma sens” w języku zawodnika.
+- Jesteś trenerem pomocniczym — przy ważnych decyzjach zachęcaj do konsultacji z trenerem klubu Slavia.
 - Nie wymyślaj danych zawodnika — jeśli brak kontekstu, zapytaj lub podaj plan szablonowy z placeholderami.
-- Gdy w kontekście są wpisy dziennika treningów, wyniki z zawodów, obecności lub aktywny plan klubowy — odwołuj się do nich w odpowiedzi (objętość, ostatnie starty, trendy)."#;
+- Gdy w kontekście są wpisy dziennika treningów, wyniki z zawodów, obecności lub aktywny plan klubowy — odwołuj się do nich w odpowiedzi (objętość, ostatnie starty, trendy).
+- Gdy użytkownik załączy zdjęcie, klatki wideo lub plik tekstowy — przeanalizuj je w kontekście dwuboju (technika, plan, regeneracja) i odnieś się konkretnie do tego, co widzisz lub czytasz."#;
 
 const DEFAULT_GROQ_MODEL: &str = "llama-3.1-70b-versatile";
 
@@ -60,8 +72,12 @@ const PLAN_ITEMS_CONTEXT_LIMIT: usize = 12;
 const MAX_PUBLIC_MESSAGE_LEN: usize = 1_200;
 const MAX_PUBLIC_HISTORY_TURNS: usize = 6;
 const MAX_OUTPUT_TOKENS_PUBLIC: u32 = 768;
+const MAX_CHAT_ATTACHMENTS: usize = 8;
+const MAX_CHAT_ATTACHMENT_B64_BYTES: usize = 600_000;
+const MAX_CHAT_TEXT_ATTACHMENT_CHARS: usize = 12_000;
+const DEFAULT_GROQ_VISION_MODEL: &str = "llama-3.2-11b-vision-preview";
 
-const PUBLIC_SYSTEM_INSTRUCTION: &str = r#"Jesteś asystentem CKS Slavia Ruda Śląska — klubu podnoszenia ciężarów i dwuboju olimpijskiego.
+pub(crate) const PUBLIC_SYSTEM_INSTRUCTION: &str = r#"Jesteś asystentem CKS Slavia Ruda Śląska — klubu podnoszenia ciężarów i dwuboju olimpijskiego.
 
 Odpowiadasz gościom na stronie klubu po polsku, krótko i przyjaźnie.
 
@@ -98,6 +114,16 @@ pub struct AiCoachPlanContext {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct AiCoachAttachment {
+    /// image | text
+    pub kind: String,
+    pub name: Option<String>,
+    pub mime_type: Option<String>,
+    pub data_base64: Option<String>,
+    pub text_content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct AiCoachChatRequest {
     pub message: String,
     /// chat | plan | supplements | recovery | barbell_path
@@ -105,7 +131,10 @@ pub struct AiCoachChatRequest {
     pub history: Option<Vec<AiCoachHistoryMessage>>,
     /// Kadra: kontekst zawodnika (PB, regeneracja).
     pub athlete_id: Option<String>,
+    /// Zawodnik: true = własny profil klubowy, false = bez kontekstu (domyślnie true).
+    pub use_athlete_context: Option<bool>,
     pub plan_context: Option<AiCoachPlanContext>,
+    pub attachments: Option<Vec<AiCoachAttachment>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -164,7 +193,12 @@ pub struct AiCoachPublicChatResponse {
 #[derive(Serialize, Deserialize)]
 struct GroqChatMessage {
     role: String,
-    content: String,
+    content: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct GroqChatMessageIn {
+    content: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -184,7 +218,7 @@ struct GroqChatRequest {
 
 #[derive(Deserialize)]
 struct GroqChatChoice {
-    message: Option<GroqChatMessage>,
+    message: Option<GroqChatMessageIn>,
 }
 
 #[derive(Deserialize)]
@@ -282,12 +316,12 @@ fn normalize_mode(raw: Option<&str>) -> &'static str {
     }
 }
 
-fn mode_prefix(mode: &str) -> &'static str {
+pub(crate) fn mode_prefix(mode: &str) -> &'static str {
     match mode {
-        "plan" => "[Tryb: generator planu treningowego]\nWygeneruj szczegółowy plan tygodniowy dwuboju olimpijskiego (faza eksplozywna). Użyj dni tygodnia, % CM/RPE, serie×powt., akcesoria.\n\n",
-        "supplements" => "[Tryb: suplementacja sportowa]\nSkup się na suplementacji pod siłownię i dwubój olimpijski — dawki orientacyjne, timing, bezpieczeństwo, disclaimer medyczny.\n\n",
-        "recovery" => "[Tryb: kontuzje i regeneracja]\nSkup się na bezpiecznym powrocie do treningu, regresji obciążeń, mobility i kiedy iść do specjalisty. Nie diagnozuj.\n\n",
-        "barbell_path" => "[Tryb: analiza toru sztangi z wideo]\nMasz metryki numeryczne toru (współrz. znormalizowane 0–1, nagranie z profilu). Oceń technikę rwania/podrzutu: zbliżenie sztangi, kontakt z nogami, płynność toru, faza eksplozywna. Podaj 3–5 konkretnych wskazówek po polsku (lista). Nie powtarzaj surowych liczb bez interpretacji. Heurystyki lokalne mogą być w treści — rozwiń je treningowo. Nie zastępujesz trenera.\n\n",
+        "plan" => "[Tryb: generator planu treningowego]\nWygeneruj szczegółowy plan tygodniowy dwuboju olimpijskiego (faza eksplozywna). Użyj dni tygodnia, % CM/RPE, serie×powt., akcesoria. Ton: energiczny trener planujący mikrocykl — możesz jednym zdaniem zmotywować do tygodnia, ale plan ma być konkretny i czytelny.\n\n",
+        "supplements" => "[Tryb: suplementacja sportowa]\nSkup się na suplementacji pod siłownię i dwubój olimpijski — dawki orientacyjne, timing, bezpieczeństwo, disclaimer medyczny. Ton: praktyczny i życzliwy; bez żartów o zdrowiu.\n\n",
+        "recovery" => "[Tryb: kontuzje i regeneracja]\nSkup się na bezpiecznym powrocie do treningu, regresji obciążeń, mobility i kiedy iść do specjalisty. Nie diagnozuj. Ton: empatyczny, spokojny, wspierający — **bez żartów**.\n\n",
+        "barbell_path" => "[Tryb: analiza toru sztangi z wideo]\nMasz metryki numeryczne toru (współrz. znormalizowane 0–1, nagranie z profilu). Oceń technikę rwania/podrzutu: zbliżenie sztangi, kontakt z nogami, płynność toru, faza eksplozywna. Podaj 3–5 konkretnych wskazówek po polsku (lista). Nie powtarzaj surowych liczb bez interpretacji. Heurystyki lokalne mogą być w treści — rozwiń je treningowo. Możesz dodać jedną żartobliwą metaforę o torze (np. sztanga „zwiedza salę”), ale priorytet to technika. Nie zastępujesz trenera.\n\n",
         _ => "",
     }
 }
@@ -297,10 +331,10 @@ fn format_plan_context(ctx: &AiCoachPlanContext) -> String {
     if let Some(d) = ctx.training_days_per_week {
         lines.push(format!("- Dni treningowe w tygodniu: {d}"));
     }
-    if let Some(ref e) = ctx.experience {
-        if !e.trim().is_empty() {
-            lines.push(format!("- Doświadczenie: {}", e.trim()));
-        }
+    if let Some(ref e) = ctx.experience
+        && !e.trim().is_empty()
+    {
+        lines.push(format!("- Doświadczenie: {}", e.trim()));
     }
     if let Some(v) = ctx.snatch_max_kg {
         lines.push(format!("- CM rwanie: {v} kg"));
@@ -311,25 +345,25 @@ fn format_plan_context(ctx: &AiCoachPlanContext) -> String {
     if let Some(v) = ctx.squat_max_kg {
         lines.push(format!("- CM przysiad: {v} kg"));
     }
-    if let Some(ref g) = ctx.goal {
-        if !g.trim().is_empty() {
-            lines.push(format!("- Cel: {}", g.trim()));
-        }
+    if let Some(ref g) = ctx.goal
+        && !g.trim().is_empty()
+    {
+        lines.push(format!("- Cel: {}", g.trim()));
     }
-    if let Some(ref i) = ctx.injuries {
-        if !i.trim().is_empty() {
-            lines.push(format!("- Kontuzje / ograniczenia: {}", i.trim()));
-        }
+    if let Some(ref i) = ctx.injuries
+        && !i.trim().is_empty()
+    {
+        lines.push(format!("- Kontuzje / ograniczenia: {}", i.trim()));
     }
-    if let Some(ref w) = ctx.week_start {
-        if !w.trim().is_empty() {
-            lines.push(format!("- Tydzień od: {}", w.trim()));
-        }
+    if let Some(ref w) = ctx.week_start
+        && !w.trim().is_empty()
+    {
+        lines.push(format!("- Tydzień od: {}", w.trim()));
     }
-    if let Some(ref n) = ctx.notes {
-        if !n.trim().is_empty() {
-            lines.push(format!("- Notatki: {}", n.trim()));
-        }
+    if let Some(ref n) = ctx.notes
+        && !n.trim().is_empty()
+    {
+        lines.push(format!("- Notatki: {}", n.trim()));
     }
     if lines.len() == 1 {
         String::new()
@@ -788,6 +822,261 @@ async fn fetch_athlete_context_for_user(state: &AppState, user_id: &str) -> Opti
     fetch_athlete_context(state, &athlete_id).await
 }
 
+fn groq_vision_model() -> String {
+    std::env::var("GROQ_VISION_MODEL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_GROQ_VISION_MODEL.to_string())
+}
+
+fn groq_message_text(content: &serde_json::Value) -> String {
+    match content {
+        serde_json::Value::String(s) => s.trim().to_string(),
+        serde_json::Value::Array(parts) => parts
+            .iter()
+            .filter_map(|p| {
+                if p.get("type").and_then(|v| v.as_str()) == Some("text") {
+                    p.get("text").and_then(|v| v.as_str()).map(str::trim)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+struct ProcessedAttachments {
+    image_parts: Vec<(String, String)>,
+    text_blocks: Vec<String>,
+}
+
+fn mime_for_image(mime: Option<&str>) -> &'static str {
+    match mime.unwrap_or("image/jpeg").trim().to_lowercase().as_str() {
+        "image/png" => "image/png",
+        "image/webp" => "image/webp",
+        "image/gif" => "image/gif",
+        _ => "image/jpeg",
+    }
+}
+
+fn process_chat_attachments(raw: Option<Vec<AiCoachAttachment>>) -> Result<ProcessedAttachments, ApiError> {
+    let mut image_parts = Vec::new();
+    let mut text_blocks = Vec::new();
+    let items = raw.unwrap_or_default();
+    if items.len() > MAX_CHAT_ATTACHMENTS {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            format!("Za dużo załączników (max {MAX_CHAT_ATTACHMENTS})"),
+        ));
+    }
+
+    for att in items {
+        let kind = att.kind.trim().to_lowercase();
+        let label = att
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("plik");
+
+        if kind == "text" {
+            let text = att
+                .text_content
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    api_error(StatusCode::BAD_REQUEST, "Pusty załącznik tekstowy")
+                })?;
+            if text.chars().count() > MAX_CHAT_TEXT_ATTACHMENT_CHARS {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("Załącznik tekstowy jest za długi (max {MAX_CHAT_TEXT_ATTACHMENT_CHARS} znaków)"),
+                ));
+            }
+            text_blocks.push(format!("--- Plik: {label} ---\n{text}"));
+            continue;
+        }
+
+        if kind == "image" {
+            let b64 = att
+                .data_base64
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    api_error(StatusCode::BAD_REQUEST, "Brak danych obrazu w załączniku")
+                })?;
+            if b64.len() > MAX_CHAT_ATTACHMENT_B64_BYTES {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    "Załączony obraz jest za duży",
+                ));
+            }
+            let mime = mime_for_image(att.mime_type.as_deref()).to_string();
+            image_parts.push((mime, b64.to_string()));
+            continue;
+        }
+
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Nieobsługiwany typ załącznika (dozwolone: image, text)",
+        ));
+    }
+
+    Ok(ProcessedAttachments {
+        image_parts,
+        text_blocks,
+    })
+}
+
+async fn call_groq_vision_chat(
+    api_key: &str,
+    model: &str,
+    system_instruction: &str,
+    user_text: String,
+    history: &[AiCoachHistoryMessage],
+    images: &[(String, String)],
+    temperature: f32,
+    max_output_tokens: u32,
+) -> Result<LlmCallResult, (StatusCode, String)> {
+    let mut messages = vec![GroqChatMessage {
+        role: "system".to_string(),
+        content: serde_json::Value::String(system_instruction.to_string()),
+    }];
+
+    for h in history {
+        let role = if h.role == "assistant" || h.role == "model" {
+            "assistant"
+        } else {
+            "user"
+        };
+        let text = h.content.trim();
+        if text.is_empty() {
+            continue;
+        }
+        messages.push(GroqChatMessage {
+            role: role.to_string(),
+            content: serde_json::Value::String(text.to_string()),
+        });
+    }
+
+    let mut content = vec![serde_json::json!({"type": "text", "text": user_text})];
+    for (mime, b64) in images {
+        content.push(serde_json::json!({
+            "type": "image_url",
+            "image_url": {"url": format!("data:{mime};base64,{b64}")}
+        }));
+    }
+
+    messages.push(GroqChatMessage {
+        role: "user".to_string(),
+        content: serde_json::Value::Array(content),
+    });
+
+    let body = GroqChatRequest {
+        model: model.to_string(),
+        messages,
+        temperature,
+        max_tokens: max_output_tokens,
+        response_format: None,
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let res = client
+        .post(GROQ_CHAT_URL)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Groq vision: {e}")))?;
+
+    let status = res.status();
+    let parsed: GroqChatResponse = res.json().await.map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("Nieprawidłowa odpowiedź Groq vision: {e}"),
+        )
+    })?;
+
+    if !status.is_success() {
+        let msg = parsed
+            .error
+            .and_then(|e| e.message)
+            .unwrap_or_else(|| format!("Groq vision HTTP {status}"));
+        return Err(groq_error_user_message(&msg));
+    }
+
+    let text = parsed
+        .choices
+        .and_then(|c| c.into_iter().next())
+        .and_then(|c| c.message)
+        .and_then(|m| m.content)
+        .map(|c| groq_message_text(&c))
+        .unwrap_or_default();
+
+    if text.is_empty() {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            "Groq vision zwróciło pustą odpowiedź".to_string(),
+        ));
+    }
+
+    Ok(LlmCallResult {
+        text,
+        model: parsed.model.unwrap_or_else(|| model.to_string()),
+    })
+}
+
+async fn invoke_llm_with_attachments(
+    state: &AppState,
+    user_id: &str,
+    user_text: String,
+    history: &[AiCoachHistoryMessage],
+    system_instruction: &str,
+    temperature: f32,
+    max_output_tokens: u32,
+    images: &[(String, String)],
+) -> Result<LlmCallResult, ApiError> {
+    let club_key = state.groq_api_key.trim();
+    if club_key.is_empty() {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Trener AI niedostępny — brak GROQ_API_KEY na backendzie.",
+        ));
+    }
+    if !groq_key_format_ok(club_key) {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Nieprawidłowy klucz Groq klubu — skontaktuj się z administratorem.",
+        ));
+    }
+
+    enforce_chat_limits(user_id, true)?;
+
+    let vision_model = groq_vision_model();
+    call_groq_vision_chat(
+        club_key,
+        &vision_model,
+        system_instruction,
+        user_text,
+        history,
+        images,
+        temperature,
+        max_output_tokens,
+    )
+    .await
+    .map_err(|(code, msg)| api_error(code, msg))
+}
+
 fn configured_groq_model(state: &AppState) -> String {
     if state.groq_model.trim().is_empty() {
         DEFAULT_GROQ_MODEL.to_string()
@@ -924,7 +1213,7 @@ async fn call_groq_single(
     let model = model.trim().to_string();
     let mut messages = vec![GroqChatMessage {
         role: "system".to_string(),
-        content: system_instruction.to_string(),
+        content: serde_json::Value::String(system_instruction.to_string()),
     }];
     for h in history {
         let role = if h.role == "assistant" || h.role == "model" {
@@ -938,12 +1227,12 @@ async fn call_groq_single(
         }
         messages.push(GroqChatMessage {
             role: role.to_string(),
-            content: text.to_string(),
+            content: serde_json::Value::String(text.to_string()),
         });
     }
     messages.push(GroqChatMessage {
         role: "user".to_string(),
-        content: user_text,
+        content: serde_json::Value::String(user_text),
     });
 
     let body = GroqChatRequest {
@@ -998,7 +1287,8 @@ async fn call_groq_single(
         .choices
         .and_then(|c| c.into_iter().next())
         .and_then(|c| c.message)
-        .map(|m| m.content.trim().to_string())
+        .and_then(|m| m.content)
+        .map(|c| groq_message_text(&c))
         .unwrap_or_default();
 
     if text.is_empty() {
@@ -1245,8 +1535,8 @@ pub async fn coach_import_plan(
     state
         .db
         .execute(
-            "INSERT INTO training_plans (id, athlete_id, title, goal, week_start, status, coach_note, progress_percent, created_by, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?9)",
+            "INSERT INTO training_plans (id, athlete_id, title, goal, week_start, duration_weeks, status, coach_note, progress_percent, created_by, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, 0, ?8, ?9, ?9)",
             (
                 plan_id.clone(),
                 athlete_id.clone(),
@@ -1286,8 +1576,8 @@ pub async fn coach_import_plan(
         state
             .db
             .execute(
-                "INSERT INTO training_plan_items (id, plan_id, day_of_week, exercise_id, custom_exercise_name, sets, reps, intensity_percent, weight_kg, notes, sort_order, created_at) \
-                 VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                "INSERT INTO training_plan_items (id, plan_id, week_number, day_of_week, exercise_id, custom_exercise_name, sets, reps, intensity_percent, weight_kg, notes, sort_order, created_at) \
+                 VALUES (?1, ?2, 1, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 (
                     item_id,
                     plan_id.clone(),
@@ -1416,13 +1706,19 @@ pub async fn coach_public_chat(
         .rev()
         .collect::<Vec<_>>();
 
+    let ai_settings = crate::routes::ai_coach_settings::load_ai_coach_settings(&state).await?;
+    let public_instruction =
+        crate::routes::ai_coach_settings::resolve_public_system_instruction(&ai_settings);
+    let public_temp =
+        crate::routes::ai_coach_settings::resolve_public_chat_temperature(&ai_settings);
+
     let llm_res = call_groq_with_key(
         key,
         &state.groq_model,
         message.to_string(),
         &history,
-        PUBLIC_SYSTEM_INSTRUCTION,
-        0.55,
+        &public_instruction,
+        public_temp,
         false,
         MAX_OUTPUT_TOKENS_PUBLIC,
     )
@@ -1446,8 +1742,12 @@ pub async fn coach_chat(
         ));
     }
 
+    let attachments = process_chat_attachments(payload.attachments)?;
+    let has_images = !attachments.image_parts.is_empty();
+    let has_text_files = !attachments.text_blocks.is_empty();
+
     let message = payload.message.trim();
-    if message.is_empty() {
+    if message.is_empty() && !has_images && !has_text_files {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
             "Treść wiadomości nie może być pusta",
@@ -1474,8 +1774,17 @@ pub async fn coach_chat(
         .rev()
         .collect::<Vec<_>>();
 
+    let ai_settings = crate::routes::ai_coach_settings::load_ai_coach_settings(&state).await?;
+    let coach_instruction =
+        crate::routes::ai_coach_settings::resolve_coach_system_instruction(&ai_settings);
+    let chat_temp = crate::routes::ai_coach_settings::resolve_chat_temperature(&ai_settings);
+    let vision_temp =
+        crate::routes::ai_coach_settings::resolve_vision_chat_temperature(&ai_settings);
+
     let mut augmented = String::new();
-    augmented.push_str(mode_prefix(mode));
+    augmented.push_str(
+        &crate::routes::ai_coach_settings::resolve_mode_prefix(mode, &ai_settings),
+    );
 
     if let Some(ref ctx) = payload.plan_context {
         augmented.push_str(&format_plan_context(ctx));
@@ -1487,26 +1796,60 @@ pub async fn coach_chat(
             augmented.push_str("\n\n");
         }
     } else if claims.roles.contains(&Role::Athlete) {
-        if let Some(ctx) = fetch_athlete_context_for_user(&state, &claims.sub).await {
+        let use_own_context = payload.use_athlete_context.unwrap_or(true);
+        if use_own_context
+            && let Some(ctx) = fetch_athlete_context_for_user(&state, &claims.sub).await
+        {
             augmented.push_str(&ctx);
             augmented.push_str("\n\n");
         }
     }
 
-    augmented.push_str(message);
+    if has_text_files {
+        augmented.push_str("Załączone pliki tekstowe:\n");
+        augmented.push_str(&attachments.text_blocks.join("\n\n"));
+        augmented.push_str("\n\n");
+    }
 
-    let llm_res = invoke_llm(
-        &state,
-        &claims.sub,
-        augmented,
-        &history,
-        SYSTEM_INSTRUCTION,
-        0.65,
-        false,
-        MAX_OUTPUT_TOKENS_CHAT,
-        false,
-    )
-    .await?;
+    if has_images {
+        augmented.push_str(&format!(
+            "Użytkownik dołączył {} obraz(ów)/klatki wideo — przeanalizuj je wizualnie.\n\n",
+            attachments.image_parts.len()
+        ));
+    }
+
+    augmented.push_str(if message.is_empty() {
+        "Przeanalizuj załączone materiały."
+    } else {
+        message
+    });
+
+    let llm_res = if has_images {
+        invoke_llm_with_attachments(
+            &state,
+            &claims.sub,
+            augmented,
+            &history,
+            &coach_instruction,
+            vision_temp,
+            MAX_OUTPUT_TOKENS_CHAT,
+            &attachments.image_parts,
+        )
+        .await?
+    } else {
+        invoke_llm(
+            &state,
+            &claims.sub,
+            augmented,
+            &history,
+            &coach_instruction,
+            chat_temp,
+            false,
+            MAX_OUTPUT_TOKENS_CHAT,
+            false,
+        )
+        .await?
+    };
 
     Ok(Json(AiCoachChatResponse {
         reply: llm_res.text,

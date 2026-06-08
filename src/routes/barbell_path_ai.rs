@@ -1,4 +1,4 @@
-//! AI-assisted barbell path refinement — vision + numeric correction (Groq / optional Gemini).
+//! AI-assisted barbell path refinement — vision + numeric correction (Groq).
 
 use axum::{Json, extract::State, http::StatusCode};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
@@ -20,7 +20,6 @@ fn coach_role_allowed(claims: &Claims) -> bool {
 
 const GROQ_CHAT_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
 const DEFAULT_GROQ_VISION_MODEL: &str = "llama-3.2-11b-vision-preview";
-const DEFAULT_GEMINI_MODEL: &str = "gemini-2.0-flash";
 const MAX_SAMPLES: usize = 120;
 const MAX_FRAMES: usize = 10;
 const MAX_FRAME_B64_BYTES: usize = 450_000;
@@ -74,7 +73,7 @@ pub struct BarbellPathRefineRequest {
     pub frames: Option<Vec<BarbellPathFrameDto>>,
     #[serde(alias = "liftType")]
     pub lift_type: Option<String>,
-    /// auto | groq_numeric | groq_vision | gemini_vision
+    /// auto | groq_numeric | groq_vision
     pub provider: Option<String>,
 }
 
@@ -181,13 +180,6 @@ fn groq_key(state: &AppState) -> Result<&str, ApiError> {
     Ok(key)
 }
 
-fn gemini_key() -> Option<String> {
-    std::env::var("GEMINI_API_KEY")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .map(|s| s.trim().to_string())
-}
-
 fn groq_vision_model() -> String {
     std::env::var("GROQ_VISION_MODEL")
         .ok()
@@ -195,22 +187,12 @@ fn groq_vision_model() -> String {
         .unwrap_or_else(|| DEFAULT_GROQ_VISION_MODEL.to_string())
 }
 
-fn gemini_model() -> String {
-    std::env::var("GEMINI_MODEL")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_GEMINI_MODEL.to_string())
-}
-
-fn normalize_provider(raw: Option<&str>, has_frames: bool, has_gemini: bool) -> &'static str {
+fn normalize_provider(raw: Option<&str>, has_frames: bool) -> &'static str {
     match raw.unwrap_or("auto").trim().to_lowercase().as_str() {
         "groq_numeric" | "numeric" => "groq_numeric",
         "groq_vision" | "vision" => "groq_vision",
-        "gemini_vision" | "gemini" => "gemini_vision",
         _ => {
-            if has_frames && has_gemini {
-                "gemini_vision"
-            } else if has_frames {
+            if has_frames {
                 "groq_vision"
             } else {
                 "groq_numeric"
@@ -424,75 +406,6 @@ async fn call_groq_vision_json(
     Ok((text, parsed.model.unwrap_or_else(|| model.to_string())))
 }
 
-async fn call_gemini_vision_json(
-    api_key: &str,
-    model: &str,
-    system: &str,
-    user_text: String,
-    frames: &[(f64, String)],
-) -> Result<(String, String), (StatusCode, String)> {
-    let mut parts = vec![serde_json::json!({"text": format!("{system}\n\n{user_text}")})];
-    for (_t, b64) in frames {
-        parts.push(serde_json::json!({
-            "inline_data": {
-                "mime_type": "image/jpeg",
-                "data": b64
-            }
-        }));
-    }
-
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    );
-    let body = serde_json::json!({
-        "contents": [{"parts": parts}],
-        "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 2048,
-            "responseMimeType": "application/json"
-        }
-    });
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let res = client
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Gemini: {e}")))?;
-
-    let status = res.status();
-    let parsed: serde_json::Value = res
-        .json()
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Gemini JSON: {e}")))?;
-
-    if !status.is_success() {
-        let msg = parsed
-            .pointer("/error/message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Gemini HTTP error");
-        return Err((StatusCode::BAD_GATEWAY, msg.to_string()));
-    }
-
-    let text = parsed
-        .pointer("/candidates/0/content/parts/0/text")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    if text.trim().is_empty() {
-        return Err((
-            StatusCode::BAD_GATEWAY,
-            "Gemini zwróciło pustą odpowiedź".to_string(),
-        ));
-    }
-    Ok((text, model.to_string()))
-}
-
 fn enforce_barbell_path_limits(user_sub: &str) -> Result<(), ApiError> {
     crate::routes::ai_coach::enforce_barbell_path_limits(user_sub)
 }
@@ -554,39 +467,12 @@ pub async fn refine_barbell_path(
 
     enforce_barbell_path_limits(&claims.sub)?;
 
-    let has_gemini = gemini_key().is_some();
-    let provider = normalize_provider(payload.provider.as_deref(), !frame_pairs.is_empty(), has_gemini);
+    let provider = normalize_provider(payload.provider.as_deref(), !frame_pairs.is_empty());
     let lift = lift_label(payload.lift_type.as_deref());
 
     let raw_json = serde_json::to_string(&raw).unwrap_or_else(|_| "[]".to_string());
 
     let (llm_text, model, method) = match provider {
-        "gemini_vision" => {
-            let key = gemini_key().ok_or_else(|| {
-                api_error(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "GEMINI_API_KEY nie jest skonfigurowany.",
-                )
-            })?;
-            let model = gemini_model();
-            let mut lines = vec![format!("Typ ruchu: {lift}.")];
-            for (i, (t, _)) in frame_pairs.iter().enumerate() {
-                lines.push(format!("Obraz {}: t={t:.3}s", i + 1));
-            }
-            lines.push(format!(
-                "Surowy tor z detekcji pozy (do porównania): {raw_json}"
-            ));
-            let (text, used) = call_gemini_vision_json(
-                &key,
-                &model,
-                VISION_SYSTEM,
-                lines.join("\n"),
-                &frame_pairs,
-            )
-            .await
-            .map_err(|(c, m)| api_error(c, m))?;
-            (text, used, "gemini_vision")
-        }
         "groq_vision" => {
             let key = groq_key(&state)?;
             let model = groq_vision_model();

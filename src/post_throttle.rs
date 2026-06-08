@@ -30,7 +30,7 @@ fn window_for_bucket(bucket: &str) -> (Duration, usize) {
         // Asystent publiczny (anonimowy, per IP)
         "ai_coach_public_chat" => (Duration::from_secs(60), 3),
         "ai_coach_public_chat_daily" => (Duration::from_secs(86_400), 25),
-        // Tor sztangi AI (vision — droższe niż zwykły czat; free tier Groq/Gemini)
+        // Tor sztangi AI (vision — droższe niż zwykły czat; free tier Groq)
         "ai_coach_barbell_path" => (Duration::from_secs(60), 2),
         "ai_coach_barbell_path_daily" => (Duration::from_secs(86_400), 10),
         "ai_coach_club_global_barbell_path" => (Duration::from_secs(60), 3),
@@ -369,6 +369,12 @@ pub fn reserve_ai_coach_public_chat(client_ip: &str) -> Result<(), AiCoachLimitD
 #[cfg(test)]
 mod ai_coach_limit_tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     fn reset_buckets() {
         if let Ok(mut g) = buckets().lock() {
@@ -378,6 +384,7 @@ mod ai_coach_limit_tests {
 
     #[test]
     fn chat_limit_blocks_on_fourth_request_in_minute() {
+        let _guard = test_lock().lock().expect("test lock");
         reset_buckets();
         let sub = "user-test-chat";
         for _ in 0..4 {
@@ -391,6 +398,7 @@ mod ai_coach_limit_tests {
 
     #[test]
     fn club_global_chat_limit_is_shared() {
+        let _guard = test_lock().lock().expect("test lock");
         reset_buckets();
         for i in 0..8 {
             assert!(
@@ -406,6 +414,7 @@ mod ai_coach_limit_tests {
 
     #[test]
     fn barbell_path_limit_blocks_on_third_request_in_minute() {
+        let _guard = test_lock().lock().expect("test lock");
         reset_buckets();
         let sub = "user-test-barbell";
         for _ in 0..2 {
@@ -419,6 +428,7 @@ mod ai_coach_limit_tests {
 
     #[test]
     fn club_global_barbell_path_limit_is_shared() {
+        let _guard = test_lock().lock().expect("test lock");
         reset_buckets();
         for i in 0..3 {
             assert!(
