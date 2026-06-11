@@ -2,6 +2,7 @@ use axum::{Json, extract::State, http::StatusCode};
 use serde::Serialize;
 
 use crate::api_error::{ApiError, api_error};
+use crate::audit::write_audit_log;
 use crate::middleware::auth::{RequireSuperAdmin, RequireTrainerOrHigher};
 use crate::state::AppState;
 
@@ -358,12 +359,30 @@ pub async fn openapi_handler() -> (axum::http::HeaderMap, String) {
     (headers, spec)
 }
 
+#[derive(Serialize)]
+pub struct DbBackupResponse {
+    /// Cloudinary `public_id` — dostęp wymaga signed URL (typ `authenticated`).
+    pub public_id: String,
+    pub bytes: usize,
+    pub created_at: String,
+}
+
 pub async fn db_backup_handler(
     State(state): State<AppState>,
-    _auth: RequireSuperAdmin,
-) -> Result<Json<crate::routes::upload::UploadResponse>, ApiError> {
+    auth: RequireSuperAdmin,
+) -> Result<Json<DbBackupResponse>, ApiError> {
     use crate::DatabaseBackend;
     use std::fs;
+
+    if crate::production_guards::destructive_db_ops_blocked()
+        || !crate::production_guards::cloudinary_db_backup_allowed()
+    {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Backup bazy na Cloudinary jest wyłączony przy Turso/produkcji. \
+             Użyj panelu Turso (`turso db shell … .dump`) lub ustaw ALLOW_CLOUDINARY_DB_BACKUP=1 tylko na izolowanym dev.",
+        ));
+    }
 
     let path = match state.db.backend() {
         DatabaseBackend::Local(p) => p,
@@ -375,12 +394,13 @@ pub async fn db_backup_handler(
         }
     };
 
-    let bytes = fs::read(path).map_err(|e| {
+    let bytes = fs::read(&path).map_err(|e| {
         api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Błąd odczytu bazy: {}", e),
         )
     })?;
+    let byte_len = bytes.len();
 
     if state.cloudinary_cloud_name.is_empty() {
         return Err(api_error(
@@ -388,10 +408,19 @@ pub async fn db_backup_handler(
             "Brak konfiguracji Cloudinary",
         ));
     }
+    if state.cloudinary_api_key.is_empty() || state.cloudinary_api_secret.is_empty() {
+        return Err(api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Backup wymaga signed upload (CLOUDINARY_API_KEY + CLOUDINARY_API_SECRET). \
+             Unsigned preset nie jest dozwolony dla kopii bazy.",
+        ));
+    }
 
     let timestamp = chrono::Utc::now().timestamp().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
     let folder = "backups".to_string();
     let filename = format!("slavia-backup-{}.sqlite", timestamp);
+    let resource_type = "authenticated";
 
     let client = reqwest::Client::new();
     let url = format!(
@@ -399,36 +428,27 @@ pub async fn db_backup_handler(
         state.cloudinary_cloud_name
     );
 
-    let mut form = reqwest::multipart::Form::new().part(
-        "file",
-        reqwest::multipart::Part::bytes(bytes)
-            .file_name(filename)
-            .mime_str("application/x-sqlite3")
-            .unwrap(),
-    );
+    let sign_params = vec![
+        ("folder".to_string(), folder.clone()),
+        ("timestamp".to_string(), timestamp.clone()),
+        ("type".to_string(), resource_type.to_string()),
+    ];
+    let signature =
+        crate::cloudinary::cloudinary_signature(&sign_params, &state.cloudinary_api_secret);
 
-    if !state.cloudinary_api_key.is_empty() && !state.cloudinary_api_secret.is_empty() {
-        let sign_params = vec![
-            ("folder".to_string(), folder.clone()),
-            ("timestamp".to_string(), timestamp.clone()),
-        ];
-        let signature =
-            crate::cloudinary::cloudinary_signature(&sign_params, &state.cloudinary_api_secret);
-        form = form
-            .text("api_key", state.cloudinary_api_key.clone())
-            .text("folder", folder)
-            .text("timestamp", timestamp)
-            .text("signature", signature);
-    } else {
-        let preset = std::env::var("CLOUDINARY_UPLOAD_PRESET").unwrap_or_default();
-        if preset.is_empty() {
-            return Err(api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Brak konfiguracji signed/unsigned upload dla Cloudinary",
-            ));
-        }
-        form = form.text("upload_preset", preset).text("folder", folder);
-    }
+    let form = reqwest::multipart::Form::new()
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(bytes)
+                .file_name(filename)
+                .mime_str("application/x-sqlite3")
+                .unwrap(),
+        )
+        .text("api_key", state.cloudinary_api_key.clone())
+        .text("folder", folder)
+        .text("timestamp", timestamp)
+        .text("type", resource_type)
+        .text("signature", signature);
 
     let res = client
         .post(url)
@@ -442,9 +462,35 @@ pub async fn db_backup_handler(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    if let Some(secure_url) = json.get("secure_url").and_then(|v| v.as_str()) {
-        Ok(Json(crate::routes::upload::UploadResponse {
-            url: secure_url.to_string(),
+    let public_id = json
+        .get("public_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    if let Some(public_id) = public_id {
+        let audit_details = serde_json::json!({
+            "public_id": public_id,
+            "bytes": byte_len,
+            "delivery": "authenticated"
+        })
+        .to_string();
+        let conn_arc = state.db.raw().await;
+        let _ = write_audit_log(
+            conn_arc.as_ref(),
+            Some(&auth.0.sub),
+            Some("SuperAdmin"),
+            "database",
+            "backup",
+            Some("sqlite"),
+            Some(&path.display().to_string()),
+            Some(&audit_details),
+        )
+        .await;
+
+        Ok(Json(DbBackupResponse {
+            public_id,
+            bytes: byte_len,
+            created_at,
         }))
     } else {
         let msg = json

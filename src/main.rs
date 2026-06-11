@@ -24,6 +24,8 @@ async fn main() -> Result<(), AppError> {
     slavia_backend::logging::init();
 
     let (database, jwt_secret, c_name, c_key, c_secret, groq_key, groq_model) = load_config()?;
+    slavia_backend::production_guards::validate_jwt_secret_for_startup(&jwt_secret)
+        .map_err(|e| -> AppError { e.into() })?;
 
     match &database {
         DatabaseBackend::Local(p) => {
@@ -158,7 +160,7 @@ fn load_config() -> Result<AppConfig, AppError> {
         .map_err(|e| -> AppError { e.into() })?;
 
     let jwt_secret = pick_cfg(secrets.as_ref(), "JWT_SECRET", "JWT_SECRET")
-        .unwrap_or_else(|| "default_secret_for_dev_only".to_string());
+        .unwrap_or_else(|| slavia_backend::production_guards::DEV_JWT_FALLBACK.to_string());
 
     let cn = pick_cfg(
         secrets.as_ref(),

@@ -1,4 +1,7 @@
 //! Inicjalizacja `tracing` — stdout z filtrem `RUST_LOG` / `SLAVIA_LOG`.
+//!
+//! **RODO (SEC-12):** nie loguj treści wiadomości czatu, promptów Trenera AI ani base64 załączników.
+//! `TraceLayer` rejestruje wyłącznie metodę i ścieżkę (bez body); ścieżki `/api/ai/coach/*` bez query string.
 
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 

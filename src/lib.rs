@@ -28,6 +28,7 @@ pub mod cms_sanitize;
 mod external_calendar_sync;
 mod distributed_throttle;
 mod login_throttle;
+pub mod production_guards;
 mod pagination;
 mod post_throttle;
 mod sinclair;
