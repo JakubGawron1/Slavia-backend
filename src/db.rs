@@ -766,6 +766,13 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             PRIMARY KEY (name, user_id)
         )",
         "CREATE INDEX IF NOT EXISTS idx_feature_flags_user ON feature_flags(user_id, name)",
+        "CREATE TABLE IF NOT EXISTS rate_limit_hits (
+            id TEXT PRIMARY KEY,
+            scope_key TEXT NOT NULL,
+            bucket TEXT NOT NULL,
+            hit_at_ms INTEGER NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_rate_limit_hits_scope ON rate_limit_hits(scope_key, bucket, hit_at_ms)",
         "CREATE TABLE IF NOT EXISTS feature_flag_events (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -1730,6 +1737,13 @@ pub async fn reset_database(
             PRIMARY KEY (name, user_id)
         )",
         "CREATE INDEX IF NOT EXISTS idx_feature_flags_user ON feature_flags(user_id, name)",
+        "CREATE TABLE IF NOT EXISTS rate_limit_hits (
+            id TEXT PRIMARY KEY,
+            scope_key TEXT NOT NULL,
+            bucket TEXT NOT NULL,
+            hit_at_ms INTEGER NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_rate_limit_hits_scope ON rate_limit_hits(scope_key, bucket, hit_at_ms)",
         "CREATE TABLE IF NOT EXISTS feature_flag_events (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,

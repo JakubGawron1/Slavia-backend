@@ -65,7 +65,10 @@ pub async fn submit_contact_message(
     Json(payload): Json<SubmitContactRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let client_ip = client_ip_from_headers(&headers);
-    if crate::post_throttle::reserve_contact_submit(&client_ip).is_err() {
+    if crate::distributed_throttle::reserve_contact_submit(&state, &client_ip)
+        .await
+        .is_err()
+    {
         return Err(api_error(
             StatusCode::TOO_MANY_REQUESTS,
             "Zbyt wiele wiadomości z tego adresu — spróbuj za chwilę.",
