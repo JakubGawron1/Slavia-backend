@@ -1946,7 +1946,7 @@ pub async fn coach_chat(
 
 /// Stub SSE — pełny streaming LLM w backlogu (Fala 4); klient może wykryć `event: stub`.
 pub async fn coach_stream_stub() -> impl IntoResponse {
-    let body = "event: stub\ndata: {\"message\":\"SSE streaming not yet implemented — use POST /chat\"}\n\n";
+    let body = "event: stub\ndata: {\"streaming\":false,\"message\":\"SSE streaming not yet implemented — use POST /chat\",\"fallback\":\"POST /api/ai/coach/chat\"}\n\n";
     (
         [
             (header::CONTENT_TYPE, "text/event-stream; charset=utf-8"),
