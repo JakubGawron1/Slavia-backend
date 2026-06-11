@@ -159,6 +159,14 @@ pub async fn create_app(
         worker_metrics,
     };
 
+    // Przy starcie usuń stare wpisy rate limit (gdy `DISTRIBUTED_THROTTLE=1`).
+    {
+        let state_for_prune = state.clone();
+        tokio::spawn(async move {
+            distributed_throttle::prune_rate_limit_hits(&state_for_prune).await;
+        });
+    }
+
     Ok(router::build_router(state, build_cors_layer()))
 }
 
