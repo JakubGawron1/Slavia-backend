@@ -1,0 +1,22 @@
+{
+  "presets": [
+    { "id": "pink", "label": "Pink — athlete", "description": "Akcent różowy dla kont zawodniczek (domyślny wg płci)." },
+    { "id": "dark", "label": "Dark — athlete", "description": "Mocny ciemny preset dla kont zawodników (domyślny wg płci)." },
+    { "id": "slavia", "label": "Slavia — sala klubu", "description": "Ciepłe bordo i łososiowy akcent — charakter klubu; jasny wariant jak podświetlona sala." },
+    { "id": "iron", "label": "Żeliwo i stal", "description": "Chłodne odcienie jak rack i talerze na siłowni." },
+    { "id": "arena", "label": "Światła areny", "description": "Ciepłe reflektory i kontrast jak przy podejściu na podium." },
+    { "id": "platform", "label": "Platforma startowa", "description": "Minimalizm i mocny akcent — skupienie przed podejściem." },
+    { "id": "midnight", "label": "Midnight lift", "description": "Głęboki kontrast i akcent jak światło na nocnej sali." },
+    { "id": "ruby", "label": "Ruby podium", "description": "Ciepłe tło i rubinowy akcent — „ostatnie podejście”." },
+    { "id": "neon", "label": "Neon gym", "description": "Jaskrawe neony i energia siłowni — widoczna zmiana." },
+    { "id": "blackgym", "label": "Black gym", "description": "Czarna sala jako kolor przewodni — kontrast i spokój jak wieczorny trening." },
+    { "id": "glass", "label": "Glassmorphism", "description": "Szkło, rozmycie i miękkie poświaty — jak nowoczesna aplikacja fitness premium.", "experimental": true },
+    { "id": "sport-tech", "label": "Sport-Tech (Arena)", "description": "Siatka areny, neon cyjan i grafit — klimat transmisji sport-tech.", "experimental": true },
+    { "id": "neon-brutalism", "label": "Neon Brutalism", "description": "Twarde obrysy, offset shadow i neony — energia miejskiej siłowni.", "experimental": true },
+    { "id": "podium", "label": "Podium · IWF", "description": "Granat, złoto i reflektor nad platformą — jak transmisja zawodów międzynarodowych.", "experimental": true },
+    { "id": "chalk", "label": "Chalk Studio", "description": "Kreda, beton i spokojny minimalizm — estetyka Hookgrip / studio siłowe.", "experimental": true },
+    { "id": "aurora", "label": "Aurora Lift", "description": "Fioletowo-morska poświata i płynne tło — nowoczesna aplikacja treningowa.", "experimental": true },
+    { "id": "forge", "label": "Forge · Industrial", "description": "Żar, stal i miedziany akcent — industrial gym / Rogue vibe.", "experimental": true },
+    { "id": "velvet", "label": "Velvet Club", "description": "Aksamitne bordo, różowe złoto — luksusowa, wieczorna sala klubu.", "experimental": true }
+  ]
+}

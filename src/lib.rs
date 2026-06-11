@@ -19,6 +19,7 @@ pub mod repos;
 pub mod router;
 pub mod routes;
 pub mod state;
+mod theme_presets;
 
 pub(crate) mod api_error;
 pub mod cloudinary;
