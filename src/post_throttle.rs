@@ -30,6 +30,9 @@ fn window_for_bucket(bucket: &str) -> (Duration, usize) {
         // Asystent publiczny (anonimowy, per IP)
         "ai_coach_public_chat" => (Duration::from_secs(60), 3),
         "ai_coach_public_chat_daily" => (Duration::from_secs(86_400), 25),
+        // Formularz kontaktowy (anonimowy, per IP)
+        "contact_submit" => (Duration::from_secs(300), 5),
+        "contact_submit_daily" => (Duration::from_secs(86_400), 20),
         // Tor sztangi AI (vision — droższe niż zwykły czat; free tier Groq)
         "ai_coach_barbell_path" => (Duration::from_secs(60), 2),
         "ai_coach_barbell_path_daily" => (Duration::from_secs(86_400), 10),
@@ -318,6 +321,27 @@ pub fn reserve_ai_coach_barbell_path(
             "ai_coach_club_global_barbell_path_daily",
             now,
         );
+    }
+    Ok(())
+}
+
+/// Limit wysyłki formularza kontaktowego (per IP).
+pub fn reserve_contact_submit(client_ip: &str) -> Result<(), ()> {
+    let ip = client_ip.trim();
+    if ip.is_empty() || ip == "unknown" {
+        return Err(());
+    }
+    let sub = format!("ip::{ip}");
+    let now = Instant::now();
+    let mut g = buckets().lock().map_err(|_| ())?;
+    for bucket in ["contact_submit", "contact_submit_daily"] {
+        let (_, max) = window_for_bucket(bucket);
+        if count_in_window(&g, &sub, bucket, now) >= max {
+            return Err(());
+        }
+    }
+    for bucket in ["contact_submit", "contact_submit_daily"] {
+        push_in_window(&mut g, &sub, bucket, now);
     }
     Ok(())
 }

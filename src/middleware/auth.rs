@@ -266,7 +266,7 @@ impl FromRequestParts<AppState> for RequireTrainerOrHigher {
         if !claims
             .roles
             .iter()
-            .any(|r| matches!(r, Role::Trainer | Role::SuperAdmin))
+            .any(|r| matches!(r, Role::Trainer | Role::Admin | Role::SuperAdmin))
         {
             return Err(api_error(
                 StatusCode::FORBIDDEN,
