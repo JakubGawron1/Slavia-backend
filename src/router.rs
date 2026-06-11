@@ -495,6 +495,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request<_>| {
+                    // Tylko path (bez query/body) — RODO: treści AI nigdy w logach HTTP (SEC-12).
                     tracing::info_span!(
                         "http",
                         method = %request.method(),

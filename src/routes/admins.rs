@@ -667,15 +667,7 @@ pub async fn unban_user(
 }
 
 fn reset_database_blocked_on_production() -> bool {
-    let mode = std::env::var("DATABASE_MODE")
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if matches!(mode.as_str(), "turso" | "remote") {
-        return true;
-    }
-    std::env::var("TURSO_DATABASE_URL")
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false)
+    crate::production_guards::destructive_db_ops_blocked()
 }
 
 pub async fn reset_database(

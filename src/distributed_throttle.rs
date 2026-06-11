@@ -1,5 +1,5 @@
 //! Opcjonalny limiter oparty o SQLite/Turso — współdzielony między instancjami backendu.
-//! Włącz: `DISTRIBUTED_THROTTLE=1`. Domyślnie pozostaje in-memory `post_throttle`.
+//! Na Turso włączone domyślnie; lokalnie in-memory. Wymuś: `DISTRIBUTED_THROTTLE=1`; wyłącz: `=0`.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -9,12 +9,17 @@ use crate::state::AppState;
 use axum::http::StatusCode;
 
 fn distributed_enabled() -> bool {
-    std::env::var("DISTRIBUTED_THROTTLE")
-        .map(|v| {
-            let t = v.trim().to_ascii_lowercase();
-            t == "1" || t == "true" || t == "yes"
-        })
-        .unwrap_or(false)
+    if let Ok(v) = std::env::var("DISTRIBUTED_THROTTLE") {
+        let t = v.trim().to_ascii_lowercase();
+        if matches!(t.as_str(), "0" | "false" | "no" | "off") {
+            return false;
+        }
+        if matches!(t.as_str(), "1" | "true" | "yes") {
+            return true;
+        }
+    }
+    // Turso / multi-instance: domyślnie SQLite-backed throttle (SEC-10).
+    crate::production_guards::remote_database_configured()
 }
 
 fn now_ms() -> i64 {
