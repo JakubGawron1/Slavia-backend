@@ -1,4 +1,4 @@
-//! Guardy produkcyjne — wspólna detekcja środowiska Turso/prod i walidacja sekretów.
+//! Guardy produkcyjne - wspólna detekcja środowiska Turso/prod i walidacja sekretów.
 
 /// Domyślny JWT używany tylko w lokalnym dev (gdy brak `JWT_SECRET`).
 pub const DEV_JWT_FALLBACK: &str = "default_secret_for_dev_only";
@@ -68,46 +68,64 @@ pub fn is_ai_content_path(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
-    fn with_env(key: &str, value: Option<&str>, f: impl FnOnce()) {
-        let prev = std::env::var(key).ok();
-        // Test-only env mutation — serializacja przez `cargo test` (jeden wątek domyślnie).
+    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_envs(pairs: &[(&str, Option<&str>)], f: impl FnOnce()) {
+        let _guard = ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let prev: Vec<(&str, Option<String>)> = pairs
+            .iter()
+            .map(|(k, _)| (*k, std::env::var(k).ok()))
+            .collect();
         unsafe {
-            match value {
-                Some(v) => std::env::set_var(key, v),
-                None => std::env::remove_var(key),
+            for (k, v) in pairs {
+                match v {
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
+                }
             }
         }
         f();
         unsafe {
-            match prev {
-                Some(v) => std::env::set_var(key, v),
-                None => std::env::remove_var(key),
+            for (k, prev_v) in prev {
+                match prev_v {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
             }
         }
     }
 
+
     #[test]
     fn remote_database_detected_from_mode() {
-        with_env("DATABASE_MODE", Some("turso"), || {
-            with_env("TURSO_DATABASE_URL", None, || {
+        with_envs(
+            &[("DATABASE_MODE", Some("turso")), ("TURSO_DATABASE_URL", None)],
+            || {
                 assert!(remote_database_configured());
-            });
-        });
+            },
+        );
     }
 
     #[test]
     fn remote_database_detected_from_url() {
-        with_env("DATABASE_MODE", Some("local"), || {
-            with_env("TURSO_DATABASE_URL", Some("libsql://example"), || {
+        with_envs(
+            &[
+                ("DATABASE_MODE", Some("local")),
+                ("TURSO_DATABASE_URL", Some("libsql://example")),
+            ],
+            || {
                 assert!(remote_database_configured());
-            });
-        });
+            },
+        );
     }
 
     #[test]
     fn jwt_rejects_default_on_production() {
-        with_env("DATABASE_MODE", Some("turso"), || {
+        with_envs(&[("DATABASE_MODE", Some("turso"))], || {
             let err = validate_jwt_secret_for_startup(DEV_JWT_FALLBACK).unwrap_err();
             assert!(err.contains("JWT_SECRET"));
         });
@@ -115,20 +133,28 @@ mod tests {
 
     #[test]
     fn jwt_allows_default_on_local() {
-        with_env("DATABASE_MODE", Some("local"), || {
-            with_env("TURSO_DATABASE_URL", None, || {
+        with_envs(
+            &[
+                ("DATABASE_MODE", Some("local")),
+                ("TURSO_DATABASE_URL", None),
+            ],
+            || {
                 assert!(validate_jwt_secret_for_startup(DEV_JWT_FALLBACK).is_ok());
-            });
-        });
+            },
+        );
     }
 
     #[test]
     fn cloudinary_backup_blocked_without_opt_in_on_turso() {
-        with_env("DATABASE_MODE", Some("turso"), || {
-            with_env("ALLOW_CLOUDINARY_DB_BACKUP", None, || {
+        with_envs(
+            &[
+                ("DATABASE_MODE", Some("turso")),
+                ("ALLOW_CLOUDINARY_DB_BACKUP", None),
+            ],
+            || {
                 assert!(!cloudinary_db_backup_allowed());
-            });
-        });
+            },
+        );
     }
 
     #[test]
