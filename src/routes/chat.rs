@@ -12,6 +12,7 @@ use crate::audit::write_audit_log;
 use crate::chat_cleanup::{CHAT_INACTIVITY_DAYS, prune_inactive_chat_threads};
 use crate::middleware::auth::{Claims, RequireAdminOrSuperAdmin};
 use crate::models::Role;
+use crate::routes::admins::user_roles_by_id;
 use crate::notifications;
 use crate::state::AppState;
 
@@ -245,13 +246,59 @@ pub async fn open_thread(
     if !can_chat(&claims) {
         return Err(api_error(StatusCode::FORBIDDEN, "Brak uprawnień do czatu"));
     }
+
+    let athlete_uid = payload.athlete_user_id.trim();
+    let trainer_uid = payload.trainer_user_id.trim();
+    if athlete_uid.is_empty() || trainer_uid.is_empty() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Wymagane athlete_user_id i trainer_user_id",
+        ));
+    }
+    if athlete_uid == trainer_uid {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Uczestnicy wątku muszą być różni",
+        ));
+    }
+    if claims.sub != athlete_uid && claims.sub != trainer_uid {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Możesz otworzyć wątek tylko jako uczestnik",
+        ));
+    }
+
+    let athlete_roles = user_roles_by_id(&state, athlete_uid)
+        .await?
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "Nie znaleziono użytkownika zawodnika"))?;
+    let trainer_roles = user_roles_by_id(&state, trainer_uid)
+        .await?
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "Nie znaleziono użytkownika trenera"))?;
+
+    if !athlete_roles.contains(&Role::Athlete) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "athlete_user_id musi mieć rolę Athlete",
+        ));
+    }
+    if !trainer_roles.iter().any(|r| {
+        matches!(r, Role::Trainer | Role::Admin | Role::SuperAdmin)
+    }) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "trainer_user_id musi mieć rolę kadry",
+        ));
+    }
+
+    let athlete_user_id = athlete_uid.to_string();
+    let trainer_user_id = trainer_uid.to_string();
     let now = Utc::now().to_rfc3339();
 
     let mut rows = state
         .db
         .query(
             "SELECT id, title, created_at, updated_at FROM chat_threads WHERE athlete_user_id = ?1 AND trainer_user_id = ?2",
-            (payload.athlete_user_id.clone(), payload.trainer_user_id.clone()),
+            (athlete_user_id.clone(), trainer_user_id.clone()),
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -265,8 +312,8 @@ pub async fn open_thread(
             &state,
             &claims.sub,
             row.get(0).unwrap_or_default(),
-            payload.athlete_user_id,
-            payload.trainer_user_id,
+            athlete_user_id.clone(),
+            trainer_user_id.clone(),
             row.get(1).ok(),
             row.get(2).unwrap_or_default(),
             row.get(3).unwrap_or_default(),
@@ -282,8 +329,8 @@ pub async fn open_thread(
             "INSERT INTO chat_threads (id, athlete_user_id, trainer_user_id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             (
                 id.clone(),
-                payload.athlete_user_id.clone(),
-                payload.trainer_user_id.clone(),
+                athlete_user_id.clone(),
+                trainer_user_id.clone(),
                 payload.title.clone(),
                 now.clone(),
                 now.clone(),
@@ -296,8 +343,8 @@ pub async fn open_thread(
         &state,
         &claims.sub,
         id,
-        payload.athlete_user_id,
-        payload.trainer_user_id,
+        athlete_user_id,
+        trainer_user_id,
         payload.title,
         now.clone(),
         now,

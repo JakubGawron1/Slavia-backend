@@ -666,10 +666,28 @@ pub async fn unban_user(
     Ok(StatusCode::OK)
 }
 
+fn reset_database_blocked_on_production() -> bool {
+    let mode = std::env::var("DATABASE_MODE")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(mode.as_str(), "turso" | "remote") {
+        return true;
+    }
+    std::env::var("TURSO_DATABASE_URL")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+}
+
 pub async fn reset_database(
     State(state): State<AppState>,
     _auth: RequireSuperAdmin,
 ) -> Result<StatusCode, ApiError> {
+    if reset_database_blocked_on_production() {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Reset bazy jest wyłączony na zdalnej produkcyjnej bazie (Turso). Użyj lokalnego DATABASE_MODE=local.",
+        ));
+    }
     let conn_arc = state.db.raw().await;
     db::reset_database(conn_arc.as_ref())
         .await

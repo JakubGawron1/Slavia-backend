@@ -1,7 +1,7 @@
 use axum::{
     Json,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
 };
 use chrono::Utc;
 use libsql::Row;
@@ -42,10 +42,36 @@ pub struct PatchContactMessageRequest {
     pub is_read: Option<bool>,
 }
 
+fn client_ip_from_headers(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+        })
+        .unwrap_or("unknown")
+        .to_string()
+}
+
 pub async fn submit_contact_message(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<SubmitContactRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let client_ip = client_ip_from_headers(&headers);
+    if crate::post_throttle::reserve_contact_submit(&client_ip).is_err() {
+        return Err(api_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Zbyt wiele wiadomości z tego adresu — spróbuj za chwilę.",
+        ));
+    }
+
     let name = payload.name.trim();
     let message = payload.message.trim();
     if name.is_empty() || message.is_empty() {

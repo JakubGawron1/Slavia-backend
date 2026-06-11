@@ -527,6 +527,87 @@ fn client_ip_from_headers(headers: &HeaderMap) -> String {
         .to_string()
 }
 
+/// Trener może pobrać kontekst PII tylko zawodników, z którymi ma wątek czatu; Admin/SA — dowolny.
+async fn staff_may_access_athlete(
+    state: &AppState,
+    claims: &Claims,
+    athlete_id: &str,
+) -> Result<(), ApiError> {
+    let athlete_id = athlete_id.trim();
+    if athlete_id.is_empty() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Brak identyfikatora zawodnika",
+        ));
+    }
+
+    if claims
+        .roles
+        .iter()
+        .any(|r| matches!(r, Role::Admin | Role::SuperAdmin))
+    {
+        return Ok(());
+    }
+
+    if !claims.roles.contains(&Role::Trainer) {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Brak uprawnień do kontekstu zawodnika",
+        ));
+    }
+
+    let mut rows = state
+        .db
+        .query(
+            "SELECT user_id FROM athletes WHERE id = ?1 AND is_active = 1",
+            [athlete_id.to_string()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    else {
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            "Nie znaleziono aktywnego zawodnika",
+        ));
+    };
+
+    let athlete_user_id: String = row.get(0).unwrap_or_default();
+    if athlete_user_id.is_empty() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Zawodnik nie ma powiązanego konta użytkownika",
+        ));
+    }
+
+    let mut thread = state
+        .db
+        .query(
+            "SELECT 1 FROM chat_threads WHERE athlete_user_id = ?1 AND trainer_user_id = ?2 LIMIT 1",
+            (athlete_user_id, claims.sub.clone()),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if thread
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .is_none()
+    {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Brak relacji czatu z tym zawodnikiem — otwórz wątek przed użyciem kontekstu AI",
+        ));
+    }
+
+    Ok(())
+}
+
 async fn append_training_log_context(
     state: &AppState,
     athlete_id: &str,
@@ -1459,6 +1540,7 @@ pub async fn coach_import_plan(
             "Wybierz zawodnika do przypisania planu",
         ));
     }
+    staff_may_access_athlete(&state, &claims, &payload.athlete_id).await?;
 
     let parse_prompt = format!(
         "Przekształć poniższy plan treningowy na JSON według schematu z instrukcji systemowej.\n\n---\n{plan_text}\n---"
@@ -1791,6 +1873,7 @@ pub async fn coach_chat(
     }
 
     if let Some(ref athlete_id) = payload.athlete_id.filter(|_| claims_has_staff_access(&claims)) {
+        staff_may_access_athlete(&state, &claims, athlete_id).await?;
         if let Some(ctx) = fetch_athlete_context(&state, athlete_id).await {
             augmented.push_str(&ctx);
             augmented.push_str("\n\n");
