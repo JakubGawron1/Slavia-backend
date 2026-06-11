@@ -843,12 +843,7 @@ pub async fn update_profile(
                 .await
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         } else {
-            const ALLOW_PRESET: &[&str] = &[
-                "pink", "dark", "slavia", "iron", "arena", "platform", "midnight", "ruby", "neon",
-                "blackgym", "glass", "sport-tech", "neon-brutalism", "podium", "chalk", "aurora",
-                "forge", "velvet",
-            ];
-            if !ALLOW_PRESET.contains(&trimmed) {
+            if !crate::theme_presets::is_allowed_theme_preset(trimmed) {
                 return Err(api_error(
                     StatusCode::BAD_REQUEST,
                     "Invalid ui_theme_preset",
