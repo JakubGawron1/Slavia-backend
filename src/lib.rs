@@ -27,6 +27,7 @@ pub mod cms_github;
 pub mod cms_sanitize;
 mod external_calendar_sync;
 mod login_throttle;
+mod pagination;
 mod post_throttle;
 mod sql_row;
 
