@@ -414,7 +414,47 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             post(routes::feature_flags::upsert_feature_flag)
                 .delete(routes::feature_flags::delete_feature_flag),
         )
-        .route("/openapi.json", get(routes::system_logs::openapi_handler));
+        .route("/openapi.json", get(routes::system_logs::openapi_handler))
+        .route(
+            "/role-preview/session",
+            post(routes::role_preview::role_preview_session),
+        )
+        .route(
+            "/role-preview/context/{user_id}",
+            get(routes::role_preview::role_preview_context),
+        )
+        .route(
+            "/role-preview/athlete-bundle/{user_id}",
+            get(routes::role_preview::role_preview_athlete_bundle),
+        )
+        .route(
+            "/role-preview/athlete-profile/{user_id}",
+            get(routes::role_preview::role_preview_athlete_profile),
+        )
+        .route(
+            "/role-preview/calendar/{user_id}",
+            get(routes::role_preview::role_preview_calendar),
+        )
+        .route(
+            "/role-preview/payment-status/{user_id}",
+            get(routes::role_preview::role_preview_payment_status),
+        )
+        .route(
+            "/role-preview/exercise-submissions/{user_id}",
+            get(routes::role_preview::role_preview_exercise_submissions),
+        )
+        .route(
+            "/role-preview/notifications/{user_id}",
+            get(routes::role_preview::role_preview_notifications),
+        )
+        .route(
+            "/role-preview/chat/threads/{user_id}/{thread_id}/messages",
+            get(routes::role_preview::role_preview_chat_messages),
+        )
+        .route(
+            "/role-preview/chat/threads/{user_id}",
+            get(routes::role_preview::role_preview_chat_threads),
+        );
 
     let club_votes_routes = Router::new()
         .route("/", post(routes::club_votes::submit_vote))

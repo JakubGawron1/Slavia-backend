@@ -358,27 +358,20 @@ pub async fn create_my_payment(
     Ok(StatusCode::CREATED)
 }
 
-pub async fn my_payment_status(
-    State(state): State<AppState>,
-    claims: Claims,
-    Query(q): Query<MonthQuery>,
-) -> Result<Json<PaymentStatusResponse>, ApiError> {
-    let athlete_id = my_athlete_id(&state, &claims).await?;
-    let month = q
-        .month
-        .as_deref()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(current_month_yyyy_mm);
-    let due = due_date_yyyy_mm_10(&month)?;
-
-    let is_paid = is_month_paid_approved(&state, &athlete_id, &month).await?;
+pub(crate) async fn payment_status_for_athlete_id(
+    state: &AppState,
+    athlete_id: &str,
+    month: &str,
+) -> Result<PaymentStatusResponse, ApiError> {
+    athlete_exists(state, athlete_id).await?;
+    let due = due_date_yyyy_mm_10(month)?;
+    let is_paid = is_month_paid_approved(state, athlete_id, month).await?;
 
     let mut standing_rows = state
         .db
         .query(
             "SELECT COALESCE(has_standing_order, 0) FROM athletes WHERE id = ?1",
-            [athlete_id.clone()],
+            [athlete_id.to_string()],
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -392,13 +385,30 @@ pub async fn my_payment_status(
     let today = Utc::now().date_naive();
     let is_overdue = today >= due && today.day() >= 10 && !is_paid;
 
-    Ok(Json(PaymentStatusResponse {
-        month: month.clone(),
+    Ok(PaymentStatusResponse {
+        month: month.to_string(),
         due_date: due.format("%Y-%m-%d").to_string(),
         is_paid,
         is_overdue,
         has_standing_order,
-    }))
+    })
+}
+
+pub async fn my_payment_status(
+    State(state): State<AppState>,
+    claims: Claims,
+    Query(q): Query<MonthQuery>,
+) -> Result<Json<PaymentStatusResponse>, ApiError> {
+    let athlete_id = my_athlete_id(&state, &claims).await?;
+    let month = q
+        .month
+        .as_deref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(current_month_yyyy_mm);
+    Ok(Json(
+        payment_status_for_athlete_id(&state, &athlete_id, &month).await?,
+    ))
 }
 
 async fn athlete_exists(state: &AppState, athlete_id: &str) -> Result<(), ApiError> {

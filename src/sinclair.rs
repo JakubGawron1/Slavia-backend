@@ -1,6 +1,6 @@
 //! Sinclair 2025–2028 (IWF) — stałe zgodne z `@slavia/shared` / test-vectors/sinclair.json.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SinclairGender {
@@ -63,23 +63,24 @@ pub struct SinclairRankingRow {
     pub sinclair_total: Option<f64>,
 }
 
-#[derive(Debug, Deserialize)]
-struct SinclairVectorCase {
-    total: f64,
-    bodyweight: f64,
-    gender: String,
-    #[serde(rename = "expectedTotal")]
-    expected_total: Option<f64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SinclairVectorFile {
-    cases: Vec<SinclairVectorCase>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize)]
+    struct SinclairVectorCase {
+        total: f64,
+        bodyweight: f64,
+        gender: String,
+        #[serde(rename = "expectedTotal")]
+        expected_total: Option<f64>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct SinclairVectorFile {
+        cases: Vec<SinclairVectorCase>,
+    }
 
     #[test]
     fn matches_shared_test_vectors() {

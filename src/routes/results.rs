@@ -131,7 +131,7 @@ async fn ensure_can_view_athlete_submissions(
 
 /// Wiersz oczekuje kolumn:
 /// `id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location, bodyweight_kg`
-fn competition_result_from_row(row: &Row) -> Result<CompetitionResult, String> {
+pub(crate) fn competition_result_from_row(row: &Row) -> Result<CompetitionResult, String> {
     let status_str = sql_row::required_string(row, 5)?;
     let status = status_str
         .parse::<ResultStatus>()
