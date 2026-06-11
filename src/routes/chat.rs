@@ -3,6 +3,8 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
+
+use crate::pagination::{ListPaginationQuery, parse_list_pagination};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -442,6 +444,7 @@ pub async fn list_messages(
     State(state): State<AppState>,
     claims: Claims,
     Path(thread_id): Path<String>,
+    Query(pagination): Query<ListPaginationQuery>,
 ) -> Result<Json<Vec<ChatMessageDto>>, ApiError> {
     let mut membership = state
         .db
@@ -463,6 +466,8 @@ pub async fn list_messages(
     touch_user_presence(&state, &claims.sub).await;
     let reaction_map = load_reactions_for_thread(&state, &thread_id, &claims.sub).await?;
 
+    let (limit, offset) = parse_list_pagination(&pagination, 200, 500);
+
     let mut rows = state
         .db
         .query(
@@ -473,8 +478,9 @@ pub async fn list_messages(
              FROM chat_messages m
              JOIN users u ON u.id = m.sender_user_id
              WHERE m.thread_id = ?1
-             ORDER BY m.created_at ASC",
-            [thread_id.clone()],
+             ORDER BY m.created_at ASC
+             LIMIT ?2 OFFSET ?3",
+            (thread_id.clone(), limit, offset),
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

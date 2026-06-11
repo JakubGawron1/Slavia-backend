@@ -10,6 +10,7 @@ use libsql::Row;
 
 use crate::api_error::{ApiError, api_error};
 use crate::db;
+use crate::pagination::{ListPaginationQuery, parse_list_pagination};
 use crate::middleware::auth::{
     Claims, RequireTrainerOrHigher, claims_has_staff_access, claims_is_pure_athlete,
 };
@@ -335,10 +336,17 @@ pub async fn list_public_olympic_board(
 
 pub async fn list_approved_results(
     State(state): State<AppState>,
+    Query(pagination): Query<ListPaginationQuery>,
 ) -> Result<Json<Vec<CompetitionResult>>, ApiError> {
+    let (limit, offset) = parse_list_pagination(&pagination, 500, 2000);
     let mut rows = state
         .db
-        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location, bodyweight_kg FROM results WHERE status = 'Approved' AND kind = 'competition'", ())
+        .query(
+            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location, bodyweight_kg \
+             FROM results WHERE status = 'Approved' AND kind = 'competition' \
+             ORDER BY date DESC LIMIT ?1 OFFSET ?2",
+            (limit, offset),
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 use chrono::{SecondsFormat, Utc};
@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::api_error::{ApiError, api_error};
 use crate::middleware::auth::{Claims, claims_has_staff_access, claims_is_pure_athlete};
+use crate::pagination::{ListPaginationQuery, parse_list_pagination};
 use crate::models::{Role, TrainingLogEntry};
 use crate::state::AppState;
 
@@ -152,8 +153,11 @@ pub async fn list_training_log(
     State(state): State<AppState>,
     Path(athlete_id): Path<String>,
     claims: Claims,
+    Query(pagination): Query<ListPaginationQuery>,
 ) -> Result<Json<Vec<TrainingLogEntry>>, ApiError> {
     ensure_can_read_training_log(&state, &claims, &athlete_id).await?;
+
+    let (limit, offset) = parse_list_pagination(&pagination, 100, 500);
 
     let mut rows = state
         .db
@@ -163,8 +167,9 @@ pub async fn list_training_log(
              FROM training_log_entries t \
              LEFT JOIN users u ON u.id = t.author_user_id \
              WHERE t.athlete_id = ?1 \
-             ORDER BY t.session_date DESC, t.created_at DESC",
-            [athlete_id],
+             ORDER BY t.session_date DESC, t.created_at DESC \
+             LIMIT ?2 OFFSET ?3",
+            (athlete_id, limit, offset),
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

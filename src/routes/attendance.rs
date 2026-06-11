@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::api_error::{ApiError, api_error};
 use crate::audit::write_audit_log;
 use crate::middleware::auth::{Claims, claims_has_staff_access};
+use crate::pagination::parse_list_pagination;
 use crate::notifications;
 use crate::state::AppState;
 
@@ -53,6 +54,8 @@ pub struct AttendanceListQuery {
     pub verification_state: Option<String>,
     pub from_date: Option<String>,
     pub to_date: Option<String>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
 }
 
 fn normalize_status(raw: &str) -> Result<String, ApiError> {
@@ -451,7 +454,14 @@ pub async fn list_attendance(
             sql.push_str(" AND session_date <= ?");
             params.push(v.trim().to_string());
         }
-    sql.push_str(" ORDER BY session_date DESC, created_at DESC LIMIT 500");
+    let pagination = crate::pagination::ListPaginationQuery {
+        limit: query.limit,
+        offset: query.offset,
+    };
+    let (limit, offset) = parse_list_pagination(&pagination, 200, 500);
+    sql.push_str(" ORDER BY session_date DESC, created_at DESC LIMIT ? OFFSET ?");
+    params.push(limit.to_string());
+    params.push(offset.to_string());
 
     let mut rows = state
         .db
