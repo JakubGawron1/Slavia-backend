@@ -5,7 +5,8 @@
 use axum::{
     Json,
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
+    response::IntoResponse,
 };
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
@@ -1941,4 +1942,16 @@ pub async fn coach_chat(
         model: llm_res.model,
         key_source: "club".to_string(),
     }))
+}
+
+/// Stub SSE — pełny streaming LLM w backlogu (Fala 4); klient może wykryć `event: stub`.
+pub async fn coach_stream_stub() -> impl IntoResponse {
+    let body = "event: stub\ndata: {\"message\":\"SSE streaming not yet implemented — use POST /chat\"}\n\n";
+    (
+        [
+            (header::CONTENT_TYPE, "text/event-stream; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        body,
+    )
 }

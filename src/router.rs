@@ -55,6 +55,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             get(routes::athletes::list_athletes_public_archive),
         )
         .route(
+            "/ranking/sinclair",
+            get(routes::athletes::list_sinclair_ranking),
+        )
+        .route(
             "/{id}/competitions",
             get(routes::competition_participants::list_competitions_for_athlete)
                 .put(routes::competition_participants::sync_competitions_for_athlete),
@@ -432,6 +436,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
                 .put(routes::ai_coach_settings::coach_update_settings),
         )
         .route("/chat", post(routes::ai_coach::coach_chat))
+        .route("/stream", get(routes::ai_coach::coach_stream_stub))
         .route("/import-plan", post(routes::ai_coach::coach_import_plan))
         .route(
             "/barbell-path/refine",
