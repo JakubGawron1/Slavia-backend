@@ -698,6 +698,31 @@ pub async fn me_athlete_handler(
     Ok(Json(athlete))
 }
 
+/// Profil sportowy powiązany z kontem użytkownika — dla kadry / podglądu roli SuperAdmin.
+pub async fn fetch_athlete_by_user_id(
+    state: &AppState,
+    user_id: &str,
+) -> Result<Option<Athlete>, ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            &format!("{} WHERE a.user_id = ?1", ATHLETE_ROW_JOIN_USER_AVATAR_SQL),
+            [user_id],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let athlete = athlete_from_row_merge_public_photo(&row)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Some(athlete))
+}
+
 #[derive(Deserialize)]
 pub struct LinkUserRequest {
     pub username: String,

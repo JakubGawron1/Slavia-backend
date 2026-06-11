@@ -353,35 +353,10 @@ pub struct MyCalendarResponse {
     pub entries: Vec<MyCalendarEntry>,
 }
 
-pub async fn my_calendar_for_athlete(
-    State(state): State<AppState>,
-    claims: Claims,
-) -> Result<Json<MyCalendarResponse>, ApiError> {
-    if !claims.roles.contains(&Role::Athlete) {
-        return Err(api_error(
-            StatusCode::FORBIDDEN,
-            "Only athletes can use this endpoint",
-        ));
-    }
-
-    let mut rows = state
-        .db
-        .query(
-            "SELECT id FROM athletes WHERE user_id = ?1",
-            [claims.sub.clone()],
-        )
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let athlete_row = rows
-        .next()
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let athlete_id: String = match athlete_row {
-        Some(r) => r.get(0).unwrap(),
-        None => return Ok(Json(MyCalendarResponse { entries: vec![] })),
-    };
-
+pub async fn calendar_entries_for_athlete_id(
+    state: &AppState,
+    athlete_id: &str,
+) -> Result<Vec<MyCalendarEntry>, ApiError> {
     let mut rows = state
         .db
         .query(
@@ -391,7 +366,7 @@ pub async fn my_calendar_for_athlete(
              INNER JOIN competition_participants p ON p.competition_id = c.id \
              WHERE p.athlete_id = ?1 \
              ORDER BY c.date ASC",
-            [athlete_id.clone()],
+            [athlete_id.to_string()],
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -448,5 +423,38 @@ pub async fn my_calendar_for_athlete(
         });
     }
 
+    Ok(entries)
+}
+
+pub async fn my_calendar_for_athlete(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> Result<Json<MyCalendarResponse>, ApiError> {
+    if !claims.roles.contains(&Role::Athlete) {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Only athletes can use this endpoint",
+        ));
+    }
+
+    let mut rows = state
+        .db
+        .query(
+            "SELECT id FROM athletes WHERE user_id = ?1",
+            [claims.sub.clone()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let athlete_row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let athlete_id: String = match athlete_row {
+        Some(r) => r.get(0).unwrap(),
+        None => return Ok(Json(MyCalendarResponse { entries: vec![] })),
+    };
+
+    let entries = calendar_entries_for_athlete_id(&state, &athlete_id).await?;
     Ok(Json(MyCalendarResponse { entries }))
 }

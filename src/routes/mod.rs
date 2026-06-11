@@ -28,6 +28,7 @@ pub mod payments;
 pub mod posts;
 pub mod club_feed;
 pub mod recovery;
+pub mod role_preview;
 pub mod recurring_training_cancellations;
 pub mod results;
 pub mod submissions;

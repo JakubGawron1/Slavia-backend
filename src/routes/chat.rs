@@ -355,14 +355,10 @@ pub async fn open_thread(
     Ok(Json(dto))
 }
 
-pub async fn list_my_threads(
-    State(state): State<AppState>,
-    claims: Claims,
-) -> Result<Json<Vec<ChatThreadDto>>, ApiError> {
-    if !can_chat(&claims) {
-        return Ok(Json(vec![]));
-    }
-    touch_user_presence(&state, &claims.sub).await;
+pub(crate) async fn threads_for_user(
+    state: &AppState,
+    viewer_user_id: &str,
+) -> Result<Vec<ChatThreadDto>, ApiError> {
     let mut rows = state
         .db
         .query(
@@ -370,7 +366,7 @@ pub async fn list_my_threads(
              FROM chat_threads
              WHERE athlete_user_id = ?1 OR trainer_user_id = ?1
              ORDER BY updated_at DESC",
-            [claims.sub.clone()],
+            [viewer_user_id.to_string()],
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -381,8 +377,8 @@ pub async fn list_my_threads(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
         let dto = build_thread_dto(
-            &state,
-            &claims.sub,
+            state,
+            viewer_user_id,
             row.get(0).unwrap_or_default(),
             row.get(1).unwrap_or_default(),
             row.get(2).unwrap_or_default(),
@@ -393,7 +389,18 @@ pub async fn list_my_threads(
         .await?;
         out.push(dto);
     }
-    Ok(Json(out))
+    Ok(out)
+}
+
+pub async fn list_my_threads(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> Result<Json<Vec<ChatThreadDto>>, ApiError> {
+    if !can_chat(&claims) {
+        return Ok(Json(vec![]));
+    }
+    touch_user_presence(&state, &claims.sub).await;
+    Ok(Json(threads_for_user(&state, &claims.sub).await?))
 }
 
 pub async fn update_thread(
@@ -440,17 +447,18 @@ pub async fn update_thread(
     Ok(Json(dto))
 }
 
-pub async fn list_messages(
-    State(state): State<AppState>,
-    claims: Claims,
-    Path(thread_id): Path<String>,
-    Query(pagination): Query<ListPaginationQuery>,
-) -> Result<Json<Vec<ChatMessageDto>>, ApiError> {
+pub(crate) async fn messages_for_user(
+    state: &AppState,
+    viewer_user_id: &str,
+    thread_id: &str,
+    pagination: &ListPaginationQuery,
+    update_read_marker: bool,
+) -> Result<Vec<ChatMessageDto>, ApiError> {
     let mut membership = state
         .db
         .query(
             "SELECT id FROM chat_threads WHERE id = ?1 AND (athlete_user_id = ?2 OR trainer_user_id = ?2)",
-            (thread_id.clone(), claims.sub.clone()),
+            (thread_id.to_string(), viewer_user_id.to_string()),
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -463,10 +471,10 @@ pub async fn list_messages(
         return Err(api_error(StatusCode::FORBIDDEN, "Brak dostępu do wątku"));
     }
 
-    touch_user_presence(&state, &claims.sub).await;
-    let reaction_map = load_reactions_for_thread(&state, &thread_id, &claims.sub).await?;
+    let reaction_map =
+        load_reactions_for_thread(state, thread_id, viewer_user_id).await?;
 
-    let (limit, offset) = parse_list_pagination(&pagination, 200, 500);
+    let (limit, offset) = parse_list_pagination(pagination, 200, 500);
 
     let mut rows = state
         .db
@@ -480,7 +488,7 @@ pub async fn list_messages(
              WHERE m.thread_id = ?1
              ORDER BY m.created_at ASC
              LIMIT ?2 OFFSET ?3",
-            (thread_id.clone(), limit, offset),
+            (thread_id.to_string(), limit, offset),
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -504,17 +512,35 @@ pub async fn list_messages(
         });
     }
 
-    state
-        .db
-        .execute(
-            "INSERT INTO chat_reads (thread_id, user_id, last_read_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(thread_id, user_id) DO UPDATE SET last_read_at = excluded.last_read_at",
-            (thread_id, claims.sub.clone(), Utc::now().to_rfc3339()),
-        )
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if update_read_marker {
+        state
+            .db
+            .execute(
+                "INSERT INTO chat_reads (thread_id, user_id, last_read_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(thread_id, user_id) DO UPDATE SET last_read_at = excluded.last_read_at",
+                (
+                    thread_id.to_string(),
+                    viewer_user_id.to_string(),
+                    Utc::now().to_rfc3339(),
+                ),
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
 
-    Ok(Json(out))
+    Ok(out)
+}
+
+pub async fn list_messages(
+    State(state): State<AppState>,
+    claims: Claims,
+    Path(thread_id): Path<String>,
+    Query(pagination): Query<ListPaginationQuery>,
+) -> Result<Json<Vec<ChatMessageDto>>, ApiError> {
+    touch_user_presence(&state, &claims.sub).await;
+    Ok(Json(
+        messages_for_user(&state, &claims.sub, &thread_id, &pagination, true).await?,
+    ))
 }
 
 pub async fn send_message(
