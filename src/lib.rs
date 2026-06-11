@@ -30,6 +30,7 @@ mod distributed_throttle;
 mod login_throttle;
 mod pagination;
 mod post_throttle;
+mod sinclair;
 mod sql_row;
 
 #[cfg(test)]

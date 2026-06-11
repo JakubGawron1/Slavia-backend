@@ -1,0 +1,59 @@
+{
+  "cases": [
+    {
+      "total": 200,
+      "bodyweight": 75,
+      "gender": "male",
+      "expectedCoefficient": 1.34505991780749,
+      "expectedTotal": 269.011983561498
+    },
+    {
+      "total": 150,
+      "bodyweight": 63,
+      "gender": "female",
+      "expectedCoefficient": 1.306948,
+      "expectedTotal": 196.0422
+    },
+    {
+      "total": 250,
+      "bodyweight": 100,
+      "gender": "male",
+      "expectedCoefficient": 1.160289,
+      "expectedTotal": 290.07225
+    },
+    {
+      "total": 180,
+      "bodyweight": 55,
+      "gender": "female",
+      "expectedCoefficient": 1.4177668373959298,
+      "expectedTotal": 255.19803073126735
+    },
+    {
+      "total": 201,
+      "bodyweight": 201,
+      "gender": "male",
+      "expectedCoefficient": 1,
+      "expectedTotal": 201
+    },
+    {
+      "total": 164,
+      "bodyweight": 164,
+      "gender": "female",
+      "expectedCoefficient": 1,
+      "expectedTotal": 164
+    },
+    {
+      "total": 0,
+      "bodyweight": 80,
+      "gender": "male",
+      "expectedTotal": null
+    },
+    {
+      "total": 200,
+      "bodyweight": 0,
+      "gender": "male",
+      "expectedCoefficient": null,
+      "expectedTotal": null
+    }
+  ]
+}

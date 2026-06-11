@@ -334,6 +334,77 @@ pub async fn list_athletes_public_archive(
     Ok(Json(athletes))
 }
 
+/// Publiczny ranking Sinclair — sortowanie malejąco po przeliczonym totalu (aktywna kadra).
+pub async fn list_sinclair_ranking(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<crate::sinclair::SinclairRankingRow>>, ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT a.id, a.full_name, a.gender, a.bodyweight, a.total_kg \
+             FROM athletes a \
+             WHERE (a.is_active IS NULL OR a.is_active = 1) \
+               AND a.total_kg IS NOT NULL AND a.total_kg > 0",
+            (),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let athlete_id = sql_row::required_string(&row, 0)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        let full_name = sql_row::required_string(&row, 1)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        let gender = sql_row::opt_string(&row, 2)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let bodyweight_kg = sql_row::opt_f64(&row, 3)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let total_kg = sql_row::opt_f64(&row, 4)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        let sinclair_total = match (
+            total_kg,
+            bodyweight_kg,
+            crate::sinclair::SinclairGender::parse(gender.as_deref()),
+        ) {
+            (Some(total), Some(bw), Some(g)) => {
+                let v = crate::sinclair::sinclair_total(total, bw, g);
+                if v.is_nan() {
+                    None
+                } else {
+                    Some((v * 100.0).round() / 100.0)
+                }
+            }
+            _ => None,
+        };
+
+        if sinclair_total.is_some() {
+            out.push(crate::sinclair::SinclairRankingRow {
+                athlete_id,
+                full_name,
+                gender,
+                bodyweight_kg,
+                total_kg,
+                sinclair_total,
+            });
+        }
+    }
+
+    out.sort_by(|a, b| {
+        b.sinclair_total
+            .unwrap_or(0.0)
+            .partial_cmp(&a.sinclair_total.unwrap_or(0.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    Ok(Json(out))
+}
+
 pub async fn create_athlete(
     State(state): State<AppState>,
     auth: RequireTrainerOrHigher,

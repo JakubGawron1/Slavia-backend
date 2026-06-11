@@ -114,6 +114,49 @@
         }
       }
     },
+    "/api/auth/me": {
+      "get": {
+        "summary": "Current user profile",
+        "responses": {
+          "200": { "description": "OK" },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/api/contact": {
+      "post": {
+        "summary": "Submit contact form (rate limited per IP)",
+        "responses": {
+          "201": { "description": "Created" },
+          "429": { "description": "Too many requests" }
+        }
+      }
+    },
+    "/api/feature-flags": {
+      "get": {
+        "summary": "List feature flags (global or per user)",
+        "responses": {
+          "200": { "description": "OK" },
+          "403": { "description": "Forbidden" }
+        }
+      }
+    },
+    "/api/results/public-board-olympic": {
+      "get": {
+        "summary": "Public Olympic results board",
+        "responses": {
+          "200": { "description": "OK" }
+        }
+      }
+    },
+    "/api/athletes/ranking/sinclair": {
+      "get": {
+        "summary": "Public Sinclair ranking (active roster)",
+        "responses": {
+          "200": { "description": "OK" }
+        }
+      }
+    },
     "/api/ai/coach/chat": {
       "post": {
         "summary": "Czat z trenerem AI — dwubój, plany, suplementacja, regeneracja",
@@ -122,6 +165,14 @@
           "400": { "description": "Nieprawidłowe żądanie" },
           "403": { "description": "Brak uprawnień" },
           "503": { "description": "Brak GROQ_API_KEY" }
+        }
+      }
+    },
+    "/api/ai/coach/stream": {
+      "get": {
+        "summary": "SSE stub for future streaming AI responses",
+        "responses": {
+          "200": { "description": "text/event-stream stub event" }
         }
       }
     },
