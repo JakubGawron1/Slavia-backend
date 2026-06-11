@@ -1775,7 +1775,9 @@ pub async fn coach_public_chat(
     }
 
     let client_ip = client_ip_from_headers(&headers);
-    crate::post_throttle::reserve_ai_coach_public_chat(&client_ip).map_err(public_chat_limit_error)?;
+    crate::distributed_throttle::reserve_ai_coach_public_chat(&state, &client_ip)
+        .await
+        .map_err(public_chat_limit_error)?;
 
     let history = payload
         .history
