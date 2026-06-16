@@ -57,6 +57,19 @@ pub(crate) async fn sync_athlete_bests_from_approved(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
+pub(crate) async fn sync_athletes_bests_from_approved_batch(
+    state: &AppState,
+    athlete_ids: &[String],
+) -> Result<(), ApiError> {
+    if athlete_ids.is_empty() {
+        return Ok(());
+    }
+    let conn_arc = state.db.raw().await;
+    db::sync_athletes_bests_from_approved_batch_conn(conn_arc.as_ref(), athlete_ids)
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
 async fn result_row_athlete_id(state: &AppState, result_id: &str) -> Result<String, ApiError> {
     let mut rows = state
         .db
@@ -1039,41 +1052,31 @@ pub async fn batch_approve_results(
     }
 
     let conn = state.db.raw().await;
-    let mut approved: u64 = 0;
-    let mut skipped: u64 = 0;
+    let placeholders = crate::sql_util::in_placeholders(ids.len());
+    let update_sql = format!(
+        "UPDATE results SET status = 'Approved' WHERE status = 'Pending' AND id IN ({placeholders})"
+    );
+    let approved = conn
+        .execute(&update_sql, ids.clone())
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let skipped = ids.len() as u64 - approved;
+
+    let select_sql = format!(
+        "{}({placeholders})",
+        crate::sql::queries::results::BATCH_APPROVE_SELECT_APPROVED
+    );
+    let mut rows = conn
+        .query(&select_sql, ids.clone())
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
     let mut athlete_ids = std::collections::HashSet::<String>::new();
-
-    for id in &ids {
-        let n = conn
-            .execute(
-                "UPDATE results SET status = 'Approved' WHERE id = ?1 AND status = 'Pending'",
-                [id.clone()],
-            )
-            .await
-            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        if n == 0 {
-            skipped += 1;
-            continue;
-        }
-        approved += n;
-
-        let mut rows = conn
-            .query(
-                "SELECT athlete_id, total, date FROM results WHERE id = ?1",
-                [id.clone()],
-            )
-            .await
-            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        let row = rows
-            .next()
-            .await
-            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-            .ok_or_else(|| {
-                api_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Brak wiersza po zatwierdzeniu",
-                )
-            })?;
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
         let athlete_id: String = row
             .get(0)
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1087,9 +1090,8 @@ pub async fn batch_approve_results(
         crate::notifications::notify_result_approved(&state, &athlete_id, total, &date, None);
     }
 
-    for aid in &athlete_ids {
-        sync_athlete_bests_from_approved(&state, aid).await?;
-    }
+    let athlete_list: Vec<String> = athlete_ids.into_iter().collect();
+    sync_athletes_bests_from_approved_batch(&state, &athlete_list).await?;
 
     let details = serde_json::json!({
         "count": approved,

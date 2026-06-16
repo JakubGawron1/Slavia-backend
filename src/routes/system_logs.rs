@@ -151,15 +151,7 @@ pub async fn system_metrics(
 ) -> Result<Json<SystemMetricsDto>, ApiError> {
     let mut rows = state
         .db
-        .query(
-            "SELECT
-                (SELECT COUNT(*) FROM athletes WHERE is_active IS NULL OR is_active = 1),
-                (SELECT COUNT(*) FROM training_plans WHERE status IN ('planned','active')),
-                (SELECT COUNT(*) FROM results WHERE status = 'Pending'),
-                (SELECT COUNT(*) FROM notifications WHERE is_read = 0),
-                (SELECT COUNT(*) FROM recovery_logs WHERE date >= date('now', '-7 day'))",
-            (),
-        )
+        .query(crate::sql::queries::system_logs::SYSTEM_METRICS_COUNTS, ())
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let counts = rows
@@ -229,10 +221,7 @@ pub async fn event_feed(
 
     let mut rows = state
         .db
-        .query(
-            "SELECT date, athlete_id, total, status FROM results ORDER BY date DESC LIMIT 40",
-            (),
-        )
+        .query(crate::sql::queries::system_logs::EVENT_FEED_UNION, ())
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     while let Some(row) = rows
@@ -240,73 +229,46 @@ pub async fn event_feed(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        let at: String = row.get(0).unwrap_or_default();
-        let athlete_id: String = row.get(1).unwrap_or_default();
-        let total: f64 = row.get(2).unwrap_or(0.0);
-        let status: String = row.get(3).unwrap_or_default();
-        out.push(OpsEventRow {
-            source: "results".to_string(),
-            at: at.clone(),
-            title: format!("Wynik {} kg ({})", total, status),
-            detail: format!("athlete_id={}", athlete_id),
-        });
+        let source: String = row.get(0).unwrap_or_default();
+        let at: String = row.get(1).unwrap_or_default();
+        let athlete_id: String = row.get(2).unwrap_or_default();
+        let num1: f64 = row.get(3).unwrap_or(0.0);
+        let num2: f64 = row.get(4).unwrap_or(0.0);
+        let str1: String = row.get(5).unwrap_or_default();
+        let str2: String = row.get(6).unwrap_or_default();
+        let detail = format!("athlete_id={athlete_id}");
+        let event = match source.as_str() {
+            "results" => OpsEventRow {
+                source: source.clone(),
+                at: at.clone(),
+                title: format!("Wynik {num1} kg ({str1})"),
+                detail: detail.clone(),
+            },
+            "attendance" => OpsEventRow {
+                source: source.clone(),
+                at: at.clone(),
+                title: format!("Obecność: {str1} ({str2})"),
+                detail,
+            },
+            "recovery" => OpsEventRow {
+                source: source.clone(),
+                at: at.clone(),
+                title: format!(
+                    "Regeneracja: sen {num1}h, gotowość {}/10",
+                    num2.round() as i64
+                ),
+                detail,
+            },
+            other => OpsEventRow {
+                source: other.to_string(),
+                at,
+                title: "Zdarzenie".to_string(),
+                detail,
+            },
+        };
+        out.push(event);
     }
 
-    let mut rows = state
-        .db
-        .query(
-            "SELECT session_date, athlete_id, status, verification_state FROM attendance_records ORDER BY session_date DESC LIMIT 40",
-            (),
-        )
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    while let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    {
-        let at: String = row.get(0).unwrap_or_default();
-        let athlete_id: String = row.get(1).unwrap_or_default();
-        let status: String = row.get(2).unwrap_or_default();
-        let verification_state: String = row.get(3).unwrap_or_default();
-        out.push(OpsEventRow {
-            source: "attendance".to_string(),
-            at: at.clone(),
-            title: format!("Obecność: {} ({})", status, verification_state),
-            detail: format!("athlete_id={}", athlete_id),
-        });
-    }
-
-    let mut rows = state
-        .db
-        .query(
-            "SELECT date, athlete_id, sleep_hours, readiness_level FROM recovery_logs ORDER BY date DESC LIMIT 40",
-            (),
-        )
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    while let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    {
-        let at: String = row.get(0).unwrap_or_default();
-        let athlete_id: String = row.get(1).unwrap_or_default();
-        let sleep_hours: f64 = row.get(2).unwrap_or(0.0);
-        let readiness_level: i64 = row.get(3).unwrap_or(0);
-        out.push(OpsEventRow {
-            source: "recovery".to_string(),
-            at: at.clone(),
-            title: format!(
-                "Regeneracja: sen {}h, gotowość {}/10",
-                sleep_hours, readiness_level
-            ),
-            detail: format!("athlete_id={}", athlete_id),
-        });
-    }
-
-    out.sort_by(|a, b| b.at.cmp(&a.at));
-    out.truncate(120);
     Ok(Json(out))
 }
 
