@@ -1,0 +1,73 @@
+# Synchronizuje repozytorium GitHub → Hugging Face Docker Space po pushu na main.
+# Wymagane w GitHub (Settings → Secrets and variables → Actions):
+#   Secret:  HF_TOKEN — token HF z uprawnieniem write (https://huggingface.co/settings/tokens)
+#   Variable: HF_SPACE_REPO — np. jakubgawron/slavia-backend (owner/nazwa-space, bez prefiksu spaces/)
+
+name: Deploy Hugging Face Space
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'build.rs'
+      - 'deploy/huggingface/**'
+      - '.github/workflows/deploy-huggingface-space.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: hf-space-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate GitHub configuration
+        env:
+          HF_SPACE_REPO: ${{ vars.HF_SPACE_REPO }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${HF_TOKEN}" ]]; then
+            echo "::error::Brak sekretu HF_TOKEN. Dodaj token z https://huggingface.co/settings/tokens"
+            exit 1
+          fi
+          if [[ -z "${HF_SPACE_REPO}" ]]; then
+            echo "::error::Brak zmiennej HF_SPACE_REPO (owner/nazwa-space). Ustaw w Settings → Variables → Actions"
+            exit 1
+          fi
+
+      - name: Prepare Space README (YAML frontmatter dla Docker SDK)
+        run: cp deploy/huggingface/README.md README.md
+
+      - name: Sync to Hugging Face Space
+        uses: huggingface/hub-sync@v0.1.0
+        with:
+          github_repo_id: ${{ github.repository }}
+          huggingface_repo_id: ${{ vars.HF_SPACE_REPO }}
+          hf_token: ${{ secrets.HF_TOKEN }}
+          repo_type: space
+          space_sdk: docker
+
+      - name: Summary
+        if: success()
+        env:
+          HF_SPACE_REPO: ${{ vars.HF_SPACE_REPO }}
+        run: |
+          {
+            echo "### Hugging Face Space"
+            echo ""
+            echo "Space: https://huggingface.co/spaces/${HF_SPACE_REPO}"
+            echo ""
+            echo "API (po zbudowaniu kontenera): https://${HF_SPACE_REPO//\//-}.hf.space"
+            echo ""
+            echo "Commit: \`${GITHUB_SHA::7}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
