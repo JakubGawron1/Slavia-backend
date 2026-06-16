@@ -362,10 +362,16 @@ pub(crate) async fn threads_for_user(
     let mut rows = state
         .db
         .query(
-            "SELECT id, athlete_user_id, trainer_user_id, title, created_at, updated_at
-             FROM chat_threads
-             WHERE athlete_user_id = ?1 OR trainer_user_id = ?1
-             ORDER BY updated_at DESC",
+            "SELECT t.id, t.athlete_user_id, t.trainer_user_id, t.title, t.created_at, t.updated_at,
+                    CASE
+                        WHEN t.athlete_user_id = ?1 THEN u_trainer.last_seen_at
+                        ELSE u_athlete.last_seen_at
+                    END AS peer_last_seen_at
+             FROM chat_threads t
+             JOIN users u_athlete ON u_athlete.id = t.athlete_user_id
+             JOIN users u_trainer ON u_trainer.id = t.trainer_user_id
+             WHERE t.athlete_user_id = ?1 OR t.trainer_user_id = ?1
+             ORDER BY t.updated_at DESC",
             [viewer_user_id.to_string()],
         )
         .await
@@ -376,18 +382,18 @@ pub(crate) async fn threads_for_user(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        let dto = build_thread_dto(
-            state,
-            viewer_user_id,
-            row.get(0).unwrap_or_default(),
-            row.get(1).unwrap_or_default(),
-            row.get(2).unwrap_or_default(),
-            row.get(3).ok(),
-            row.get(4).unwrap_or_default(),
-            row.get(5).unwrap_or_default(),
-        )
-        .await?;
-        out.push(dto);
+        let peer_last_seen_at: Option<String> = row.get(6).ok();
+        let peer_online = is_recent_presence(peer_last_seen_at.as_deref());
+        out.push(ChatThreadDto {
+            id: row.get(0).unwrap_or_default(),
+            athlete_user_id: row.get(1).unwrap_or_default(),
+            trainer_user_id: row.get(2).unwrap_or_default(),
+            title: row.get(3).ok(),
+            created_at: row.get(4).unwrap_or_default(),
+            updated_at: row.get(5).unwrap_or_default(),
+            peer_last_seen_at,
+            peer_online,
+        });
     }
     Ok(out)
 }

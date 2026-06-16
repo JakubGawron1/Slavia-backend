@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+use std::collections::HashMap;
+
 use axum::{
     Json,
     extract::{Path, State},
@@ -371,7 +373,7 @@ pub async fn calendar_entries_for_athlete_id(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let mut entries = Vec::new();
+    let mut competition_rows: Vec<(String, Competition)> = Vec::new();
 
     while let Some(row) = rows
         .next()
@@ -379,49 +381,70 @@ pub async fn calendar_entries_for_athlete_id(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
         let cid: String = row.get(0).unwrap();
-        let competition = Competition {
-            id: cid.clone(),
-            title: row.get(1).unwrap(),
-            date: row.get(2).unwrap(),
-            location: row.get(3).unwrap(),
-            description: row.get(4).ok(),
-            category: row.get(5).ok(),
-            status: row.get(6).ok(),
-            external_source: row.get(7).ok(),
-            external_ref: row.get(8).ok(),
-            external_url: row.get(9).ok(),
-            club_participates: row.get::<i64>(10).unwrap_or(0) != 0,
-        };
-
-        let mut pr = state
-            .db
-            .query(
-                "SELECT a.id, a.full_name FROM competition_participants cp \
-                 JOIN athletes a ON a.id = cp.athlete_id \
-                 WHERE cp.competition_id = ?1 \
-                 ORDER BY a.full_name ASC",
-                [cid.clone()],
-            )
-            .await
-            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-        let mut participants = Vec::new();
-        while let Some(r) = pr
-            .next()
-            .await
-            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        {
-            participants.push(ParticipantBrief {
-                athlete_id: r.get(0).unwrap(),
-                full_name: r.get(1).unwrap(),
-            });
-        }
-
-        entries.push(MyCalendarEntry {
-            competition,
-            participants,
-        });
+        competition_rows.push((
+            cid.clone(),
+            Competition {
+                id: cid,
+                title: row.get(1).unwrap(),
+                date: row.get(2).unwrap(),
+                location: row.get(3).unwrap(),
+                description: row.get(4).ok(),
+                category: row.get(5).ok(),
+                status: row.get(6).ok(),
+                external_source: row.get(7).ok(),
+                external_ref: row.get(8).ok(),
+                external_url: row.get(9).ok(),
+                club_participates: row.get::<i64>(10).unwrap_or(0) != 0,
+            },
+        ));
     }
+
+    if competition_rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = crate::sql_util::in_placeholders(competition_rows.len());
+    let participants_sql = format!(
+        "SELECT cp.competition_id, a.id, a.full_name
+         FROM competition_participants cp
+         JOIN athletes a ON a.id = cp.athlete_id
+         WHERE cp.competition_id IN ({placeholders})
+         ORDER BY cp.competition_id ASC, a.full_name ASC"
+    );
+    let competition_ids: Vec<String> = competition_rows
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+
+    let mut participants_by_competition: HashMap<String, Vec<ParticipantBrief>> = HashMap::new();
+    let mut pr = state
+        .db
+        .query(&participants_sql, competition_ids.clone())
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    while let Some(r) = pr
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let competition_id: String = r.get(0).unwrap();
+        participants_by_competition
+            .entry(competition_id)
+            .or_default()
+            .push(ParticipantBrief {
+                athlete_id: r.get(1).unwrap(),
+                full_name: r.get(2).unwrap(),
+            });
+    }
+
+    let entries = competition_rows
+        .into_iter()
+        .map(|(cid, competition)| MyCalendarEntry {
+            participants: participants_by_competition.remove(&cid).unwrap_or_default(),
+            competition,
+        })
+        .collect();
 
     Ok(entries)
 }

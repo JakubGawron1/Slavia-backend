@@ -152,71 +152,32 @@ pub async fn system_metrics(
     let mut rows = state
         .db
         .query(
-            "SELECT COUNT(*) FROM athletes WHERE is_active IS NULL OR is_active = 1",
+            "SELECT
+                (SELECT COUNT(*) FROM athletes WHERE is_active IS NULL OR is_active = 1),
+                (SELECT COUNT(*) FROM training_plans WHERE status IN ('planned','active')),
+                (SELECT COUNT(*) FROM results WHERE status = 'Pending'),
+                (SELECT COUNT(*) FROM notifications WHERE is_read = 0),
+                (SELECT COUNT(*) FROM recovery_logs WHERE date >= date('now', '-7 day'))",
             (),
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let athletes_count = rows
+    let counts = rows
         .next()
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .and_then(|r| r.get::<i64>(0).ok())
-        .unwrap_or(0);
-
-    let mut rows = state
-        .db
-        .query(
-            "SELECT COUNT(*) FROM training_plans WHERE status IN ('planned','active')",
-            (),
-        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let active_plans_count = rows
-        .next()
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .and_then(|r| r.get::<i64>(0).ok())
-        .unwrap_or(0);
-
-    let mut rows = state
-        .db
-        .query("SELECT COUNT(*) FROM results WHERE status = 'Pending'", ())
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let pending_results_count = rows
-        .next()
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .and_then(|r| r.get::<i64>(0).ok())
-        .unwrap_or(0);
-
-    let mut rows = state
-        .db
-        .query("SELECT COUNT(*) FROM notifications WHERE is_read = 0", ())
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let unread_notifications_count = rows
-        .next()
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .and_then(|r| r.get::<i64>(0).ok())
-        .unwrap_or(0);
-
-    let mut rows = state
-        .db
-        .query(
-            "SELECT COUNT(*) FROM recovery_logs WHERE date >= date('now', '-7 day')",
-            (),
-        )
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let recovery_checkins_7d_count = rows
-        .next()
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .and_then(|r| r.get::<i64>(0).ok())
-        .unwrap_or(0);
+    let (athletes_count, active_plans_count, pending_results_count, unread_notifications_count, recovery_checkins_7d_count) =
+        if let Some(r) = counts {
+            (
+                r.get::<i64>(0).unwrap_or(0),
+                r.get::<i64>(1).unwrap_or(0),
+                r.get::<i64>(2).unwrap_or(0),
+                r.get::<i64>(3).unwrap_or(0),
+                r.get::<i64>(4).unwrap_or(0),
+            )
+        } else {
+            (0, 0, 0, 0, 0)
+        };
 
     let mut rows = state
         .db

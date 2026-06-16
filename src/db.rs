@@ -594,24 +594,28 @@ pub async fn sync_athlete_bests_from_approved_conn(
 /// Migracja przy starcie: wszystkie wiersze `athletes` — `best_*` wyłącznie z tabeli `results` (Approved).
 pub async fn sync_all_athletes_bests_from_results(conn: &Connection) -> Result<u64, libsql::Error> {
     conn.execute(
-        "UPDATE athletes SET \
-           best_snatch_kg = ( \
-             SELECT r.snatch FROM results r \
-             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' \
-               AND (r.kind IS NULL OR r.kind = 'competition') \
-             ORDER BY r.total DESC, r.date DESC LIMIT 1 \
-           ), \
-           best_clean_jerk_kg = ( \
-             SELECT r.clean_and_jerk FROM results r \
-             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' \
-               AND (r.kind IS NULL OR r.kind = 'competition') \
-             ORDER BY r.total DESC, r.date DESC LIMIT 1 \
-           ), \
-           total_kg = ( \
-             SELECT r.total FROM results r \
-             WHERE r.athlete_id = athletes.id AND r.status = 'Approved' \
-               AND (r.kind IS NULL OR r.kind = 'competition') \
-             ORDER BY r.total DESC, r.date DESC LIMIT 1 \
+        "WITH ranked AS (
+            SELECT athlete_id, snatch, clean_and_jerk, total,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY athlete_id
+                     ORDER BY total DESC, date DESC
+                   ) AS rn
+            FROM results
+            WHERE status = 'Approved'
+              AND (kind IS NULL OR kind = 'competition')
+         )
+         UPDATE athletes SET
+           best_snatch_kg = (
+             SELECT snatch FROM ranked r
+             WHERE r.athlete_id = athletes.id AND r.rn = 1
+           ),
+           best_clean_jerk_kg = (
+             SELECT clean_and_jerk FROM ranked r
+             WHERE r.athlete_id = athletes.id AND r.rn = 1
+           ),
+           total_kg = (
+             SELECT total FROM ranked r
+             WHERE r.athlete_id = athletes.id AND r.rn = 1
            )",
         (),
     )
@@ -1526,6 +1530,10 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
     }
 
     seed_default_exercises(conn).await?;
+
+    if let Err(e) = crate::db_migrations::apply_pending(conn).await {
+        return Err(format!("SQL migrations: {e}").into());
+    }
 
     try_migrate_sanitize_exercises_utf8(conn).await;
 
