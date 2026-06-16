@@ -8,6 +8,7 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 pub mod audit;
 pub mod chat_cleanup;
 pub mod db;
+pub mod db_migrations;
 pub mod logging;
 pub mod dto;
 pub mod middleware;
@@ -33,6 +34,7 @@ mod pagination;
 mod post_throttle;
 mod sinclair;
 mod sql_row;
+mod sql_util;
 
 #[cfg(test)]
 mod import_http_integration_test;
