@@ -23,7 +23,9 @@ Każdy push na `main` (gdy zmienią się pliki backendu) automatycznie synchroni
 | Typ | Nazwa | Wartość |
 |-----|-------|---------|
 | Secret | `HF_TOKEN` | Token HF z uprawnieniem **write** ([API Tokens](https://huggingface.co/settings/tokens)) |
-| Variable | `HF_SPACE_REPO` | `TWOJ_USER/TWOJ_SPACE` — np. `jakubgawron/slavia-backend` (bez `spaces/`) |
+| Secret **lub** Variable | `HF_SPACE_REPO` | `TWOJ_USER/TWOJ_SPACE` — np. `JakubGawron1/slavia-backend` (bez prefiksu `spaces/`) |
+
+> Oba mogą być sekretami — workflow akceptuje `HF_SPACE_REPO` jako secret albo variable.
 
 **Uprawnienia tokenu:** token musi mieć dostęp do zapisu w repozytorium Space (Fine-grained: write do tego Space, lub klasyczny token z write).
 
@@ -105,7 +107,7 @@ git add . && git commit -m "Deploy" && git push
 
 | Problem | Rozwiązanie |
 |---------|-------------|
-| Workflow fail: brak `HF_TOKEN` / `HF_SPACE_REPO` | Uzupełnij secret i variable w GitHub |
+| Workflow fail: brak `HF_TOKEN` / `HF_SPACE_REPO` | Uzupełnij oba sekrety w GitHub (Actions → Secrets) |
 | **403** przy sync | Token bez write lub brak dostępu do Space |
 | **502** na Space | Logi w HF → często brak `JWT_SECRET` lub Turso |
 | CORS w przeglądarce | Dodaj origin do `CORS_ALLOWED_ORIGINS` w panelu Space |

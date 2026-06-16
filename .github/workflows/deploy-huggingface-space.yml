@@ -1,7 +1,7 @@
 # Synchronizuje repozytorium GitHub → Hugging Face Docker Space po pushu na main.
 # Wymagane w GitHub (Settings → Secrets and variables → Actions):
-#   Secret:  HF_TOKEN — token HF z uprawnieniem write (https://huggingface.co/settings/tokens)
-#   Variable: HF_SPACE_REPO — np. jakubgawron/slavia-backend (owner/nazwa-space, bez prefiksu spaces/)
+#   Secret HF_TOKEN — token HF z uprawnieniem write
+#   Secret lub Variable HF_SPACE_REPO — np. jakubgawron/slavia-backend (owner/nazwa-space)
 
 name: Deploy Hugging Face Space
 
@@ -32,7 +32,7 @@ jobs:
 
       - name: Validate GitHub configuration
         env:
-          HF_SPACE_REPO: ${{ vars.HF_SPACE_REPO }}
+          HF_SPACE_REPO: ${{ secrets.HF_SPACE_REPO || vars.HF_SPACE_REPO }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euo pipefail
@@ -41,7 +41,7 @@ jobs:
             exit 1
           fi
           if [[ -z "${HF_SPACE_REPO}" ]]; then
-            echo "::error::Brak zmiennej HF_SPACE_REPO (owner/nazwa-space). Ustaw w Settings → Variables → Actions"
+            echo "::error::Brak HF_SPACE_REPO (secret lub variable). Wartość: owner/nazwa-space, np. jakubgawron/slavia-backend"
             exit 1
           fi
 
@@ -52,7 +52,7 @@ jobs:
         uses: huggingface/hub-sync@v0.1.0
         with:
           github_repo_id: ${{ github.repository }}
-          huggingface_repo_id: ${{ vars.HF_SPACE_REPO }}
+          huggingface_repo_id: ${{ secrets.HF_SPACE_REPO || vars.HF_SPACE_REPO }}
           hf_token: ${{ secrets.HF_TOKEN }}
           repo_type: space
           space_sdk: docker
@@ -60,7 +60,7 @@ jobs:
       - name: Summary
         if: success()
         env:
-          HF_SPACE_REPO: ${{ vars.HF_SPACE_REPO }}
+          HF_SPACE_REPO: ${{ secrets.HF_SPACE_REPO || vars.HF_SPACE_REPO }}
         run: |
           {
             echo "### Hugging Face Space"
