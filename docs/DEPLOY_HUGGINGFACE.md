@@ -23,7 +23,7 @@ Każdy push na `main` (gdy zmienią się pliki backendu) automatycznie synchroni
 | Typ | Nazwa | Wartość |
 |-----|-------|---------|
 | Secret | `HF_TOKEN` | Token HF z uprawnieniem **write** ([API Tokens](https://huggingface.co/settings/tokens)) |
-| Secret **lub** Variable | `HF_SPACE_REPO` | `TWOJ_USER/TWOJ_SPACE` — np. `JakubGawron1/slavia-backend` (bez prefiksu `spaces/`) |
+| Secret **lub** Variable | `HF_SPACE_REPO` | `koliber/cks-slavia` (bez prefiksu `spaces/`) |
 
 > Oba mogą być sekretami — workflow akceptuje `HF_SPACE_REPO` jako secret albo variable.
 
@@ -42,7 +42,7 @@ Ręczny deploy: **Actions** → **Deploy Hugging Face Space** → **Run workflow
 ### 3. Smoke test
 
 ```bash
-curl -s "https://TWOJ-USER-TWOJ-SPACE.hf.space/api/posts" | head
+curl -s "https://koliber-cks-slavia.hf.space/api/posts" | head
 ```
 
 URL publiczny: `https://{user}-{space}.hf.space` (myślnik zamiast `/`).
@@ -70,7 +70,7 @@ Opcjonalnie: `GROQ_API_KEY`, `CLOUDINARY_*`, `GITHUB_TOKEN` — patrz `.env.exam
 
 | Zmienna | Przykład |
 |---------|----------|
-| `NUXT_PUBLIC_API_BASE_URL_HUGGINGFACE` | `https://twoj-user-slavia-backend.hf.space` |
+| `NUXT_PUBLIC_API_BASE_URL_HUGGINGFACE` | `https://koliber-cks-slavia.hf.space` |
 | `DEFAULT_BACKEND_PROVIDER` | `huggingface` (opcjonalnie) |
 
 Bez końcowego slasha w URL.

@@ -15,7 +15,7 @@ API klubu CKS Slavia Ruda Śląska — Docker Space na Hugging Face.
 
 Publiczny URL Space (bez końcowego slasha):
 
-`https://TWOJ-USER-TWOJ-SPACE.hf.space`
+`https://koliber-cks-slavia.hf.space`
 
 ## Wymagane zmienne (Settings → Variables and secrets)
 
@@ -40,7 +40,7 @@ Opcjonalnie: `GROQ_API_KEY`, `CLOUDINARY_*`, `GITHUB_TOKEN` (upload CMS) — pat
 W env frontendu dodaj:
 
 ```
-NUXT_PUBLIC_API_BASE_URL_HUGGINGFACE=https://TWOJ-USER-TWOJ-SPACE.hf.space
+NUXT_PUBLIC_API_BASE_URL_HUGGINGFACE=https://koliber-cks-slavia.hf.space
 ```
 
 Przełącznik globalny: `/superadmin/developer` → **Hugging Face** → Zapisz globalnie.
