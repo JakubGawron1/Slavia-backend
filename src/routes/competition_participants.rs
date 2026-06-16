@@ -403,7 +403,7 @@ pub async fn calendar_entries_for_athlete_id(
         return Ok(Vec::new());
     }
 
-    let placeholders = crate::sql_util::in_placeholders(competition_rows.len());
+    let placeholders = crate::sql::in_placeholders(competition_rows.len());
     let participants_sql = format!(
         "SELECT cp.competition_id, a.id, a.full_name
          FROM competition_participants cp

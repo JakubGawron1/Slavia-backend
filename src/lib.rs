@@ -33,6 +33,7 @@ pub mod production_guards;
 mod pagination;
 mod post_throttle;
 mod sinclair;
+pub mod sql;
 mod sql_row;
 mod sql_util;
 

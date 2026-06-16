@@ -26,4 +26,4 @@ Tabela `schema_migrations (version PRIMARY KEY, applied_at)` — każdy plik uru
 
 ## Zapytania w trasach
 
-Ciężkie zapytania listowe trzymaj w stałych `const SQL: &str` obok handlera lub w `src/sql/queries/` przy większym refaktorze. Preferuj `JOIN` + `GROUP BY` zamiast skorelowanych podzapytań w pętli.
+Ciężkie zapytania listowe trzymaj w `src/sql/queries/` (stałe `pub const …: &str`) i importuj w handlerach. Preferuj `JOIN` + `GROUP BY` zamiast skorelowanych podzapytań w pętli.

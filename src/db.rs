@@ -591,6 +591,46 @@ pub async fn sync_athlete_bests_from_approved_conn(
     Ok(())
 }
 
+/// Synchronizuje rekordy życiowe wielu zawodników jednym zapytaniem (batch approve).
+pub async fn sync_athletes_bests_from_approved_batch_conn(
+    conn: &Connection,
+    athlete_ids: &[String],
+) -> Result<(), libsql::Error> {
+    if athlete_ids.is_empty() {
+        return Ok(());
+    }
+    let placeholders = crate::sql_util::in_placeholders(athlete_ids.len());
+    let sql = format!(
+        "WITH ranked AS (
+            SELECT athlete_id, snatch, clean_and_jerk, total,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY athlete_id
+                     ORDER BY total DESC, date DESC
+                   ) AS rn
+            FROM results
+            WHERE status = 'Approved'
+              AND (kind IS NULL OR kind = 'competition')
+              AND athlete_id IN ({placeholders})
+         )
+         UPDATE athletes SET
+           best_snatch_kg = (
+             SELECT snatch FROM ranked r
+             WHERE r.athlete_id = athletes.id AND r.rn = 1
+           ),
+           best_clean_jerk_kg = (
+             SELECT clean_and_jerk FROM ranked r
+             WHERE r.athlete_id = athletes.id AND r.rn = 1
+           ),
+           total_kg = (
+             SELECT total FROM ranked r
+             WHERE r.athlete_id = athletes.id AND r.rn = 1
+           )
+         WHERE athletes.id IN ({placeholders})"
+    );
+    conn.execute(&sql, athlete_ids.to_vec()).await?;
+    Ok(())
+}
+
 /// Migracja przy starcie: wszystkie wiersze `athletes` — `best_*` wyłącznie z tabeli `results` (Approved).
 pub async fn sync_all_athletes_bests_from_results(conn: &Connection) -> Result<u64, libsql::Error> {
     conn.execute(
