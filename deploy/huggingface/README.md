@@ -2,7 +2,7 @@
 title: Slavia Backend
 emoji: 🏋️
 colorFrom: green
-colorTo: emerald
+colorTo: green
 sdk: docker
 app_port: 8080
 pinned: false
