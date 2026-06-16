@@ -111,4 +111,4 @@ git add . && git commit -m "Deploy" && git push
 | **403** przy sync | Token bez write lub brak dostępu do Space |
 | **502** na Space | Logi w HF → często brak `JWT_SECRET` lub Turso |
 | CORS w przeglądarce | Dodaj origin do `CORS_ALLOWED_ORIGINS` w panelu Space |
-| Frontend na Leapcell | Ustaw `NUXT_PUBLIC_API_BASE_URL_HUGGINGFACE` + przełącz provider |
+| Frontend na starym providerze | Ustaw `NUXT_PUBLIC_API_BASE_URL_HUGGINGFACE` + przełącz provider w developer tools |
