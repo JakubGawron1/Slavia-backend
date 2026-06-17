@@ -48,14 +48,66 @@ jobs:
       - name: Prepare Space README (YAML frontmatter dla Docker SDK)
         run: cp deploy/huggingface/README.md README.md
 
-      - name: Sync to Hugging Face Space
-        uses: huggingface/hub-sync@v0.1.0
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
         with:
-          github_repo_id: ${{ github.repository }}
-          huggingface_repo_id: ${{ secrets.HF_SPACE_REPO || vars.HF_SPACE_REPO }}
-          hf_token: ${{ secrets.HF_TOKEN }}
-          repo_type: space
-          space_sdk: docker
+          enable-cache: true
+          cache-dependency-glob: 'deploy/huggingface/**'
+
+      - name: Sync to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE_REPO: ${{ secrets.HF_SPACE_REPO || vars.HF_SPACE_REPO }}
+        run: |
+          set -euo pipefail
+
+          # hub-sync@v0.1.0 nie retryuje 429 z HF API (repo create). huggingface_hub>=1.2 czyta RateLimit.
+          HF_CLI=(uvx --with 'huggingface_hub>=1.2.0' hf)
+
+          retry_hf() {
+            local max_attempts=6
+            local attempt=1
+            local wait_s=45
+            while true; do
+              if "${@}"; then
+                return 0
+              fi
+              local exit_code=$?
+              if [[ ${attempt} -ge ${max_attempts} ]]; then
+                echo "::error::HF command failed after ${max_attempts} attempts (exit ${exit_code}): $*"
+                return "${exit_code}"
+              fi
+              echo "HF rate limit or transient error — retry ${attempt}/${max_attempts} in ${wait_s}s..."
+              sleep "${wait_s}"
+              attempt=$((attempt + 1))
+              wait_s=$((wait_s + 30))
+              if [[ ${wait_s} -gt 300 ]]; then
+                wait_s=300
+              fi
+            done
+          }
+
+          echo "Ensuring Space exists: ${HF_SPACE_REPO}"
+          retry_hf "${HF_CLI[@]}" repo create "${HF_SPACE_REPO}" \
+            --repo-type space \
+            --space-sdk docker \
+            --exist-ok
+
+          file_count=$(find . -type f ! -path './.git/*' ! -path './.github/*' | wc -l | tr -d ' ')
+          if [[ "${file_count}" -eq 0 ]]; then
+            echo "::error::No files to upload"
+            exit 1
+          fi
+
+          echo "Uploading ${file_count} files to ${HF_SPACE_REPO}..."
+          retry_hf "${HF_CLI[@]}" upload "${HF_SPACE_REPO}" . \
+            --repo-type space \
+            --exclude=".git*" \
+            --exclude=".github*" \
+            --delete="*" \
+            --commit-message="Sync from GitHub (${GITHUB_SHA::7})"
+
+          echo "Space: https://huggingface.co/spaces/${HF_SPACE_REPO}"
 
       - name: Summary
         if: success()
