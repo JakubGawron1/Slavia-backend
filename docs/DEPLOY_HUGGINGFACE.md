@@ -34,7 +34,7 @@ Każdy push na `main` (gdy zmienią się pliki backendu) automatycznie synchroni
 Workflow `.github/workflows/deploy-huggingface-space.yml`:
 
 1. Kopiuje `deploy/huggingface/README.md` → `README.md` (wymagany YAML z `sdk: docker`).
-2. Uruchamia oficjalną akcję [`huggingface/hub-sync`](https://huggingface.co/docs/hub/spaces-github-actions) — mirror plików na Space.
+2. Uruchamia `hf upload` (przez `uvx` + `huggingface_hub>=1.2`) z retry przy limitach API HF — mirror plików na Space.
 3. HF buduje obraz z `Dockerfile` i uruchamia kontener.
 
 Ręczny deploy: **Actions** → **Deploy Hugging Face Space** → **Run workflow**.
