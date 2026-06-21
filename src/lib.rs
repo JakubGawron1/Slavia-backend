@@ -39,6 +39,8 @@ mod sql_row;
 mod sql_util;
 
 #[cfg(test)]
+mod athlete_dashboard_acl_integration_test;
+#[cfg(test)]
 mod import_http_integration_test;
 
 use state::AppState;
