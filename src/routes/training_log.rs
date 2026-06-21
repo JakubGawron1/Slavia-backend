@@ -136,17 +136,17 @@ fn ensure_athlete_only_own_entries(
     }
 }
 
-fn row_to_entry(row: &libsql::Row) -> TrainingLogEntry {
-    TrainingLogEntry {
-        id: row.get(0).unwrap(),
-        athlete_id: row.get(1).unwrap(),
-        session_date: row.get(2).unwrap(),
+fn row_to_entry(row: &libsql::Row) -> Result<TrainingLogEntry, libsql::Error> {
+    Ok(TrainingLogEntry {
+        id: row.get(0)?,
+        athlete_id: row.get(1)?,
+        session_date: row.get(2)?,
         title: row.get(3).ok(),
-        notes: row.get(4).unwrap(),
-        created_at: row.get(5).unwrap(),
+        notes: row.get(4)?,
+        created_at: row.get(5)?,
         author_user_id: row.get(6).ok(),
         author_username: row.get(7).ok(),
-    }
+    })
 }
 
 pub async fn list_training_log(
@@ -180,7 +180,9 @@ pub async fn list_training_log(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        list.push(row_to_entry(&row));
+        list.push(row_to_entry(&row).map_err(|e| {
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        })?);
     }
 
     Ok(Json(list))
@@ -286,7 +288,7 @@ async fn fetch_username(state: &AppState, user_id: &str) -> Result<Option<String
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(row.map(|r| r.get::<String>(0).unwrap()))
+    Ok(row.and_then(|r| r.get::<String>(0).ok()))
 }
 
 async fn entry_for_athlete(
@@ -312,7 +314,9 @@ async fn entry_for_athlete(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(row.map(|r| row_to_entry(&r)))
+    Ok(row.map(|r| {
+        row_to_entry(&r).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    }).transpose()?)
 }
 
 pub async fn update_training_log(

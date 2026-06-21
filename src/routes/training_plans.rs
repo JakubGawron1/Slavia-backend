@@ -140,22 +140,41 @@ fn clamp_day_of_week(d: i32) -> i32 {
     d.clamp(1, 7)
 }
 
-fn row_to_dto(row: &libsql::Row) -> TrainingPlanDto {
-    TrainingPlanDto {
-        id: row.get(0).unwrap(),
-        athlete_id: row.get(1).unwrap(),
-        title: row.get(2).unwrap(),
+fn row_to_dto(row: &libsql::Row) -> Result<TrainingPlanDto, libsql::Error> {
+    Ok(TrainingPlanDto {
+        id: row.get(0)?,
+        athlete_id: row.get(1)?,
+        title: row.get(2)?,
         goal: row.get(3).ok(),
-        week_start: row.get(4).unwrap(),
+        week_start: row.get(4)?,
         duration_weeks: row.get(5).unwrap_or(1),
-        status: row.get(6).unwrap(),
+        status: row.get(6)?,
         coach_note: row.get(7).ok(),
         athlete_note: row.get(8).ok(),
         progress_percent: row.get(9).unwrap_or(0),
         created_by: row.get(10).ok(),
-        created_at: row.get(11).unwrap(),
-        updated_at: row.get(12).unwrap(),
-    }
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+    })
+}
+
+fn row_to_plan_item_dto(row: &libsql::Row) -> Result<TrainingPlanItemDto, ApiError> {
+    Ok(TrainingPlanItemDto {
+        id: row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        plan_id: row.get(1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        week_number: row.get(2).unwrap_or(1),
+        day_of_week: row.get(3).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        exercise_id: row.get(4).ok(),
+        custom_exercise_name: row.get(5).ok(),
+        sets: row.get(6).ok(),
+        reps: row.get(7).ok(),
+        intensity_percent: row.get(8).ok(),
+        weight_kg: row.get(9).ok(),
+        notes: row.get(10).ok(),
+        sort_order: row.get(11).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        exercise_name: sql_row::lossy_opt_string(row, 12)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+    })
 }
 
 const PLAN_SELECT: &str = "SELECT id, athlete_id, title, goal, week_start, duration_weeks, status, coach_note, athlete_note, progress_percent, created_by, created_at, updated_at \
@@ -200,7 +219,9 @@ pub async fn list_my_training_plans(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        out.push(row_to_dto(&row));
+        out.push(row_to_dto(&row).map_err(|e| {
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        })?);
     }
     Ok(Json(out))
 }
@@ -228,7 +249,9 @@ pub async fn list_athlete_training_plans(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        out.push(row_to_dto(&row));
+        out.push(row_to_dto(&row).map_err(|e| {
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        })?);
     }
     Ok(Json(out))
 }
@@ -562,22 +585,7 @@ pub async fn list_plan_items(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        out.push(TrainingPlanItemDto {
-            id: row.get(0).unwrap(),
-            plan_id: row.get(1).unwrap(),
-            week_number: row.get(2).unwrap_or(1),
-            day_of_week: row.get(3).unwrap(),
-            exercise_id: row.get(4).ok(),
-            custom_exercise_name: row.get(5).ok(),
-            sets: row.get(6).ok(),
-            reps: row.get(7).ok(),
-            intensity_percent: row.get(8).ok(),
-            weight_kg: row.get(9).ok(),
-            notes: row.get(10).ok(),
-            sort_order: row.get(11).unwrap(),
-            exercise_name: sql_row::lossy_opt_string(&row, 12)
-                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-        });
+        out.push(row_to_plan_item_dto(&row)?);
     }
     Ok(Json(out))
 }

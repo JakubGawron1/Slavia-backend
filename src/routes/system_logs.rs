@@ -30,6 +30,56 @@ pub struct SystemMetricsDto {
     pub recent_events: Vec<AuditLogRow>,
 }
 
+/// Skrót KPI klubu na dashboardzie trenera (bez pełnego feedu audytu).
+#[derive(Serialize, Clone)]
+pub struct TrainerMonitoringSummary {
+    pub athletes_count: i64,
+    pub active_plans_count: i64,
+    pub pending_results_count: i64,
+    pub pending_payments_count: i64,
+    pub pending_attendance_count: i64,
+    pub unread_notifications_count: i64,
+    pub recovery_checkins_7d_count: i64,
+}
+
+pub(crate) async fn trainer_monitoring_summary_for_state(
+    state: &AppState,
+) -> Result<TrainerMonitoringSummary, ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            crate::sql::queries::system_logs::TRAINER_MONITORING_COUNTS,
+            (),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let counts = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if let Some(r) = counts {
+        Ok(TrainerMonitoringSummary {
+            athletes_count: r.get::<i64>(0).unwrap_or(0),
+            active_plans_count: r.get::<i64>(1).unwrap_or(0),
+            pending_results_count: r.get::<i64>(2).unwrap_or(0),
+            pending_payments_count: r.get::<i64>(3).unwrap_or(0),
+            pending_attendance_count: r.get::<i64>(4).unwrap_or(0),
+            unread_notifications_count: r.get::<i64>(5).unwrap_or(0),
+            recovery_checkins_7d_count: r.get::<i64>(6).unwrap_or(0),
+        })
+    } else {
+        Ok(TrainerMonitoringSummary {
+            athletes_count: 0,
+            active_plans_count: 0,
+            pending_results_count: 0,
+            pending_payments_count: 0,
+            pending_attendance_count: 0,
+            unread_notifications_count: 0,
+            recovery_checkins_7d_count: 0,
+        })
+    }
+}
+
 #[derive(Serialize)]
 pub struct OpsEventRow {
     pub source: String,
@@ -359,14 +409,18 @@ pub async fn db_backup_handler(
     let signature =
         crate::cloudinary::cloudinary_signature(&sign_params, &state.cloudinary_api_secret);
 
+    let file_part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(filename.clone())
+        .mime_str("application/x-sqlite3")
+        .map_err(|e| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Nieprawidłowy typ MIME kopii bazy: {e}"),
+            )
+        })?;
+
     let form = reqwest::multipart::Form::new()
-        .part(
-            "file",
-            reqwest::multipart::Part::bytes(bytes)
-                .file_name(filename)
-                .mime_str("application/x-sqlite3")
-                .unwrap(),
-        )
+        .part("file", file_part)
         .text("api_key", state.cloudinary_api_key.clone())
         .text("folder", folder)
         .text("timestamp", timestamp)

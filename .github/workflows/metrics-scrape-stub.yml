@@ -1,0 +1,33 @@
+# L-1 / OBS-1 — opcjonalny canary: GET /metrics na HF (gdy PROMETHEUS_METRICS=1).
+# Wymaga tego samego sekretu co keep-warm.yml:
+#   HF_API_BASE_URL — np. https://koliber-cks-slavia.hf.space
+# Gdy sekret pusty, job jest pomijany. 404 = Prometheus wyłączony na Space (oczekiwane).
+
+name: Metrics scrape stub (HF)
+
+on:
+  schedule:
+    # Co godzinę — lżejsze niż keep-warm; wystarczy na canary metryk.
+    - cron: '15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    if: ${{ secrets.HF_API_BASE_URL != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: GET /metrics (Prometheus stub)
+        env:
+          HF_API_BASE_URL: ${{ secrets.HF_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          base="${HF_API_BASE_URL%/}"
+          url="${base}/metrics"
+          echo "Scrape stub: ${url}"
+          body="$(curl -fsS --max-time 45 --retry 2 --retry-delay 10 "${url}")"
+          echo "${body}" | head -n 8
+          echo "${body}" | grep -q 'slavia_http_requests_total' || {
+            echo "Missing slavia_http_requests_total in /metrics body"
+            exit 1
+          }

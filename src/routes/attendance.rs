@@ -491,6 +491,48 @@ pub async fn list_attendance(
     Ok(Json(out))
 }
 
+pub(crate) async fn attendance_summary_for_athlete_id(
+    state: &AppState,
+    athlete_id: &str,
+) -> Result<AttendanceSummary, ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT
+                SUM(CASE WHEN status = 'obecny' THEN 1 ELSE 0 END) AS present_count,
+                SUM(CASE WHEN status = 'nieobecny' THEN 1 ELSE 0 END) AS absent_count,
+                SUM(CASE WHEN verification_state = 'pending' THEN 1 ELSE 0 END) AS pending_count
+             FROM attendance_records
+             WHERE athlete_id = ?1",
+            [athlete_id.to_string()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Brak danych obecności"))?;
+
+    let present_count: i64 = row.get(0).unwrap_or(0);
+    let absent_count: i64 = row.get(1).unwrap_or(0);
+    let pending_count: i64 = row.get(2).unwrap_or(0);
+    let denom = (present_count + absent_count) as f64;
+    let attendance_percent = if denom > 0.0 {
+        ((present_count as f64 / denom) * 1000.0).round() / 10.0
+    } else {
+        0.0
+    };
+
+    Ok(AttendanceSummary {
+        athlete_id: athlete_id.to_string(),
+        present_count,
+        absent_count,
+        pending_count,
+        attendance_percent,
+    })
+}
+
 pub async fn attendance_summary_for_athlete(
     State(state): State<AppState>,
     claims: Claims,
@@ -518,40 +560,7 @@ pub async fn attendance_summary_for_athlete(
         }
     }
 
-    let mut rows = state
-        .db
-        .query(
-            "SELECT
-                SUM(CASE WHEN status = 'obecny' THEN 1 ELSE 0 END) AS present_count,
-                SUM(CASE WHEN status = 'nieobecny' THEN 1 ELSE 0 END) AS absent_count,
-                SUM(CASE WHEN verification_state = 'pending' THEN 1 ELSE 0 END) AS pending_count
-             FROM attendance_records
-             WHERE athlete_id = ?1",
-            [athlete_id.clone()],
-        )
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let row = rows
-        .next()
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Brak danych obecności"))?;
-
-    let present_count: i64 = row.get(0).unwrap_or(0);
-    let absent_count: i64 = row.get(1).unwrap_or(0);
-    let pending_count: i64 = row.get(2).unwrap_or(0);
-    let denom = (present_count + absent_count) as f64;
-    let attendance_percent = if denom > 0.0 {
-        ((present_count as f64 / denom) * 1000.0).round() / 10.0
-    } else {
-        0.0
-    };
-
-    Ok(Json(AttendanceSummary {
-        athlete_id,
-        present_count,
-        absent_count,
-        pending_count,
-        attendance_percent,
-    }))
+    Ok(Json(
+        attendance_summary_for_athlete_id(&state, &athlete_id).await?,
+    ))
 }

@@ -1,0 +1,98 @@
+# L-4 — alert przy awarii health check lub wysokim error rate (Prometheus).
+#
+# Wymagane w GitHub (Settings → Secrets and variables → Actions):
+#   Secret HF_API_BASE_URL — bazowy URL Space API, np. https://koliber-cks-slavia.hf.space
+#   (bez końcowego slasha; ten sam sekret co w keep-warm.yml)
+#
+# Na instancji produkcyjnej włącz metryki: PROMETHEUS_METRICS=1 → GET /metrics
+# (liczniki slavia_http_requests_total, slavia_http_errors_total — stub OBS-1 / H-4).
+#
+# Progi error rate (env joba, można nadpisać w workflow_dispatch):
+#   SLAVIA_ERROR_RATE_THRESHOLD=0.10   — fail gdy errors/requests > 10%
+#   SLAVIA_ERROR_RATE_MIN_REQUESTS=50  — minimum próbek przed oceną ratio (unik fałszywych alarmów)
+#
+# Gdy /metrics niedostępne (PROMETHEUS_METRICS wyłączone), job ocenia tylko health check.
+# Fail joba → powiadomienie GitHub Actions (repo Watch → Actions) lub webhook w ustawieniach org.
+
+name: Error rate alert
+
+on:
+  schedule:
+    # Co godzinę — wystarczy na stub; dostosuj przy podpięciu PagerDuty/Slack.
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      error_rate_threshold:
+        description: 'Max acceptable errors/requests ratio (e.g. 0.10 = 10%)'
+        required: false
+        default: '0.10'
+      min_requests:
+        description: 'Minimum request count before ratio check'
+        required: false
+        default: '50'
+
+jobs:
+  alert:
+    if: ${{ secrets.HF_API_BASE_URL != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SLAVIA_ERROR_RATE_THRESHOLD: ${{ github.event.inputs.error_rate_threshold || '0.10' }}
+      SLAVIA_ERROR_RATE_MIN_REQUESTS: ${{ github.event.inputs.min_requests || '50' }}
+    steps:
+      - name: Health check (GET /api/health)
+        env:
+          HF_API_BASE_URL: ${{ secrets.HF_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          base="${HF_API_BASE_URL%/}"
+          echo "Health: ${base}/api/health"
+          curl -fsS --max-time 30 --retry 2 --retry-delay 5 \
+            "${base}/api/health"
+
+      - name: Prometheus error rate (GET /metrics)
+        env:
+          HF_API_BASE_URL: ${{ secrets.HF_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          base="${HF_API_BASE_URL%/}"
+          metrics_url="${base}/metrics"
+          echo "Metrics: ${metrics_url}"
+
+          http_code="$(curl -sS --max-time 30 -o /tmp/slavia-metrics.txt -w '%{http_code}' "${metrics_url}" || true)"
+          if [[ "${http_code}" == "404" ]] || [[ "${http_code}" == "000" ]]; then
+            echo "GET /metrics returned ${http_code} — PROMETHEUS_METRICS likely disabled; skipping ratio check."
+            exit 0
+          fi
+          if [[ "${http_code}" -lt 200 ]] || [[ "${http_code}" -ge 300 ]]; then
+            echo "::error::GET /metrics failed with HTTP ${http_code}"
+            exit 1
+          fi
+
+          requests="$(grep -E '^slavia_http_requests_total ' /tmp/slavia-metrics.txt | awk '{print $2}' | tail -1)"
+          errors="$(grep -E '^slavia_http_errors_total ' /tmp/slavia-metrics.txt | awk '{print $2}' | tail -1)"
+
+          if [[ -z "${requests}" ]] || [[ -z "${errors}" ]]; then
+            echo "Prometheus counters not found in /metrics — skipping ratio check."
+            exit 0
+          fi
+
+          echo "Counters: requests=${requests}, errors=${errors}"
+          echo "Threshold: ${SLAVIA_ERROR_RATE_THRESHOLD} (min requests: ${SLAVIA_ERROR_RATE_MIN_REQUESTS})"
+
+          if (( requests < SLAVIA_ERROR_RATE_MIN_REQUESTS )); then
+            echo "Too few requests (${requests} < ${SLAVIA_ERROR_RATE_MIN_REQUESTS}) — skipping ratio check."
+            exit 0
+          fi
+
+          rate="$(awk -v e="${errors}" -v r="${requests}" 'BEGIN { printf "%.6f", e / r }')"
+          echo "Error rate: ${rate} (${errors}/${requests})"
+
+          if awk -v rate="${rate}" -v thresh="${SLAVIA_ERROR_RATE_THRESHOLD}" 'BEGIN { exit (rate > thresh) ? 1 : 0 }'; then
+            echo "Error rate within threshold."
+          else
+            pct="$(awk -v rate="${rate}" 'BEGIN { printf "%.2f", rate * 100 }')"
+            thresh_pct="$(awk -v t="${SLAVIA_ERROR_RATE_THRESHOLD}" 'BEGIN { printf "%.2f", t * 100 }')"
+            echo "::error::HTTP error rate ${pct}% exceeds threshold ${thresh_pct}% (${errors}/${requests})"
+            exit 1
+          fi

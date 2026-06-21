@@ -139,7 +139,12 @@ pub async fn login_handler(
 
     let exp = Utc::now()
         .checked_add_signed(Duration::days(1))
-        .expect("valid timestamp")
+        .ok_or_else(|| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Nie można obliczyć daty wygaśnięcia tokenu",
+            )
+        })?
         .timestamp() as usize;
 
     let claims = crate::middleware::auth::Claims {

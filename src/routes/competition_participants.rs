@@ -8,6 +8,7 @@ use axum::{
     http::StatusCode,
 };
 use chrono::{SecondsFormat, Utc};
+use libsql::Row;
 use serde::{Deserialize, Serialize};
 
 use crate::api_error::{ApiError, api_error};
@@ -29,6 +30,29 @@ pub struct SetParticipantsRequest {
 #[derive(Deserialize)]
 pub struct SyncAthleteCompetitionAssignmentsRequest {
     pub competition_ids: Vec<String>,
+}
+
+fn competition_from_row(row: &Row) -> Result<Competition, libsql::Error> {
+    Ok(Competition {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        date: row.get(2)?,
+        location: row.get(3)?,
+        description: row.get(4).ok(),
+        category: row.get(5).ok(),
+        status: row.get(6).ok(),
+        external_source: row.get(7).ok(),
+        external_ref: row.get(8).ok(),
+        external_url: row.get(9).ok(),
+        club_participates: row.get::<i64>(10).unwrap_or(0) != 0,
+    })
+}
+
+fn participant_brief_from_row(row: &Row) -> Result<ParticipantBrief, libsql::Error> {
+    Ok(ParticipantBrief {
+        athlete_id: row.get(0)?,
+        full_name: row.get(1)?,
+    })
 }
 
 pub async fn list_competitions_for_athlete(
@@ -73,19 +97,9 @@ pub async fn list_competitions_for_athlete(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        list.push(Competition {
-            id: row.get(0).unwrap(),
-            title: row.get(1).unwrap(),
-            date: row.get(2).unwrap(),
-            location: row.get(3).unwrap(),
-            description: row.get(4).ok(),
-            category: row.get(5).ok(),
-            status: row.get(6).ok(),
-            external_source: row.get(7).ok(),
-            external_ref: row.get(8).ok(),
-            external_url: row.get(9).ok(),
-            club_participates: row.get::<i64>(10).unwrap_or(0) != 0,
-        });
+        list.push(competition_from_row(&row).map_err(|e| {
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        })?);
     }
 
     Ok(Json(list))
@@ -132,7 +146,9 @@ pub async fn sync_competitions_for_athlete(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        let cid: String = row.get(0).unwrap();
+        let cid: String = row.get(0).map_err(|e| {
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        })?;
         old_ids.insert(cid);
     }
 
@@ -220,10 +236,9 @@ pub async fn list_participants(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        out.push(ParticipantBrief {
-            athlete_id: row.get(0).unwrap(),
-            full_name: row.get(1).unwrap(),
-        });
+        out.push(participant_brief_from_row(&row).map_err(|e| {
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        })?);
     }
 
     Ok(Json(out))
@@ -275,7 +290,9 @@ pub async fn set_participants(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        old_athlete_ids.insert(row.get(0).unwrap());
+        old_athlete_ids.insert(row.get(0).map_err(|e| {
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        })?);
     }
 
     state
@@ -380,23 +397,11 @@ pub async fn calendar_entries_for_athlete_id(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        let cid: String = row.get(0).unwrap();
-        competition_rows.push((
-            cid.clone(),
-            Competition {
-                id: cid,
-                title: row.get(1).unwrap(),
-                date: row.get(2).unwrap(),
-                location: row.get(3).unwrap(),
-                description: row.get(4).ok(),
-                category: row.get(5).ok(),
-                status: row.get(6).ok(),
-                external_source: row.get(7).ok(),
-                external_ref: row.get(8).ok(),
-                external_url: row.get(9).ok(),
-                club_participates: row.get::<i64>(10).unwrap_or(0) != 0,
-            },
-        ));
+        let competition = competition_from_row(&row).map_err(|e| {
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        })?;
+        let cid = competition.id.clone();
+        competition_rows.push((cid, competition));
     }
 
     if competition_rows.is_empty() {
@@ -428,13 +433,19 @@ pub async fn calendar_entries_for_athlete_id(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        let competition_id: String = r.get(0).unwrap();
+        let competition_id: String = r.get(0).map_err(|e| {
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        })?;
         participants_by_competition
             .entry(competition_id)
             .or_default()
             .push(ParticipantBrief {
-                athlete_id: r.get(1).unwrap(),
-                full_name: r.get(2).unwrap(),
+                athlete_id: r.get(1).map_err(|e| {
+                    api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+                })?,
+                full_name: r.get(2).map_err(|e| {
+                    api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+                })?,
             });
     }
 
@@ -474,7 +485,9 @@ pub async fn my_calendar_for_athlete(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let athlete_id: String = match athlete_row {
-        Some(r) => r.get(0).unwrap(),
+        Some(r) => r.get(0).map_err(|e| {
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        })?,
         None => return Ok(Json(MyCalendarResponse { entries: vec![] })),
     };
 

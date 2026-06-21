@@ -79,6 +79,7 @@ const PUBLIC_PREFIXES = [
   '/api/club/feed',
   '/api/ai/coach/public',
   '/api/system/ping',
+  '/api/health',
   '/api/system/calendar/export',
   '/api/system/mobile-releases/latest',
   '/api/system/openapi.json'
@@ -102,10 +103,17 @@ for (const [varName, entries] of routesByVar) {
   }
 }
 
-// Root page
+// Root page + top-level routes (poza blokami `let *_routes`)
 paths['/'] = {
   get: {
     summary: 'Backend root HTML',
+    responses: { 200: { description: 'OK' } }
+  }
+}
+paths['/api/health'] = {
+  get: {
+    summary: 'GET /api/health',
+    description: 'Alias of GET /api/system/ping — lightweight instance health check.',
     responses: { 200: { description: 'OK' } }
   }
 }

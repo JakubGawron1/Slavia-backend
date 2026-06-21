@@ -6,12 +6,16 @@ use crate::middleware::auth::{
 use crate::models::{Athlete, AthletePublic, Role};
 use crate::notifications;
 use crate::routes::admins::user_roles_by_id;
+use crate::routes::attendance::{AttendanceSummary, attendance_summary_for_athlete_id};
+use crate::routes::competition_participants::{MyCalendarEntry, calendar_entries_for_athlete_id};
+use crate::routes::payments::{MonthQuery, PaymentStatusResponse, payment_status_for_athlete_id, resolve_payment_month};
+use crate::routes::results::pending_results_count_for_athlete_id;
 use crate::sql_row;
 use crate::state::AppState;
 use argon2::PasswordHasher;
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 use chrono::DateTime;
@@ -696,6 +700,61 @@ pub async fn me_athlete_handler(
     let athlete = athlete_from_row_merge_public_photo(&row)
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(athlete))
+}
+
+#[derive(Serialize)]
+pub struct AthleteDashboardResponse {
+    pub athlete: Option<Athlete>,
+    pub pending_results_count: i64,
+    pub calendar_entries: Vec<MyCalendarEntry>,
+    pub attendance_summary: Option<AttendanceSummary>,
+    pub payment_status: Option<PaymentStatusResponse>,
+}
+
+/// Agregowany payload dashboardu zawodnika — jeden round-trip zamiast 5 sekwencyjnych GET.
+pub(crate) async fn athlete_dashboard_for_user_id(
+    state: &AppState,
+    user_id: &str,
+    payment_month: Option<&str>,
+) -> Result<AthleteDashboardResponse, ApiError> {
+    let athlete = fetch_athlete_by_user_id(state, user_id).await?;
+    let Some(ref a) = athlete else {
+        return Ok(AthleteDashboardResponse {
+            athlete: None,
+            pending_results_count: 0,
+            calendar_entries: vec![],
+            attendance_summary: None,
+            payment_status: None,
+        });
+    };
+
+    let calendar_entries = calendar_entries_for_athlete_id(state, &a.id).await?;
+    let pending_results_count = pending_results_count_for_athlete_id(state, &a.id).await?;
+    let attendance_summary = attendance_summary_for_athlete_id(state, &a.id)
+        .await
+        .ok();
+    let month = resolve_payment_month(payment_month);
+    let payment_status = payment_status_for_athlete_id(state, &a.id, &month)
+        .await
+        .ok();
+
+    Ok(AthleteDashboardResponse {
+        athlete,
+        pending_results_count,
+        calendar_entries,
+        attendance_summary,
+        payment_status,
+    })
+}
+
+pub async fn me_athlete_dashboard_handler(
+    State(state): State<AppState>,
+    claims: Claims,
+    Query(q): Query<MonthQuery>,
+) -> Result<Json<AthleteDashboardResponse>, ApiError> {
+    Ok(Json(
+        athlete_dashboard_for_user_id(&state, &claims.sub, q.month.as_deref()).await?,
+    ))
 }
 
 /// Profil sportowy powiązany z kontem użytkownika — dla kadry / podglądu roli SuperAdmin.

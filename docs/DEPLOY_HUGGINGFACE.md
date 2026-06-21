@@ -60,7 +60,9 @@ TURSO_AUTH_TOKEN=...
 CORS_ALLOWED_ORIGINS=https://cksslavia.vercel.app,http://localhost:3000
 ```
 
-Opcjonalnie: `GROQ_API_KEY`, `CLOUDINARY_*`, `GITHUB_TOKEN` — patrz `.env.example`.
+Opcjonalnie: `GROQ_API_KEY`, `CLOUDINARY_*`, `GITHUB_TOKEN`, `PROMETHEUS_METRICS=1` — patrz `.env.example`.
+
+**Prometheus (opcjonalnie):** `PROMETHEUS_METRICS=1` wystawia publiczne `GET /metrics` (liczniki HTTP). Scrape z zewnętrznego Prometheusa, interwał ≥ 60 s. Szczegóły: [`docs/OBSERVABILITY.md`](OBSERVABILITY.md).
 
 > **Uwaga:** sekrety aplikacji (JWT, Turso) trzymasz w panelu **Hugging Face Space**, nie w GitHub Actions. GitHub Actions wysyła tylko kod źródłowy.
 

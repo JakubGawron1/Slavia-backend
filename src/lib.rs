@@ -11,6 +11,7 @@ pub mod db;
 pub mod db_migrations;
 pub mod logging;
 pub mod dto;
+pub mod http_metrics;
 pub mod middleware;
 pub mod models;
 pub mod notifications;
@@ -37,6 +38,8 @@ pub mod sql;
 mod sql_row;
 mod sql_util;
 
+#[cfg(test)]
+mod athlete_dashboard_acl_integration_test;
 #[cfg(test)]
 mod import_http_integration_test;
 
@@ -151,6 +154,11 @@ pub async fn create_app(
     let _standing_order_handle =
         payments_scheduler::spawn_standing_order_task(db.clone(), worker_metrics.clone());
 
+    let prometheus_metrics_enabled = http_metrics::prometheus_metrics_enabled();
+    if prometheus_metrics_enabled {
+        tracing::info!("Prometheus: GET /metrics włączony (PROMETHEUS_METRICS)");
+    }
+
     let state = AppState {
         db,
         jwt_secret,
@@ -160,6 +168,8 @@ pub async fn create_app(
         groq_api_key,
         groq_model,
         worker_metrics,
+        http_metrics: http_metrics::HttpMetrics::new(),
+        prometheus_metrics_enabled,
     };
 
     // Przy starcie usuń stare wpisy rate limit (gdy `DISTRIBUTED_THROTTLE=1`).
