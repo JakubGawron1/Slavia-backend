@@ -1028,7 +1028,12 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
     for sql in [
         "CREATE INDEX IF NOT EXISTS idx_results_status_kind ON results(status, kind)",
         "CREATE INDEX IF NOT EXISTS idx_results_athlete_status ON results(athlete_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_results_status_kind_date ON results(status, kind, date DESC, total DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_results_date ON results(date DESC)",
         "CREATE INDEX IF NOT EXISTS idx_athletes_active ON athletes(is_active)",
+        "CREATE INDEX IF NOT EXISTS idx_athletes_gender ON athletes(gender)",
+        "CREATE INDEX IF NOT EXISTS idx_athletes_weight_category ON athletes(weight_category)",
+        "CREATE INDEX IF NOT EXISTS idx_athletes_active_total ON athletes(is_active, total_kg)",
     ] {
         let _ = conn.execute(sql, ()).await;
     }

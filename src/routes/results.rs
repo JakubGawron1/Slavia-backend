@@ -377,13 +377,17 @@ pub async fn list_approved_results(
     Ok(Json(results))
 }
 
-pub async fn list_pending_results(
-    State(state): State<AppState>,
-    _auth: RequireTrainerOrHigher,
-) -> Result<Json<Vec<CompetitionResult>>, ApiError> {
+/// Wszystkie zgłoszenia w statusie Pending — wspólne dla listy kadry i bundle dashboardu trenera.
+pub(crate) async fn fetch_all_pending_results(
+    state: &AppState,
+) -> Result<Vec<CompetitionResult>, ApiError> {
     let mut rows = state
         .db
-        .query("SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location, bodyweight_kg FROM results WHERE status = 'Pending'", ())
+        .query(
+            "SELECT id, athlete_id, snatch, clean_and_jerk, total, status, date, squat_kg, bench_kg, deadlift_kg, kind, location, bodyweight_kg \
+             FROM results WHERE status = 'Pending' ORDER BY date DESC, id DESC",
+            (),
+        )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -398,7 +402,14 @@ pub async fn list_pending_results(
         results.push(r);
     }
 
-    Ok(Json(results))
+    Ok(results)
+}
+
+pub async fn list_pending_results(
+    State(state): State<AppState>,
+    _auth: RequireTrainerOrHigher,
+) -> Result<Json<Vec<CompetitionResult>>, ApiError> {
+    Ok(Json(fetch_all_pending_results(&state).await?))
 }
 
 /// Publiczne karty / ranking / wykresy.
@@ -499,6 +510,26 @@ pub async fn list_athlete_result_submissions(
     }
 
     Ok(Json(results))
+}
+
+/// Liczba zgłoszeń w statusie Pending — używana m.in. w agregowanym dashboardzie zawodnika.
+pub(crate) async fn pending_results_count_for_athlete_id(
+    state: &AppState,
+    athlete_id: &str,
+) -> Result<i64, ApiError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT COUNT(*) FROM results WHERE athlete_id = ?1 AND status = 'Pending'",
+            [athlete_id.to_string()],
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(row.and_then(|r| r.get::<i64>(0).ok()).unwrap_or(0))
 }
 
 pub async fn create_result(

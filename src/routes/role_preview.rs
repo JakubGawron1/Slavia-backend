@@ -15,7 +15,7 @@ use crate::models::{Athlete, Role};
 use crate::pagination::ListPaginationQuery;
 use crate::repos;
 use crate::routes::admins::user_roles_by_id;
-use crate::routes::athletes::fetch_athlete_by_user_id;
+use crate::routes::athletes::{fetch_athlete_by_user_id, athlete_dashboard_for_user_id, AthleteDashboardResponse};
 use crate::routes::chat::{ChatMessageDto, ChatThreadDto, messages_for_user, threads_for_user};
 use crate::routes::competition_participants::{
     MyCalendarResponse, calendar_entries_for_athlete_id,
@@ -215,6 +215,17 @@ pub async fn role_preview_athlete_bundle(
         calendar_entries,
         results,
     }))
+}
+
+pub async fn role_preview_athlete_dashboard(
+    State(state): State<AppState>,
+    _auth: RequireSuperAdmin,
+    Path(user_id): Path<String>,
+    Query(q): Query<MonthQuery>,
+) -> Result<Json<AthleteDashboardResponse>, ApiError> {
+    Ok(Json(
+        athlete_dashboard_for_user_id(&state, &user_id, q.month.as_deref()).await?,
+    ))
 }
 
 pub async fn role_preview_athlete_profile(

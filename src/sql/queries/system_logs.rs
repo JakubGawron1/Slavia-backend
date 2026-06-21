@@ -5,6 +5,16 @@ pub const SYSTEM_METRICS_COUNTS: &str = "SELECT
     (SELECT COUNT(*) FROM notifications WHERE is_read = 0),
     (SELECT COUNT(*) FROM recovery_logs WHERE date >= date('now', '-7 day'))";
 
+/// KPI dashboardu trenera — rozszerzenie `SYSTEM_METRICS_COUNTS` o składki i obecności do weryfikacji.
+pub const TRAINER_MONITORING_COUNTS: &str = "SELECT
+    (SELECT COUNT(*) FROM athletes WHERE is_active IS NULL OR is_active = 1),
+    (SELECT COUNT(*) FROM training_plans WHERE status IN ('planned','active')),
+    (SELECT COUNT(*) FROM results WHERE status = 'Pending'),
+    (SELECT COUNT(*) FROM membership_payments WHERE status = 'Pending'),
+    (SELECT COUNT(*) FROM attendance_records WHERE verification_state = 'pending'),
+    (SELECT COUNT(*) FROM notifications WHERE is_read = 0),
+    (SELECT COUNT(*) FROM recovery_logs WHERE date >= date('now', '-7 day'))";
+
 /// Kolumny: source, at, athlete_id, num1, num2, str1, str2
 pub const EVENT_FEED_UNION: &str = "WITH
     result_events AS (

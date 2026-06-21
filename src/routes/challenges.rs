@@ -41,11 +41,15 @@ pub struct MonthlyTrainingSessionsResponse {
 }
 
 static TONNAGE_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    vec![
-        Regex::new(r"(?i)(\d+)\s*serii?\s*x\s*(\d+)\s*powt\.?\s*x\s*([\d.]+)\s*kg").unwrap(),
-        Regex::new(r"(?i)(\d+)\s*x\s*(\d+)\s*@\s*([\d.]+)\s*kg").unwrap(),
-        Regex::new(r"(?i)(\d+)\s*x\s*(\d+)\s*x\s*([\d.]+)\s*kg").unwrap(),
-    ]
+    const PATTERNS: &[&str] = &[
+        r"(?i)(\d+)\s*serii?\s*x\s*(\d+)\s*powt\.?\s*x\s*([\d.]+)\s*kg",
+        r"(?i)(\d+)\s*x\s*(\d+)\s*@\s*([\d.]+)\s*kg",
+        r"(?i)(\d+)\s*x\s*(\d+)\s*x\s*([\d.]+)\s*kg",
+    ];
+    PATTERNS
+        .iter()
+        .filter_map(|p| Regex::new(p).ok())
+        .collect()
 });
 
 fn strip_html(raw: &str) -> String {

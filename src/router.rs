@@ -10,6 +10,7 @@ use axum::{
     response::Html,
     routing::{delete, get, patch, post, put},
 };
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
@@ -44,6 +45,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .route(
             "/me",
             get(routes::athletes::me_athlete_handler).patch(routes::athletes::update_my_athlete_profile_handler),
+        )
+        .route(
+            "/me/dashboard",
+            get(routes::athletes::me_athlete_dashboard_handler),
         )
         .route(
             "/my-calendar",
@@ -89,6 +94,11 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
                 .patch(routes::athletes::update_athlete)
                 .delete(routes::athletes::delete_athlete),
         );
+
+    let trainer_routes = Router::new().route(
+        "/dashboard",
+        get(routes::trainer::trainer_dashboard_handler),
+    );
 
     let admins_routes = Router::new()
         .route("/grouped", get(routes::admins::list_accounts_grouped))
@@ -428,6 +438,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             get(routes::role_preview::role_preview_athlete_bundle),
         )
         .route(
+            "/role-preview/athlete-dashboard/{user_id}",
+            get(routes::role_preview::role_preview_athlete_dashboard),
+        )
+        .route(
             "/role-preview/athlete-profile/{user_id}",
             get(routes::role_preview::role_preview_athlete_profile),
         )
@@ -503,11 +517,19 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         )
         .route("/history", get(routes::cms::list_version_history));
 
-    Router::new()
+    let mut app = Router::new()
         .route("/", get(backend_root_page))
+        .route("/api/health", get(routes::system_logs::ping_backend));
+
+    if state.prometheus_metrics_enabled {
+        app = app.route("/metrics", get(crate::http_metrics::prometheus_handler));
+    }
+
+    app = app
         .nest("/api/auth", auth_routes)
         .nest("/api/upload", upload_routes)
         .nest("/api/athletes", athletes_routes)
+        .nest("/api/trainer", trainer_routes)
         .nest("/api/admins", admins_routes)
         .nest("/api/submissions", submissions_routes)
         .nest("/api/results", results_routes)
@@ -531,8 +553,16 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .nest("/api/club", club_routes)
         .nest("/api/ai/coach", ai_coach_routes)
         .nest("/api/cms", cms_routes)
-        .nest("/api/system", system_routes)
-        .layer(
+        .nest("/api/system", system_routes);
+
+    if state.prometheus_metrics_enabled {
+        app = app.layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::http_metrics::track_http_metrics,
+        ));
+    }
+
+    app.layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request<_>| {
                     // Tylko path (bez query/body) — RODO: treści AI nigdy w logach HTTP (SEC-12).
@@ -567,5 +597,8 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             HeaderValue::from_static("1"),
         ))
         .layer(cors)
+        // Kompresja tylko odpowiedzi (gzip/br) — nie dotyka body żądań (multipart upload).
+        // Domyślny predykat tower-http pomija m.in. text/event-stream (SSE /api/ai/coach/stream).
+        .layer(CompressionLayer::new())
         .with_state(state)
 }

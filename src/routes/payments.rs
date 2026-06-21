@@ -87,6 +87,13 @@ fn current_month_yyyy_mm() -> String {
     format!("{:04}-{:02}", now.year(), now.month())
 }
 
+pub(crate) fn resolve_payment_month(month: Option<&str>) -> String {
+    month
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(current_month_yyyy_mm)
+}
+
 fn parse_month_yyyy_mm(s: &str) -> Result<(i32, u32), ApiError> {
     let s = s.trim();
     if s.len() != 7 || &s[4..5] != "-" {
@@ -400,12 +407,7 @@ pub async fn my_payment_status(
     Query(q): Query<MonthQuery>,
 ) -> Result<Json<PaymentStatusResponse>, ApiError> {
     let athlete_id = my_athlete_id(&state, &claims).await?;
-    let month = q
-        .month
-        .as_deref()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(current_month_yyyy_mm);
+    let month = resolve_payment_month(q.month.as_deref());
     Ok(Json(
         payment_status_for_athlete_id(&state, &athlete_id, &month).await?,
     ))
@@ -601,10 +603,10 @@ pub async fn payments_overview_for_month(
     Ok(Json(out))
 }
 
-pub async fn list_pending_payments(
-    State(state): State<AppState>,
-    _auth: RequireTrainerOrHigher,
-) -> Result<Json<Vec<PendingPaymentRow>>, ApiError> {
+/// Zgłoszenia składek Pending — wspólne dla listy kadry i bundle dashboardu trenera.
+pub(crate) async fn fetch_all_pending_payments(
+    state: &AppState,
+) -> Result<Vec<PendingPaymentRow>, ApiError> {
     let mut rows = state
         .db
         .query(
@@ -635,7 +637,14 @@ pub async fn list_pending_payments(
             created_by_user_id: sql_row::opt_string(&r, 7).unwrap_or(None),
         });
     }
-    Ok(Json(out))
+    Ok(out)
+}
+
+pub async fn list_pending_payments(
+    State(state): State<AppState>,
+    _auth: RequireTrainerOrHigher,
+) -> Result<Json<Vec<PendingPaymentRow>>, ApiError> {
+    Ok(Json(fetch_all_pending_payments(&state).await?))
 }
 
 async fn set_payment_status(
