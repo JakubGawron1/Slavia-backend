@@ -566,10 +566,16 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request<_>| {
                     // Tylko path (bez query/body) — RODO: treści AI nigdy w logach HTTP (SEC-12).
+                    let request_id = crate::middleware::request_id::request_id_from_extensions(
+                        request.extensions(),
+                    )
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "-".to_string());
                     tracing::info_span!(
                         "http",
                         method = %request.method(),
                         uri = %request.uri().path(),
+                        request_id = %request_id,
                     )
                 })
                 .on_request(|_request: &Request<_>, _span: &tracing::Span| {
@@ -591,6 +597,9 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
                     },
                 ),
         )
+        .layer(middleware::from_fn(
+            crate::middleware::request_id::request_id_middleware,
+        ))
         .layer(middleware::from_fn(crate::middleware::http_cache::cache_control_middleware))
         .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("x-api-version"),
