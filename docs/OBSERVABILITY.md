@@ -140,6 +140,23 @@ Ręcznie: **Actions → Metrics scrape stub (HF) → Run workflow**.
 
 ---
 
+## CI — alert error rate (L-4)
+
+Workflow `.github/workflows/error-rate-alert.yml`:
+
+| Krok | Co robi |
+|------|---------|
+| 1 | `GET {base}/api/health` — fail joba przy awarii liveness |
+| 2 | `GET {base}/metrics` — gdy `PROMETHEUS_METRICS=1`, liczy `slavia_http_errors_total / slavia_http_requests_total` |
+
+- Secret `HF_API_BASE_URL` — ten sam co w `keep-warm.yml` / `metrics-scrape-stub.yml`
+- Harmonogram: co godzinę (`0 * * * *`); ręcznie: **Actions → Error rate alert → Run workflow**
+- Progi (env joba, nadpisywalne w `workflow_dispatch`): `SLAVIA_ERROR_RATE_THRESHOLD=0.10` (10%), `SLAVIA_ERROR_RATE_MIN_REQUESTS=50`
+- Gdy `/metrics` zwraca 404 (Prometheus wyłączony) lub brak liczników — ocena tylko health check (job przechodzi)
+- Fail joba → powiadomienie GitHub Actions (Watch → Actions) lub webhook org
+
+---
+
 ## Roadmap (poza stubem)
 
 Pełniejszy OBS-1 (histogram latency, metryki workerów Groq, OpenTelemetry) — backlog w `Slavia-frontend/improve.md` (BE-G11, OBS-3).
