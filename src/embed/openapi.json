@@ -264,6 +264,22 @@
         }
       }
     },
+    "/api/athletes/me/dashboard": {
+      "get": {
+        "summary": "GET /api/athletes/me/dashboard",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
     "/api/athletes/my-calendar": {
       "get": {
         "summary": "GET /api/athletes/my-calendar",
@@ -542,6 +558,27 @@
             "description": "Forbidden"
           }
         }
+      }
+    },
+    "/api/trainer/dashboard": {
+      "get": {
+        "summary": "GET /api/trainer/dashboard",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
       }
     },
     "/api/admins/grouped": {
@@ -3200,6 +3237,240 @@
         }
       }
     },
+    "/api/system/role-preview/session": {
+      "post": {
+        "summary": "POST /api/system/role-preview/session",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/system/role-preview/context/{user_id}": {
+      "get": {
+        "summary": "GET /api/system/role-preview/context/{user_id}",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/system/role-preview/athlete-bundle/{user_id}": {
+      "get": {
+        "summary": "GET /api/system/role-preview/athlete-bundle/{user_id}",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/system/role-preview/athlete-dashboard/{user_id}": {
+      "get": {
+        "summary": "GET /api/system/role-preview/athlete-dashboard/{user_id}",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/system/role-preview/athlete-profile/{user_id}": {
+      "get": {
+        "summary": "GET /api/system/role-preview/athlete-profile/{user_id}",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/system/role-preview/calendar/{user_id}": {
+      "get": {
+        "summary": "GET /api/system/role-preview/calendar/{user_id}",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/system/role-preview/payment-status/{user_id}": {
+      "get": {
+        "summary": "GET /api/system/role-preview/payment-status/{user_id}",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/system/role-preview/exercise-submissions/{user_id}": {
+      "get": {
+        "summary": "GET /api/system/role-preview/exercise-submissions/{user_id}",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/system/role-preview/notifications/{user_id}": {
+      "get": {
+        "summary": "GET /api/system/role-preview/notifications/{user_id}",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/system/role-preview/chat/threads/{user_id}/{thread_id}/messages": {
+      "get": {
+        "summary": "GET /api/system/role-preview/chat/threads/{user_id}/{thread_id}/messages",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/system/role-preview/chat/threads/{user_id}": {
+      "get": {
+        "summary": "GET /api/system/role-preview/chat/threads/{user_id}",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/club-votes/": {
       "post": {
         "summary": "POST /api/club-votes/",
@@ -3699,9 +3970,83 @@
         ]
       }
     },
+    "/api/cms/": {
+      "get": {
+        "summary": "GET /api/cms/",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/cms/api/health": {
+      "get": {
+        "summary": "GET /api/cms/api/health",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/cms/metrics": {
+      "get": {
+        "summary": "GET /api/cms/metrics",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
     "/": {
       "get": {
         "summary": "Backend root HTML",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "summary": "GET /api/health",
+        "description": "Alias of GET /api/system/ping — lightweight instance health check.",
         "responses": {
           "200": {
             "description": "OK"

@@ -1,6 +1,11 @@
 # Changelog
 
-## [5.1.0] — 2026-06-07
+## [5.1.0] — 2026-06-21
+
+### improvements/all (API, observability)
+- Agregaty `GET /api/athletes/me/dashboard` i `GET /api/trainer/dashboard`.
+- Role preview (read-only), cleanup ACL i unwrap w routes.
+- `/metrics` (Prometheus), kompresja gzip/br, workflow keep-warm HF, alias `GET /api/health`.
 
 ### Wydajność i API publiczne
 - **`list_public_results_board`**: `LIMIT 500` na tablicy wyników publicznych.

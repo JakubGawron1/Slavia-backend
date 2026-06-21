@@ -2,15 +2,18 @@
 //! przez co frontend (`ofetch` / `getApiErrorMessage`) nie widzi pola `message`.
 
 use axum::{Json, http::StatusCode};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ErrorBody {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Korelacja z logami serwera (`x-request-id`); uzupełniane middleware przy 5xx.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 pub type ApiError = (StatusCode, Json<ErrorBody>);
@@ -33,6 +36,7 @@ pub fn api_error_with_code(
             message: polish_api_message(status, &message),
             code,
             detail: None,
+            request_id: None,
         }),
     )
 }
@@ -47,6 +51,7 @@ pub fn api_validation_error(msg: impl Into<String>, detail: impl Into<String>) -
             message: polish_api_message(StatusCode::BAD_REQUEST, &message),
             code: Some("validation_error".to_string()),
             detail: Some(detail),
+            request_id: None,
         }),
     )
 }

@@ -34,6 +34,7 @@ pub mod results;
 pub mod submissions;
 pub mod system_logs;
 pub mod totp;
+pub mod trainer;
 pub mod training_log;
 pub mod training_plans;
 pub mod upload;

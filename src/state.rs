@@ -383,4 +383,6 @@ pub struct AppState {
     pub groq_api_key: String,
     pub groq_model: String,
     pub worker_metrics: std::sync::Arc<crate::worker_metrics::WorkerMetrics>,
+    pub http_metrics: std::sync::Arc<crate::http_metrics::HttpMetrics>,
+    pub prometheus_metrics_enabled: bool,
 }

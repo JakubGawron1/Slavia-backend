@@ -118,6 +118,56 @@ fn classify_user_bucket(roles: &[Role]) -> Option<AccountListKind> {
     None
 }
 
+fn parse_roles_from_db_json(roles_json: &str) -> Result<Vec<Role>, ApiError> {
+    serde_json::from_str(roles_json).map_err(|_| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Invalid roles JSON in database",
+        )
+    })
+}
+
+fn user_from_row(row: &libsql::Row) -> Result<User, ApiError> {
+    let roles_json: String = row.get(3).map_err(|e| {
+        api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?;
+    let roles = parse_roles_from_db_json(&roles_json)?;
+    let is_banned: i64 = row.get(4).unwrap_or(0);
+    let banned_reason: Option<String> = row.get(5).ok();
+    Ok(User {
+        id: row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        username: row.get(1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        avatar_url: row.get(2).ok(),
+        is_banned: is_banned != 0,
+        banned_reason,
+        password_hash: "".to_string(),
+        roles,
+    })
+}
+
+fn admin_account_from_row(row: &libsql::Row) -> Result<AdminAccountDto, ApiError> {
+    let roles_json: String = row.get(3).map_err(|e| {
+        api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?;
+    let roles = parse_roles_from_db_json(&roles_json)?;
+    let is_banned: i64 = row.get(4).unwrap_or(0);
+    let banned_reason: Option<String> = row.get(5).ok();
+    let athlete_id: Option<String> = row.get(6).ok();
+    let athlete_image_url: Option<String> = row.get(7).ok();
+    let athlete_full_name: Option<String> = row.get(8).ok();
+    Ok(AdminAccountDto {
+        id: row.get(0).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        username: row.get(1).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        avatar_url: row.get(2).ok(),
+        is_banned: is_banned != 0,
+        banned_reason,
+        roles,
+        athlete_id,
+        athlete_image_url,
+        athlete_full_name,
+    })
+}
+
 pub(crate) async fn user_roles_by_id(
     state: &AppState,
     id: &str,
@@ -134,13 +184,10 @@ pub(crate) async fn user_roles_by_id(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if let Some(row) = row {
-        let roles_json: String = row.get(0).unwrap();
-        let roles: Vec<Role> = serde_json::from_str(&roles_json).map_err(|_| {
-            api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Invalid roles JSON in database",
-            )
+        let roles_json: String = row.get(0).map_err(|e| {
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
         })?;
+        let roles = parse_roles_from_db_json(&roles_json)?;
         Ok(Some(roles))
     } else {
         Ok(None)
@@ -172,19 +219,7 @@ async fn collect_users_for_sql(state: &AppState, sql: &str) -> Result<Vec<User>,
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        let roles_json: String = row.get(3).unwrap();
-        let roles: Vec<Role> = serde_json::from_str(&roles_json).unwrap();
-        let is_banned: i64 = row.get(4).unwrap_or(0);
-        let banned_reason: Option<String> = row.get(5).ok();
-        out.push(User {
-            id: row.get(0).unwrap(),
-            username: row.get(1).unwrap(),
-            avatar_url: row.get(2).ok(),
-            is_banned: is_banned != 0,
-            banned_reason,
-            password_hash: "".to_string(),
-            roles,
-        });
+        out.push(user_from_row(&row)?);
     }
     Ok(out)
 }
@@ -204,24 +239,7 @@ async fn collect_admin_accounts(state: &AppState) -> Result<Vec<AdminAccountDto>
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        let roles_json: String = row.get(3).unwrap();
-        let roles: Vec<Role> = serde_json::from_str(&roles_json).unwrap();
-        let is_banned: i64 = row.get(4).unwrap_or(0);
-        let banned_reason: Option<String> = row.get(5).ok();
-        let athlete_id: Option<String> = row.get(6).ok();
-        let athlete_image_url: Option<String> = row.get(7).ok();
-        let athlete_full_name: Option<String> = row.get(8).ok();
-        out.push(AdminAccountDto {
-            id: row.get(0).unwrap(),
-            username: row.get(1).unwrap(),
-            avatar_url: row.get(2).ok(),
-            is_banned: is_banned != 0,
-            banned_reason,
-            roles,
-            athlete_id,
-            athlete_image_url,
-            athlete_full_name,
-        });
+        out.push(admin_account_from_row(&row)?);
     }
     Ok(out)
 }
@@ -541,8 +559,10 @@ pub async fn update_user_role(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        let target_roles_json: String = row.get(0).unwrap();
-        let target_roles: Vec<Role> = serde_json::from_str(&target_roles_json).unwrap();
+        let target_roles_json: String = row.get(0).map_err(|e| {
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        })?;
+        let target_roles = parse_roles_from_db_json(&target_roles_json)?;
         forbid_mutating_superadmin_user_record(claims, &target_roles)?;
     }
 

@@ -29,6 +29,18 @@ pub struct VoteSummaryRow {
     pub votes_count: i64,
 }
 
+fn row_api_err(e: libsql::Error) -> ApiError {
+    api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+}
+
+fn vote_summary_from_row(row: &libsql::Row) -> Result<VoteSummaryRow, ApiError> {
+    Ok(VoteSummaryRow {
+        athlete_id: row.get(0).map_err(row_api_err)?,
+        athlete_name: row.get(1).map_err(row_api_err)?,
+        votes_count: row.get(2).map_err(row_api_err)?,
+    })
+}
+
 pub async fn submit_vote(
     State(state): State<AppState>,
     claims: Claims,
@@ -82,8 +94,8 @@ pub async fn get_my_vote(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
         Ok(Json(MyVoteResponse {
-            athlete_id: Some(row.get(0).unwrap()),
-            athlete_name: Some(row.get(1).unwrap()),
+            athlete_id: Some(row.get(0).map_err(row_api_err)?),
+            athlete_name: Some(row.get(1).map_err(row_api_err)?),
         }))
     } else {
         Ok(Json(MyVoteResponse {
@@ -116,11 +128,7 @@ pub async fn get_vote_summary(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        out.push(VoteSummaryRow {
-            athlete_id: row.get(0).unwrap(),
-            athlete_name: row.get(1).unwrap(),
-            votes_count: row.get(2).unwrap(),
-        });
+        out.push(vote_summary_from_row(&row)?);
     }
 
     Ok(Json(out))
