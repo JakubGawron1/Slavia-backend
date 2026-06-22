@@ -28,6 +28,7 @@ pub mod cloudinary;
 pub mod cms_github;
 pub mod cms_sanitize;
 mod external_calendar_sync;
+mod ai_coach_monthly;
 mod distributed_throttle;
 mod login_throttle;
 pub mod production_guards;

@@ -161,6 +161,10 @@ pub struct AiCoachQuota {
     pub barbell_path_limit_per_day: u32,
     pub barbell_path_used_this_minute: u32,
     pub barbell_path_limit_per_minute: u32,
+    /// Wspólna miesięczna pula klubu (wszystkie role, panelowe AI).
+    pub club_used_this_month: u32,
+    pub club_limit_per_month: u32,
+    pub club_monthly_exhausted: bool,
     pub applies_to_you: bool,
 }
 
@@ -382,7 +386,10 @@ fn truncate_for_context(s: &str, max: usize) -> String {
     format!("{cut}…")
 }
 
-fn build_quota_for_user(user_sub: &str, applies: bool) -> AiCoachQuota {
+async fn build_quota_for_user(state: &AppState, user_sub: &str, applies: bool) -> AiCoachQuota {
+    let monthly_used = crate::ai_coach_monthly::count_club_monthly_usage(state).await;
+    let monthly_limit = crate::ai_coach_monthly::monthly_limit_max(state).await;
+    let monthly_exhausted = monthly_used >= monthly_limit;
     AiCoachQuota {
         chat_used_today: crate::post_throttle::count_user_post_attempts(
             user_sub,
@@ -418,6 +425,9 @@ fn build_quota_for_user(user_sub: &str, applies: bool) -> AiCoachQuota {
         barbell_path_limit_per_minute: crate::post_throttle::max_for_bucket(
             "ai_coach_barbell_path",
         ) as u32,
+        club_used_this_month: monthly_used,
+        club_limit_per_month: monthly_limit,
+        club_monthly_exhausted: monthly_exhausted,
         applies_to_you: applies,
     }
 }
@@ -475,6 +485,27 @@ fn import_limit_error(deny: crate::post_throttle::AiCoachLimitDeny) -> ApiError 
         _ => "Limit importu planu AI wyczerpany — spróbuj później.",
     };
     api_error(StatusCode::TOO_MANY_REQUESTS, msg)
+}
+
+async fn monthly_limit_error(state: &AppState) -> ApiError {
+    let reset = crate::ai_coach_monthly::next_month_reset_label_pl();
+    let max = crate::ai_coach_monthly::monthly_limit_max(state).await;
+    api_error(
+        StatusCode::TOO_MANY_REQUESTS,
+        format!(
+            "Miesięczny limit zapytań AI klubu ({max}) został wyczerpany. Panelowy Trener AI wróci po odnowieniu limitu ({reset}). Asystent publiczny nadal działa."
+        ),
+    )
+}
+
+pub(crate) async fn enforce_authenticated_ai_monthly(state: &AppState) -> Result<(), ApiError> {
+    if crate::ai_coach_monthly::reserve_club_monthly_slot(state)
+        .await
+        .is_err()
+    {
+        return Err(monthly_limit_error(state).await);
+    }
+    Ok(())
 }
 
 fn enforce_chat_limits(user_sub: &str, include_club_global: bool) -> Result<(), ApiError> {
@@ -1142,6 +1173,7 @@ async fn invoke_llm_with_attachments(
         ));
     }
 
+    enforce_authenticated_ai_monthly(state).await?;
     enforce_chat_limits(user_id, true)?;
 
     let vision_model = groq_vision_model();
@@ -1460,6 +1492,8 @@ async fn invoke_llm(
         ));
     }
 
+    enforce_authenticated_ai_monthly(state).await?;
+
     if for_import {
         enforce_import_limits(user_id, true)?;
     } else {
@@ -1726,14 +1760,25 @@ pub async fn coach_status(
     }
     let key = state.groq_api_key.trim();
     let club_available = !key.is_empty();
-    let configured = club_available && groq_key_format_ok(key);
+    let groq_ok = club_available && groq_key_format_ok(key);
+    let monthly_exhausted = crate::ai_coach_monthly::club_monthly_exhausted(&state).await;
+    let configured = groq_ok && !monthly_exhausted;
+    let setup_hint = if monthly_exhausted {
+        Some(format!(
+            "Miesięczny limit zapytań AI klubu ({}) wyczerpany. Odnowienie: {}. Asystent publiczny nadal dostępny.",
+            crate::ai_coach_monthly::monthly_limit_max(&state).await,
+            crate::ai_coach_monthly::next_month_reset_label_pl()
+        ))
+    } else {
+        status_setup_hint(key, club_available)
+    };
 
     Ok(Json(AiCoachStatusResponse {
         configured,
         model: configured_groq_model(&state),
         key_format_ok: !club_available || groq_key_format_ok(key),
-        setup_hint: status_setup_hint(key, club_available),
-        quota: build_quota_for_user(&claims.sub, configured),
+        setup_hint,
+        quota: build_quota_for_user(&state, &claims.sub, groq_ok).await,
     }))
 }
 

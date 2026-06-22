@@ -14,6 +14,8 @@ pub const SETTINGS_KEY: &str = "ai_coach_settings";
 pub const DEFAULT_CHAT_TEMPERATURE: f32 = 0.72;
 pub const DEFAULT_PUBLIC_CHAT_TEMPERATURE: f32 = 0.55;
 pub const DEFAULT_VISION_CHAT_TEMPERATURE: f32 = 0.72;
+pub const DEFAULT_MONTHLY_LIMIT: u32 = 300;
+pub const MAX_MONTHLY_LIMIT: u32 = 50_000;
 
 const MAX_INSTRUCTION_OVERRIDE_CHARS: usize = 14_000;
 const MAX_INSTRUCTION_APPEND_CHARS: usize = 6_000;
@@ -43,6 +45,9 @@ pub struct AiCoachSettingsStored {
     pub mode_recovery_hint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode_barbell_path_hint: Option<String>,
+    /// Wspólna miesięczna pula zapytań panelowego AI (wszystkie role). `None` = domyślne 300.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monthly_limit: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -54,6 +59,7 @@ pub struct AiCoachSettingsDefaultsDto {
     pub chat_temperature: f32,
     pub public_chat_temperature: f32,
     pub vision_chat_temperature: f32,
+    pub monthly_limit: u32,
     pub coach_instruction_preview: String,
     pub public_instruction_preview: String,
 }
@@ -65,6 +71,9 @@ pub struct AiCoachSettingsResponse {
     pub has_customizations: bool,
     pub effective_coach_instruction_chars: usize,
     pub effective_public_instruction_chars: usize,
+    /// Bieżące zużycie miesięcznej puli klubu (panelowe AI).
+    pub club_used_this_month: u32,
+    pub club_monthly_resets_label: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +89,7 @@ pub struct AiCoachSettingsUpdateRequest {
     pub mode_supplements_hint: Option<String>,
     pub mode_recovery_hint: Option<String>,
     pub mode_barbell_path_hint: Option<String>,
+    pub monthly_limit: Option<u32>,
     pub reset_to_defaults: Option<bool>,
 }
 
@@ -134,6 +144,29 @@ pub fn has_customizations(settings: &AiCoachSettingsStored) -> bool {
         || settings.mode_supplements_hint.is_some()
         || settings.mode_recovery_hint.is_some()
         || settings.mode_barbell_path_hint.is_some()
+        || settings.monthly_limit.is_some()
+}
+
+pub fn resolve_monthly_limit(settings: &AiCoachSettingsStored) -> u32 {
+    settings
+        .monthly_limit
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_MONTHLY_LIMIT)
+}
+
+fn validate_monthly_limit(value: Option<u32>) -> Result<Option<u32>, ApiError> {
+    let Some(n) = value else {
+        return Ok(None);
+    };
+    if n == 0 || n > MAX_MONTHLY_LIMIT {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Miesięczny limit AI musi być między 1 a {MAX_MONTHLY_LIMIT}"
+            ),
+        ));
+    }
+    Ok(Some(n))
 }
 
 pub fn resolve_coach_system_instruction(settings: &AiCoachSettingsStored) -> String {
@@ -247,17 +280,21 @@ async fn save_ai_coach_settings(
     Ok(())
 }
 
-fn build_response(settings: AiCoachSettingsStored) -> AiCoachSettingsResponse {
+async fn build_response(state: &AppState, settings: AiCoachSettingsStored) -> AiCoachSettingsResponse {
     let effective_coach = resolve_coach_system_instruction(&settings);
     let effective_public = resolve_public_system_instruction(&settings);
+    let club_used = crate::ai_coach_monthly::count_club_monthly_usage(state).await;
     AiCoachSettingsResponse {
         has_customizations: has_customizations(&settings),
         effective_coach_instruction_chars: effective_coach.chars().count(),
         effective_public_instruction_chars: effective_public.chars().count(),
+        club_used_this_month: club_used,
+        club_monthly_resets_label: crate::ai_coach_monthly::next_month_reset_label_pl(),
         defaults: AiCoachSettingsDefaultsDto {
             chat_temperature: DEFAULT_CHAT_TEMPERATURE,
             public_chat_temperature: DEFAULT_PUBLIC_CHAT_TEMPERATURE,
             vision_chat_temperature: DEFAULT_VISION_CHAT_TEMPERATURE,
+            monthly_limit: DEFAULT_MONTHLY_LIMIT,
             coach_instruction_preview: preview_text(SYSTEM_INSTRUCTION, 480),
             public_instruction_preview: preview_text(PUBLIC_SYSTEM_INSTRUCTION, 320),
         },
@@ -314,6 +351,7 @@ fn normalize_update(payload: AiCoachSettingsUpdateRequest) -> Result<AiCoachSett
             &trim_opt(payload.mode_barbell_path_hint),
             MAX_MODE_HINT_CHARS,
         )?,
+        monthly_limit: validate_monthly_limit(payload.monthly_limit)?,
         updated_at: None,
         updated_by: None,
     })
@@ -324,7 +362,7 @@ pub async fn coach_get_settings(
     RequireSuperAdmin(_claims): RequireSuperAdmin,
 ) -> Result<Json<AiCoachSettingsResponse>, ApiError> {
     let settings = load_ai_coach_settings(&state).await?;
-    Ok(Json(build_response(settings)))
+    Ok(Json(build_response(&state, settings).await))
 }
 
 pub async fn coach_update_settings(
@@ -357,5 +395,5 @@ pub async fn coach_update_settings(
     )
     .await;
 
-    Ok(Json(build_response(settings)))
+    Ok(Json(build_response(&state, settings).await))
 }

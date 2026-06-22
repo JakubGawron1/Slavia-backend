@@ -112,6 +112,8 @@ pub enum AiCoachLimitDeny {
     BarbellPathDaily,
     ClubBarbellPathMinute,
     ClubBarbellPathDaily,
+    /// Miesięczna pula klubu wyczerpana (panelowe AI wyłączone do odnowienia).
+    ClubMonthly,
 }
 
 fn count_in_window(g: &HashMap<String, Vec<Instant>>, sub: &str, bucket: &str, now: Instant) -> usize {

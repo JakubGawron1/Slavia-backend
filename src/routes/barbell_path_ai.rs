@@ -465,6 +465,7 @@ pub async fn refine_barbell_path(
         frame_pairs.push((f.t, b64.to_string()));
     }
 
+    crate::routes::ai_coach::enforce_authenticated_ai_monthly(&state).await?;
     enforce_barbell_path_limits(&claims.sub)?;
 
     let provider = normalize_provider(payload.provider.as_deref(), !frame_pairs.is_empty());
