@@ -409,6 +409,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             get(routes::system_logs::feature_adoption_stats),
         )
         .route("/cms-status", get(routes::cms_status::cms_status))
+        .route(
+            "/board-docs-status",
+            get(routes::board_documents::board_docs_status),
+        )
         .route("/calendar/export/{id}", get(routes::calendar_export::export_competition_ics))
         .route("/mobile-releases/latest", get(routes::mobile_releases::get_latest_mobile_release))
         .route("/mobile-releases/sync", post(routes::mobile_releases::sync_mobile_releases))
@@ -529,6 +533,47 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         )
         .route("/history", get(routes::cms::list_version_history));
 
+    let board_routes = Router::new()
+        .route(
+            "/templates/{doc_type}",
+            get(routes::board_documents::get_board_template),
+        )
+        .route(
+            "/documents/generate",
+            axum::routing::post(routes::board_documents::generate_board_document),
+        )
+        .route(
+            "/documents/save",
+            axum::routing::post(routes::board_documents::save_board_document),
+        )
+        .route(
+            "/documents/delete",
+            axum::routing::post(routes::board_documents::delete_board_document),
+        )
+        .route(
+            "/document-types",
+            get(routes::board_documents::list_board_document_types)
+                .post(routes::board_documents::upsert_board_document_type),
+        )
+        .route(
+            "/documents",
+            get(routes::board_documents::list_board_documents),
+        )
+        .route(
+            "/documents/{id}/content",
+            get(routes::board_documents::get_board_document_content).patch(
+                routes::board_documents::patch_board_document_content,
+            ),
+        )
+        .route(
+            "/documents/{id}/preview",
+            get(routes::board_documents::get_board_document_preview),
+        )
+        .route(
+            "/documents/{id}",
+            get(routes::board_documents::get_board_document),
+        );
+
     let mut app = Router::new()
         .route("/", get(backend_root_page))
         .route("/api/health", get(routes::system_logs::ping_backend));
@@ -565,6 +610,7 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         .nest("/api/club", club_routes)
         .nest("/api/ai/coach", ai_coach_routes)
         .nest("/api/cms", cms_routes)
+        .nest("/api/board", board_routes)
         .nest("/api/system", system_routes);
 
     if state.prometheus_metrics_enabled {

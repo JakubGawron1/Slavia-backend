@@ -7,6 +7,8 @@ pub enum Role {
     Editor,
     Trainer,
     Athlete,
+    BoardMember,
+    BoardDocsFullAccess,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -23,6 +25,8 @@ impl std::fmt::Display for Role {
             Role::Editor => "Editor",
             Role::Trainer => "Trainer",
             Role::Athlete => "Athlete",
+            Role::BoardMember => "BoardMember",
+            Role::BoardDocsFullAccess => "BoardDocsFullAccess",
         };
         write!(f, "{}", s)
     }
@@ -37,6 +41,8 @@ impl std::str::FromStr for Role {
             "Editor" => Ok(Role::Editor),
             "Trainer" => Ok(Role::Trainer),
             "Athlete" => Ok(Role::Athlete),
+            "BoardMember" => Ok(Role::BoardMember),
+            "BoardDocsFullAccess" => Ok(Role::BoardDocsFullAccess),
             _ => Err(format!("Invalid role: {}", s)),
         }
     }

@@ -43,6 +43,8 @@ where
                         "Editor" => add(Role::Editor),
                         "Trainer" => add(Role::Trainer),
                         "Athlete" => add(Role::Athlete),
+                        "BoardMember" => add(Role::BoardMember),
+                        "BoardDocsFullAccess" => add(Role::BoardDocsFullAccess),
                         "TrainerAdmin" => {
                             add(Role::Admin);
                             add(Role::Trainer);
@@ -274,6 +276,66 @@ impl FromRequestParts<AppState> for RequireTrainerOrHigher {
             ));
         }
         Ok(RequireTrainerOrHigher(claims))
+    }
+}
+
+pub(crate) fn claims_has_board_access(claims: &Claims) -> bool {
+    claims.roles.iter().any(|r| {
+        matches!(
+            r,
+            Role::BoardMember | Role::BoardDocsFullAccess | Role::SuperAdmin
+        )
+    })
+}
+
+pub(crate) fn claims_has_board_docs_full_access(claims: &Claims) -> bool {
+    claims
+        .roles
+        .iter()
+        .any(|r| matches!(r, Role::BoardDocsFullAccess | Role::SuperAdmin))
+}
+
+/// Członek zarządu lub SuperAdmin — odczyt manifestu, generatory podstawowe.
+pub struct RequireBoardOrSuperAdmin(pub Claims);
+
+impl FromRequestParts<AppState> for RequireBoardOrSuperAdmin {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let claims =
+            <Claims as FromRequestParts<AppState>>::from_request_parts(parts, state).await?;
+        if !claims_has_board_access(&claims) {
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "Requires BoardMember or SuperAdmin role",
+            ));
+        }
+        Ok(RequireBoardOrSuperAdmin(claims))
+    }
+}
+
+/// Prezes / wice-prezes lub SuperAdmin — zapis repozytorium, listy startowe.
+pub struct RequireBoardDocsFullAccessOrSuperAdmin(pub Claims);
+
+impl FromRequestParts<AppState> for RequireBoardDocsFullAccessOrSuperAdmin {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let claims =
+            <Claims as FromRequestParts<AppState>>::from_request_parts(parts, state).await?;
+        if !claims_has_board_docs_full_access(&claims) {
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "Requires BoardDocsFullAccess or SuperAdmin role",
+            ));
+        }
+        Ok(RequireBoardDocsFullAccessOrSuperAdmin(claims))
     }
 }
 

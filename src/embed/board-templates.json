@@ -1,0 +1,42 @@
+{
+  "admin_board_meeting_protocol": {
+    "mime": "text/csv; charset=utf-8",
+    "content": "\uFEFFZawodnik / osoba;Status obecności;Data sesji;Uwagi\n\"[SZKIC] Protokół zebrania\";\"…\";\"…\";\"…\""
+  },
+  "competition_start_list": {
+    "mime": "text/csv; charset=utf-8",
+    "content": "\uFEFFLp.;Zawodnik;Kategoria wagowa;Waga (kg);Klub\n1;\"Nazwisko Imię\";\"81 kg\";\"79.0\";\"CKS Slavia\""
+  },
+  "meeting_agenda": {
+    "mime": "text/html; charset=utf-8",
+    "content": "<article class=\"board-doc-skeleton\"><header><p class=\"text-muted\">Szkielet dokumentu — CKS Slavia</p><h1>Porządek obrad</h1><p><strong>Data:</strong> __________ &nbsp; <strong>Autor:</strong> __________</p></header><section><h2>Otwarcie posiedzenia</h2><p><em>Do uzupełnienia…</em></p></section><section><h2>Sprawozdanie</h2><p><em>Do uzupełnienia…</em></p></section><section><h2>Głosowania</h2><p><em>Do uzupełnienia…</em></p></section><section><h2>Sprawy różne</h2><p><em>Do uzupełnienia…</em></p></section><section><h2>Zakończenie</h2><p><em>Do uzupełnienia…</em></p></section><footer><p><small>Wygenerowano jako szablon w panelu dokumentów zarządu.</small></p></footer></article>"
+  },
+  "meeting_resolution": {
+    "mime": "text/html; charset=utf-8",
+    "content": "<article class=\"board-doc\"><header><p>CKS Slavia Ruda Śląska</p><h1>Uchwała Zarządu Klubu</h1><p><strong>Nr:</strong> __________ / <strong>Data:</strong> __________</p></header><section><h2>Podstawa prawna</h2><p>Na podstawie Statutu klubu oraz Regulaminu Zarządu…</p></section><section><h2>Treść uchwały</h2><p>Zarząd postanawia:</p><ol><li>…</li></ol></section><section><h2>Termin realizacji</h2><p>…</p></section><footer><p>Prezes Zarządu: ____________________</p><p>Wiceprezes: ____________________</p></footer></article>"
+  },
+  "org_statute": {
+    "mime": "text/html; charset=utf-8",
+    "content": "<article class=\"board-doc-skeleton\"><header><p class=\"text-muted\">Szkielet dokumentu — CKS Slavia</p><h1>Statut klubu</h1></header><section><h2>Postanowienia ogólne</h2><p><em>Do uzupełnienia…</em></p></section><section><h2>Cele i zadania</h2><p><em>Do uzupełnienia…</em></p></section><section><h2>Organy klubu</h2><p><em>Do uzupełnienia…</em></p></section><section><h2>Członkostwo</h2><p><em>Do uzupełnienia…</em></p></section><section><h2>Postanowienia końcowe</h2><p><em>Do uzupełnienia…</em></p></section></article>"
+  },
+  "fin_membership_fees": {
+    "mime": "text/csv; charset=utf-8",
+    "content": "\uFEFFZawodnik;Miesiąc;Kwota;Status;Data wpłaty\n\"…\";\"2026-06\";\"…\";\"…\";\"…\""
+  },
+  "athlete_emergency_contact": {
+    "mime": "text/csv; charset=utf-8",
+    "content": "\uFEFFZawodnik;Opiekun;Telefon;E-mail;Uwagi medyczne\n\"…\";\"…\";\"…\";\"…\";\"…\""
+  },
+  "coach_session_plan": {
+    "mime": "text/html; charset=utf-8",
+    "content": "<article class=\"board-doc-skeleton\"><header><h1>Plan jednostki treningowej</h1><p><strong>Data:</strong> __________ <strong>Grupa:</strong> __________</p></header><section><h2>Rozgrzewka</h2><p>…</p></section><section><h2>Część główna</h2><p>…</p></section><section><h2>Schłodzenie</h2><p>…</p></section></article>"
+  },
+  "competition_regulations": {
+    "mime": "text/html; charset=utf-8",
+    "content": "<article class=\"board-doc-skeleton\"><header><h1>Regulamin zawodów</h1><p><strong>Data:</strong> __________ <strong>Miejsce:</strong> __________</p></header><section><h2>Postanowienia ogólne</h2><p>…</p></section><section><h2>Kategorie</h2><p>…</p></section><section><h2>Procedury</h2><p>…</p></section></article>"
+  },
+  "equipment_inventory": {
+    "mime": "text/csv; charset=utf-8",
+    "content": "\uFEFFLp.;Nazwa sprzętu;Ilość;Stan;Lokalizacja;Uwagi\n1;\"…\";\"…\";\"…\";\"…\";\"…\""
+  }
+}

@@ -11,8 +11,10 @@ pub struct CmsStatusDto {
     pub repo: String,
     pub branch: String,
     pub media_root: String,
+    pub board_root: String,
     pub token_configured: bool,
     pub upload_ready: bool,
+    pub board_docs_ready: bool,
     pub public_base_url_hint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_upload_at: Option<String>,
@@ -25,8 +27,10 @@ fn status_from_config(cfg: &CmsConfig) -> CmsStatusDto {
         repo: cfg.repo.clone(),
         branch: cfg.branch.clone(),
         media_root: cfg.media_root.clone(),
+        board_root: cms_github::board_docs_root(),
         token_configured: cfg.token.is_some(),
         upload_ready: cms_github::cms_upload_ready(cfg),
+        board_docs_ready: cms_github::board_docs_ready(cfg),
         public_base_url_hint:
             "Ustaw NUXT_PUBLIC_CMS_BASE_URL na froncie (raw.githubusercontent.com/…/main lub GitHub Pages)."
                 .to_string(),

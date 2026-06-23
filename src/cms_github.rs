@@ -9,6 +9,7 @@ use uuid::Uuid;
 const DEFAULT_CMS_REPO: &str = "JakubGawron1/Slavia-cms";
 const DEFAULT_CMS_BRANCH: &str = "main";
 const DEFAULT_CMS_MEDIA_ROOT: &str = "media";
+const DEFAULT_BOARD_DOCS_ROOT: &str = "board";
 
 #[derive(Debug, Clone)]
 pub struct CmsConfig {
@@ -355,6 +356,145 @@ pub async fn delete_path(cfg: &CmsConfig, path: &str) -> Result<(), String> {
     )
     .await?;
     Ok(())
+}
+
+pub fn board_docs_root() -> String {
+    std::env::var("SLAVIA_BOARD_DOCS_ROOT")
+        .unwrap_or_else(|_| DEFAULT_BOARD_DOCS_ROOT.to_string())
+        .trim()
+        .trim_matches('/')
+        .to_string()
+}
+
+pub fn board_manifest_repo_path() -> String {
+    format!("{}/_manifest.json", board_docs_root())
+}
+
+pub fn is_board_docs_path(path: &str) -> bool {
+    let root = board_docs_root();
+    let p = path.trim().trim_start_matches('/');
+    p == root || p.starts_with(&format!("{}/", root))
+}
+
+pub fn assert_board_docs_path(path: &str) -> Result<String, String> {
+    let p = path.trim().trim_start_matches('/');
+    if p.is_empty() || p.contains("..") {
+        return Err("Nieprawidłowa ścieżka dokumentu.".to_string());
+    }
+    if !is_board_docs_path(p) {
+        return Err("Ścieżka musi być w folderze board/ repozytorium CMS.".to_string());
+    }
+    Ok(p.to_string())
+}
+
+pub fn board_docs_ready(cfg: &CmsConfig) -> bool {
+    cms_upload_ready(cfg)
+}
+
+/// Odpowiedź GET Contents API dla pliku (treść base64).
+#[derive(Debug, Deserialize)]
+pub struct GhContentFile {
+    pub sha: Option<String>,
+    pub content: Option<String>,
+    pub encoding: Option<String>,
+}
+
+/// Odczyt pliku z repo (dekodowanie base64 z GitHub Contents API).
+pub async fn read_repo_file_bytes(
+    cfg: &CmsConfig,
+    path: &str,
+) -> Result<(Vec<u8>, Option<String>), String> {
+    let path = assert_board_docs_path(path).or_else(|_| {
+        let p = path.trim().trim_start_matches('/');
+        if is_cms_relative_path(p) {
+            Ok(p.to_string())
+        } else {
+            Err("Nie rozpoznano ścieżki repo.".to_string())
+        }
+    })?;
+
+    let token = cfg
+        .token
+        .as_deref()
+        .ok_or_else(|| "Brak GITHUB_TOKEN — odczyt Slavia-cms niemożliwy.".to_string())?;
+    if !cms_upload_ready(cfg) {
+        return Err("Nieprawidłowa konfiguracja SLAVIA_CMS_REPO.".to_string());
+    }
+
+    let client = reqwest::Client::new();
+    let encoded = contents_api_path(&path);
+    let url = format!(
+        "https://api.github.com/repos/{}/contents/{}?ref={}",
+        cfg.repo,
+        encoded,
+        urlencoding::encode(&cfg.branch)
+    );
+    let res = client
+        .get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header("User-Agent", "Slavia-Backend-CMS")
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("GitHub API: {}", e))?;
+    if res.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err(format!("Plik nie znaleziony: {path}"));
+    }
+    if !res.status().is_success() {
+        return Err(github_error_detail(res).await);
+    }
+    let parsed: GhContentFile = res.json().await.map_err(|e| e.to_string())?;
+    let content_b64 = parsed
+        .content
+        .ok_or_else(|| "Brak treści pliku w odpowiedzi GitHub.".to_string())?
+        .replace('\n', "");
+    let bytes = B64
+        .decode(content_b64.as_bytes())
+        .map_err(|e| format!("Dekodowanie base64: {e}"))?;
+    Ok((bytes, parsed.sha))
+}
+
+/// Zapis lub aktualizacja pliku pod jawną ścieżką w repo (board/…).
+pub async fn write_repo_file_bytes(
+    cfg: &CmsConfig,
+    path: &str,
+    bytes: &[u8],
+    commit_message: &str,
+) -> Result<String, String> {
+    let path = assert_board_docs_path(path)?;
+    let token = cfg
+        .token
+        .as_deref()
+        .ok_or_else(|| "Brak GITHUB_TOKEN — zapis do Slavia-cms niemożliwy.".to_string())?;
+    if !cms_upload_ready(cfg) {
+        return Err("Nieprawidłowa konfiguracja SLAVIA_CMS_REPO.".to_string());
+    }
+
+    let client = reqwest::Client::new();
+    let existing_sha = fetch_file_sha(&client, cfg, &path, token).await?;
+    let encoded = contents_api_path(&path);
+    let url = format!(
+        "https://api.github.com/repos/{}/contents/{}",
+        cfg.repo, encoded
+    );
+    let put = GhPutBody {
+        message: commit_message,
+        content: B64.encode(bytes),
+        branch: &cfg.branch,
+        sha: existing_sha.as_deref(),
+    };
+    let parsed: GhContentResponse = github_json(
+        &client,
+        reqwest::Method::PUT,
+        &url,
+        token,
+        Some(serde_json::to_value(put).map_err(|e| e.to_string())?),
+    )
+    .await?;
+    Ok(parsed
+        .sha
+        .unwrap_or_else(|| "unknown".to_string()))
 }
 
 pub async fn destroy_if_cms(path_or_url: &str) {

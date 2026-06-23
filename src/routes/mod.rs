@@ -1,3 +1,4 @@
+pub mod board_documents;
 pub mod admins;
 pub mod ai_coach;
 pub mod ai_coach_settings;

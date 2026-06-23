@@ -3032,6 +3032,27 @@
         ]
       }
     },
+    "/api/system/board-docs-status": {
+      "get": {
+        "summary": "GET /api/system/board-docs-status",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/system/calendar/export/{id}": {
       "get": {
         "summary": "GET /api/system/calendar/export/{id}",
@@ -4018,9 +4039,9 @@
         ]
       }
     },
-    "/api/cms/": {
+    "/api/board/templates/{doc_type}": {
       "get": {
-        "summary": "GET /api/cms/",
+        "summary": "GET /api/board/templates/{doc_type}",
         "responses": {
           "200": {
             "description": "OK"
@@ -4039,9 +4060,124 @@
         ]
       }
     },
-    "/api/cms/api/health": {
+    "/api/board/documents/generate": {
+      "post": {
+        "summary": "POST /api/board/documents/generate",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/board/documents/save": {
+      "post": {
+        "summary": "POST /api/board/documents/save",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/board/documents/delete": {
+      "post": {
+        "summary": "POST /api/board/documents/delete",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/board/document-types": {
       "get": {
-        "summary": "GET /api/cms/api/health",
+        "summary": "GET /api/board/document-types",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "POST /api/board/document-types",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/board/documents": {
+      "get": {
+        "summary": "GET /api/board/documents",
         "responses": {
           "200": {
             "description": "OK"
@@ -4060,9 +4196,133 @@
         ]
       }
     },
-    "/api/cms/metrics": {
+    "/api/board/documents/{id}/content": {
       "get": {
-        "summary": "GET /api/cms/metrics",
+        "summary": "GET /api/board/documents/{id}/content",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "summary": "PATCH /api/board/documents/{id}/content",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/board/documents/{id}/preview": {
+      "get": {
+        "summary": "GET /api/board/documents/{id}/preview",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/board/documents/{id}": {
+      "get": {
+        "summary": "GET /api/board/documents/{id}",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/board/": {
+      "get": {
+        "summary": "GET /api/board/",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/board/api/health": {
+      "get": {
+        "summary": "GET /api/board/api/health",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/board/metrics": {
+      "get": {
+        "summary": "GET /api/board/metrics",
         "responses": {
           "200": {
             "description": "OK"
