@@ -3221,6 +3221,54 @@
         ]
       }
     },
+    "/api/system/theme-presets": {
+      "get": {
+        "summary": "GET /api/system/theme-presets",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/system/pzpc-weight-classes": {
+      "get": {
+        "summary": "GET /api/system/pzpc-weight-classes",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/system/athlete-badges": {
+      "get": {
+        "summary": "GET /api/system/athlete-badges",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
     "/api/system/openapi.json": {
       "get": {
         "summary": "GET /api/system/openapi.json",

@@ -1,0 +1,39 @@
+{
+  "badges": [
+    {
+      "id": "sinclair",
+      "label": "Mistrz Sinclaira",
+      "description": "Punkty Sinclair wyliczane na podstawie masy ciała i wyniku w dwuboju.",
+      "thresholds": [100, 200, 300, 400],
+      "unit": "pkt"
+    },
+    {
+      "id": "total",
+      "label": "Siła dwuboju",
+      "description": "Suma najlepszego rwania i podrzutu.",
+      "thresholds": [100, 200, 300, 400],
+      "unit": "kg"
+    },
+    {
+      "id": "snatch",
+      "label": "Technika rwania",
+      "description": "Twój najlepszy wynik w rwaniu.",
+      "thresholds": [50, 90, 100, 120, 150],
+      "unit": "kg"
+    },
+    {
+      "id": "cj",
+      "label": "Moc podrzutu",
+      "description": "Twój najlepszy wynik w podrzucie.",
+      "thresholds": [70, 90, 100, 120, 150, 170, 200],
+      "unit": "kg"
+    },
+    {
+      "id": "trainings",
+      "label": "Staż w klubie",
+      "description": "Ilość obecności na treningach zarejestrowana w systemie.",
+      "thresholds": [10, 50, 100, 250, 500],
+      "unit": "sesji"
+    }
+  ]
+}

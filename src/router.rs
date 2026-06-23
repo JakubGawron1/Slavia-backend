@@ -424,6 +424,18 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
             post(routes::feature_flags::upsert_feature_flag)
                 .delete(routes::feature_flags::delete_feature_flag),
         )
+        .route(
+            "/theme-presets",
+            get(routes::system_catalogs::theme_presets_handler),
+        )
+        .route(
+            "/pzpc-weight-classes",
+            get(routes::system_catalogs::pzpc_weight_classes_handler),
+        )
+        .route(
+            "/athlete-badges",
+            get(routes::system_catalogs::athlete_badges_handler),
+        )
         .route("/openapi.json", get(routes::system_logs::openapi_handler))
         .route(
             "/role-preview/session",

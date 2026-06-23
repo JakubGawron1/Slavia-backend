@@ -1,4 +1,4 @@
-//! Sinclair 2025–2028 (IWF) — stałe zgodne z `@slavia/shared` / test-vectors/sinclair.json.
+//! Sinclair 2025–2028 (IWF) — stałe zgodne z `embed/sinclair-test-vectors.json`.
 
 use serde::Serialize;
 

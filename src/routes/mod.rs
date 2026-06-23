@@ -32,6 +32,7 @@ pub mod role_preview;
 pub mod recurring_training_cancellations;
 pub mod results;
 pub mod submissions;
+pub mod system_catalogs;
 pub mod system_logs;
 pub mod totp;
 pub mod trainer;

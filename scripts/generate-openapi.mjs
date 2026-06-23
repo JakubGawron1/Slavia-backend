@@ -82,7 +82,10 @@ const PUBLIC_PREFIXES = [
   '/api/health',
   '/api/system/calendar/export',
   '/api/system/mobile-releases/latest',
-  '/api/system/openapi.json'
+  '/api/system/openapi.json',
+  '/api/system/theme-presets',
+  '/api/system/pzpc-weight-classes',
+  '/api/system/athlete-badges'
 ]
 
 function isPublicPath(p) {

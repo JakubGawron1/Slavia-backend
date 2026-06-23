@@ -1,4 +1,4 @@
-//! Identyfikatory presetów motywu — lustro `Slavia-shared/data/theme-presets.json` (`src/embed/theme-presets.json`).
+//! Identyfikatory presetów motywu (`src/embed/theme-presets.json`).
 
 use std::sync::OnceLock;
 

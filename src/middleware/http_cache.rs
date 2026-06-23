@@ -26,7 +26,11 @@ pub async fn cache_control_middleware(
 
     let policy = if path == "/api/system/ping" || path == "/api/health" {
         Some("no-store")
-    } else if path == "/api/system/openapi.json" {
+    } else if path == "/api/system/openapi.json"
+        || path == "/api/system/theme-presets"
+        || path == "/api/system/pzpc-weight-classes"
+        || path == "/api/system/athlete-badges"
+    {
         Some("public, max-age=86400, stale-while-revalidate=3600")
     } else if path == "/api/system/mobile-releases/latest" {
         Some("public, max-age=300, stale-while-revalidate=600")
