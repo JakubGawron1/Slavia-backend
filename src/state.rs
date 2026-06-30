@@ -191,12 +191,22 @@ impl Db {
 
     /// Pożyczka połączenia z puli (zwraca się automatycznie po drop).
     pub async fn raw(&self) -> PooledConn {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .expect("database pool unavailable");
-        PooledConn(conn)
+        const MAX_ATTEMPTS: u32 = 5;
+        let mut last_err: Option<deadpool_libsql::PoolError> = None;
+        for attempt in 1..=MAX_ATTEMPTS {
+            match self.pool.get().await {
+                Ok(c) => return PooledConn(c),
+                Err(e) => {
+                    tracing::warn!(error = %e, attempt, "database pool busy — retry");
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(25 * attempt as u64)).await;
+                }
+            }
+        }
+        panic!(
+            "database pool unavailable after {MAX_ATTEMPTS} attempts: {:?}",
+            last_err
+        );
     }
 
     pub async fn execute<P>(&self, sql: &str, params: P) -> Result<u64, libsql::Error>
