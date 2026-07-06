@@ -5,7 +5,7 @@ use axum::{
 use jsonwebtoken::{DecodingKey, Validation, decode};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::api_error::{ApiError, api_error};
+use crate::api_error::{ApiError, api_error, api_error_with_code};
 use crate::models::Role;
 use crate::state::AppState;
 
@@ -147,17 +147,28 @@ impl FromRequestParts<AppState> for Claims {
             .next()
             .await
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        if let Some(r) = row {
-            let is_banned: i64 = r.get(0).unwrap_or(0);
-            let db_token_version: i64 = r.get(1).unwrap_or(0);
+        let Some(r) = row else {
+            return Err(api_error(
+                StatusCode::UNAUTHORIZED,
+                "Invalid Token",
+            ));
+        };
+        let is_banned: i64 = r.get(0).unwrap_or(0);
+        let db_token_version: i64 = r.get(1).unwrap_or(0);
 
-            if is_banned != 0 && !token_data.claims.roles.contains(&Role::SuperAdmin) {
-                return Err(api_error(StatusCode::FORBIDDEN, "Account is banned"));
-            }
+        if is_banned != 0 && !token_data.claims.roles.contains(&Role::SuperAdmin) {
+            return Err(api_error_with_code(
+                StatusCode::FORBIDDEN,
+                "Account is banned",
+                Some("account_banned"),
+            ));
+        }
 
-            if db_token_version > token_data.claims.token_version {
-                return Err(api_error(StatusCode::UNAUTHORIZED, "Token revoked (logged out from all devices)"));
-            }
+        if db_token_version > token_data.claims.token_version {
+            return Err(api_error(
+                StatusCode::UNAUTHORIZED,
+                "Token revoked (logged out from all devices)",
+            ));
         }
 
         Ok(token_data.claims)

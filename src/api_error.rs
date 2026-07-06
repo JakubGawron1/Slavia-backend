@@ -22,6 +22,16 @@ pub fn api_error(status: StatusCode, msg: impl Into<String>) -> ApiError {
     api_error_with_code(status, msg, None::<&str>)
 }
 
+/// Mapuje naruszenie UNIQUE na 409 z czytelnym komunikatem; pozostałe błędy DB → 500.
+pub fn map_db_err(e: impl std::fmt::Display, conflict_msg: &str) -> ApiError {
+    let s = e.to_string();
+    if s.contains("UNIQUE constraint failed") {
+        api_error(StatusCode::CONFLICT, conflict_msg)
+    } else {
+        api_error(StatusCode::INTERNAL_SERVER_ERROR, s)
+    }
+}
+
 /// Błąd z kodem maszynowym (`code`) dla frontendu + opcjonalny `detail` (np. walidacja).
 pub fn api_error_with_code(
     status: StatusCode,
@@ -91,6 +101,9 @@ fn polish_api_message(status: StatusCode, msg: &str) -> String {
             "Wymagana rola Trener lub wyższa.".to_string()
         }
         (StatusCode::FORBIDDEN, "Brak uprawnień") => trimmed.to_string(),
+        (StatusCode::FORBIDDEN, "Account is banned") => {
+            "Konto zostało zablokowane. Skontaktuj się z administracją klubu.".to_string()
+        }
         (StatusCode::NOT_FOUND, "Post not found") => "Nie znaleziono wpisu.".to_string(),
         (StatusCode::NOT_FOUND, "Announcement not found") => {
             "Nie znaleziono ogłoszenia.".to_string()

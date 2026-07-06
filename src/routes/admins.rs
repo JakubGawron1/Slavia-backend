@@ -635,7 +635,7 @@ pub async fn ban_user(
     let n = state
         .db
         .execute(
-            "UPDATE users SET is_banned = 1, banned_at = ?1, banned_by_user_id = ?2, banned_reason = ?3 WHERE id = ?4",
+            "UPDATE users SET is_banned = 1, banned_at = ?1, banned_by_user_id = ?2, banned_reason = ?3, token_version = token_version + 1 WHERE id = ?4",
             (now, claims.sub.clone(), reason, id.clone()),
         )
         .await

@@ -41,7 +41,7 @@ pub async fn login_handler(
     let mut rows = state
         .db
         .query(
-            "SELECT id, username, password_hash, roles, totp_secret, totp_enabled, token_version FROM users WHERE username = ?1",
+            "SELECT id, username, password_hash, roles, totp_secret, totp_enabled, token_version, is_banned FROM users WHERE username = ?1",
             [username_trim.clone()],
         )
         .await
@@ -90,6 +90,7 @@ pub async fn login_handler(
     let totp_secret: Option<String> = row.get(4).ok();
     let totp_enabled: i64 = row.get(5).unwrap_or(0);
     let token_version: i64 = row.get(6).unwrap_or(0);
+    let is_banned: i64 = row.get(7).unwrap_or(0);
     let roles: Vec<Role> = serde_json::from_str(&roles_json)
         .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Invalid roles in db"))?;
 
@@ -133,6 +134,15 @@ pub async fn login_handler(
                 "Invalid username or password",
             ));
         }
+    }
+
+    if is_banned != 0 && !roles.contains(&Role::SuperAdmin) {
+        tracing::warn!(username = %username_trim, user_id = %user_id, "login blocked: banned account");
+        return Err(crate::api_error::api_error_with_code(
+            StatusCode::FORBIDDEN,
+            "Account is banned",
+            Some("account_banned"),
+        ));
     }
 
     crate::login_throttle::clear_login_attempts(&username_trim);

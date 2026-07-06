@@ -7,7 +7,7 @@ use chrono::{Datelike, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api_error::{ApiError, api_error};
+use crate::api_error::{ApiError, api_error, map_db_err};
 use crate::audit::write_audit_log;
 use crate::middleware::auth::{Claims, RequireTrainerOrHigher};
 use crate::sql_row;
@@ -330,8 +330,6 @@ pub async fn create_my_payment(
         ));
     }
 
-    let id = Uuid::new_v4().to_string();
-    let now = Utc::now().to_rfc3339();
     let note = payload
         .note
         .map(|s| s.trim().to_string())
@@ -344,6 +342,41 @@ pub async fn create_my_payment(
             ));
         }
 
+    let now = Utc::now().to_rfc3339();
+
+    // Ponowne zgłoszenie po odrzuceniu — aktualizuj istniejący wiersz zamiast łamać UNIQUE.
+    let mut rejected = state
+        .db
+        .query(
+            "SELECT id FROM membership_payments WHERE athlete_id = ?1 AND month = ?2 AND status = 'Rejected' LIMIT 1",
+            (athlete_id.clone(), month.clone()),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if let Some(rej_row) = rejected
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let rej_id: String = rej_row.get(0).unwrap_or_default();
+        state
+            .db
+            .execute(
+                "UPDATE membership_payments SET status = 'Pending', amount_pln = ?1, note = ?2, created_by_user_id = ?3, created_at = ?4 WHERE id = ?5",
+                (
+                    payload.amount_pln,
+                    note.clone(),
+                    claims.sub.clone(),
+                    now.clone(),
+                    rej_id,
+                ),
+            )
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        return Ok(StatusCode::CREATED);
+    }
+
+    let id = Uuid::new_v4().to_string();
     state
         .db
         .execute(
@@ -360,7 +393,7 @@ pub async fn create_my_payment(
             ),
         )
         .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| map_db_err(e, "Masz już zgłoszenie płatności dla tego miesiąca."))?;
 
     Ok(StatusCode::CREATED)
 }

@@ -595,10 +595,15 @@ pub async fn create_result(
         ));
     }
 
-    let baseline = athlete_oly_baseline(&state, &payload.athlete_id).await?;
-    let snatch = payload.snatch.unwrap_or(baseline.0);
-    let clean_and_jerk = payload.clean_and_jerk.unwrap_or(baseline.1);
-    let total = payload.total.unwrap_or(snatch + clean_and_jerk);
+    let (snatch, clean_and_jerk, total) = if raw_sent_oly {
+        let baseline = athlete_oly_baseline(&state, &payload.athlete_id).await?;
+        let snatch = payload.snatch.unwrap_or(baseline.0);
+        let clean_and_jerk = payload.clean_and_jerk.unwrap_or(baseline.1);
+        let total = payload.total.unwrap_or(snatch + clean_and_jerk);
+        (snatch, clean_and_jerk, total)
+    } else {
+        (0.0, 0.0, 0.0)
+    };
 
     if snatch < 0.0 || clean_and_jerk < 0.0 || total < 0.0 {
         return Err(api_error(

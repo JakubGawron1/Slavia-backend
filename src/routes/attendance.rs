@@ -3,11 +3,11 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use chrono::Utc;
+use chrono::{NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api_error::{ApiError, api_error};
+use crate::api_error::{ApiError, api_error, map_db_err};
 use crate::audit::write_audit_log;
 use crate::middleware::auth::{Claims, claims_has_staff_access};
 use crate::pagination::parse_list_pagination;
@@ -62,13 +62,53 @@ fn normalize_status(raw: &str) -> Result<String, ApiError> {
     let v = raw.trim().to_lowercase();
     match v.as_str() {
         "obecny" | "present" => Ok("obecny".to_string()),
-        "spozniony" | "spóźniony" | "late" => Ok("nieobecny".to_string()),
+        "spozniony" | "spóźniony" | "late" => Ok("spozniony".to_string()),
         "nieobecny" | "absent" => Ok("nieobecny".to_string()),
         _ => Err(api_error(
             StatusCode::BAD_REQUEST,
-            "status musi być: obecny | nieobecny",
+            "status musi być: obecny | spozniony | nieobecny",
         )),
     }
+}
+
+fn parse_session_date(raw: &str) -> Result<String, ApiError> {
+    let d = NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d").map_err(|_| {
+        api_error(
+            StatusCode::BAD_REQUEST,
+            "session_date musi być w formacie YYYY-MM-DD",
+        )
+    })?;
+    Ok(d.format("%Y-%m-%d").to_string())
+}
+
+async fn ensure_attendance_athlete_access(
+    state: &AppState,
+    claims: &Claims,
+    athlete_id: &str,
+) -> Result<(), ApiError> {
+    if claims_has_staff_access(claims) {
+        return Ok(());
+    }
+    let mut rows = state
+        .db
+        .query(
+            "SELECT id FROM athletes WHERE id = ?1 AND user_id = ?2",
+            (athlete_id.to_string(), claims.sub.clone()),
+        )
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if rows
+        .next()
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .is_none()
+    {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Możesz zgłaszać obecność tylko na własnym profilu",
+        ));
+    }
+    Ok(())
 }
 
 pub async fn load_attendance_record_by_id(
@@ -136,6 +176,8 @@ pub async fn upsert_attendance(
     claims: Claims,
     Json(payload): Json<UpsertAttendanceRequest>,
 ) -> Result<Json<AttendanceRecord>, ApiError> {
+    ensure_attendance_athlete_access(&state, &claims, &payload.athlete_id).await?;
+    let session_date = parse_session_date(&payload.session_date)?;
     let status = normalize_status(&payload.status)?;
     let actor_role = actor_role_label(&claims);
     let is_staff = claims_has_staff_access(&claims);
@@ -154,7 +196,7 @@ pub async fn upsert_attendance(
             "SELECT id, verification_state, status FROM attendance_records WHERE athlete_id = ?1 AND session_date = ?2 LIMIT 1",
             (
                 payload.athlete_id.clone(),
-                payload.session_date.clone(),
+                session_date.clone(),
             ),
         )
         .await
@@ -216,7 +258,7 @@ pub async fn upsert_attendance(
             (
                 id.clone(),
                 payload.athlete_id.clone(),
-                payload.session_date.clone(),
+                session_date.clone(),
                 status.clone(),
                 actor_role.clone(),
                 Some(created_by.clone()),
@@ -228,7 +270,7 @@ pub async fn upsert_attendance(
             ),
         )
         .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| map_db_err(e, "Obecność na ten dzień jest już zapisana."))?;
 
     let conn_arc = state.db.raw().await;
     let _ = write_audit_log(
