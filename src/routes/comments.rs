@@ -37,9 +37,15 @@ pub struct CoachComment {
 
 pub async fn list_comments(
     State(state): State<AppState>,
-    _claims: Claims,
+    claims: Claims,
     Query(query): Query<ListCommentsQuery>,
 ) -> Result<Json<Vec<CoachComment>>, ApiError> {
+    if !claims_has_staff_access(&claims) {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Komentarze trenera tylko dla kadry",
+        ));
+    }
     let t = query.target_type.trim().to_string();
     let tid = query.target_id.trim().to_string();
     if t.is_empty() || tid.is_empty() {

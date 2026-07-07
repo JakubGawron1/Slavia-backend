@@ -7,7 +7,7 @@ use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api_error::{ApiError, api_error};
+use crate::api_error::{ApiError, api_error, map_db_err};
 use crate::audit::write_audit_log;
 use crate::middleware::auth::{Claims, claims_has_staff_access};
 use crate::state::AppState;
@@ -194,7 +194,7 @@ pub async fn upsert_my_recovery_log(
             ),
         )
         .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| map_db_err(e, "Masz już wpis regeneracji na ten dzień."))?;
 
     let conn_arc = state.db.raw().await;
     let athlete_label =

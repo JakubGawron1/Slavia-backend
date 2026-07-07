@@ -548,7 +548,7 @@ pub async fn athlete_payments_year(
 
 pub async fn list_athletes_payment_status(
     State(state): State<AppState>,
-    _claims: Claims,
+    _auth: RequireTrainerOrHigher,
     Query(q): Query<MonthQuery>,
 ) -> Result<Json<Vec<AthletePaymentStatusRow>>, ApiError> {
     let month = q

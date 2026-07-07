@@ -541,7 +541,7 @@ pub(crate) async fn attendance_summary_for_athlete_id(
         .db
         .query(
             "SELECT
-                SUM(CASE WHEN status = 'obecny' THEN 1 ELSE 0 END) AS present_count,
+                SUM(CASE WHEN status IN ('obecny', 'spozniony') THEN 1 ELSE 0 END) AS present_count,
                 SUM(CASE WHEN status = 'nieobecny' THEN 1 ELSE 0 END) AS absent_count,
                 SUM(CASE WHEN verification_state = 'pending' THEN 1 ELSE 0 END) AS pending_count
              FROM attendance_records

@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api_error::{ApiError, api_error};
+use crate::api_error::{ApiError, api_error, map_db_err};
 use crate::audit::write_audit_log;
 use crate::chat_cleanup::{CHAT_INACTIVITY_DAYS, prune_inactive_chat_threads};
 use crate::middleware::auth::{Claims, RequireAdminOrSuperAdmin};
@@ -325,7 +325,7 @@ pub async fn open_thread(
     }
 
     let id = Uuid::new_v4().to_string();
-    state
+    if let Err(e) = state
         .db
         .execute(
             "INSERT INTO chat_threads (id, athlete_user_id, trainer_user_id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -339,7 +339,37 @@ pub async fn open_thread(
             ),
         )
         .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    {
+        if e.to_string().contains("UNIQUE constraint failed") {
+            let mut dup_rows = state
+                .db
+                .query(
+                    "SELECT id, title, created_at, updated_at FROM chat_threads WHERE athlete_user_id = ?1 AND trainer_user_id = ?2",
+                    (athlete_user_id.clone(), trainer_user_id.clone()),
+                )
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            if let Some(row) = dup_rows
+                .next()
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            {
+                let dto = build_thread_dto(
+                    &state,
+                    &claims.sub,
+                    row.get(0).unwrap_or_default(),
+                    athlete_user_id.clone(),
+                    trainer_user_id.clone(),
+                    row.get(1).ok(),
+                    row.get(2).unwrap_or_default(),
+                    row.get(3).unwrap_or_default(),
+                )
+                .await?;
+                return Ok(Json(dto));
+            }
+        }
+        return Err(map_db_err(e, "Wątek czatu już istnieje."));
+    }
 
     let dto = build_thread_dto(
         &state,
@@ -710,7 +740,7 @@ pub async fn toggle_message_reaction(
             .await
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     } else {
-        state
+        if let Err(e) = state
             .db
             .execute(
                 "INSERT INTO chat_message_reactions (id, message_id, user_id, emoji, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -723,7 +753,11 @@ pub async fn toggle_message_reaction(
                 ),
             )
             .await
-            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        {
+            if !e.to_string().contains("UNIQUE constraint failed") {
+                return Err(api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+            }
+        }
     }
 
     let map = load_reactions_for_thread(&state, &thread_id, &claims.sub).await?;

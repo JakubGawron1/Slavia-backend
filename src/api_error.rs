@@ -28,7 +28,10 @@ pub fn map_db_err(e: impl std::fmt::Display, conflict_msg: &str) -> ApiError {
     if s.contains("UNIQUE constraint failed") {
         api_error(StatusCode::CONFLICT, conflict_msg)
     } else {
-        api_error(StatusCode::INTERNAL_SERVER_ERROR, s)
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Błąd bazy danych — spróbuj ponownie.",
+        )
     }
 }
 
