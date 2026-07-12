@@ -15,9 +15,11 @@ Każdy push na `main` (gdy zmienią się pliki backendu) automatycznie synchroni
 
 **Hugging Face**
 
-1. Utwórz Space: **New Space** → SDK: **Docker** (nazwa np. `slavia-backend`).
-2. W Space → **Settings → Variables and secrets** ustaw sekrety runtime (patrz sekcja poniżej).
+1. Utwórz Space **ręcznie** w UI HF: [New Space](https://huggingface.co/new-space) → SDK: **Docker** (nazwa np. `cks-slavia`, owner taki sam jak w `HF_SPACE_REPO`).
 
+   > **402 Payment Required:** Hugging Face **nie pozwala** na automatyczne tworzenie Docker Space z CI na darmowym koncie — wymaga **HF PRO** albo jednorazowego utworzenia Space w przeglądarce. Workflow **nie** wywołuje `hf repos create`; tylko synchronizuje pliki do istniejącego Space.
+
+2. W Space → **Settings → Variables and secrets** ustaw sekrety runtime (patrz sekcja poniżej).
 **GitHub** (`Slavia-backend` → Settings → Secrets and variables → Actions)
 
 | Typ | Nazwa | Wartość |
@@ -34,9 +36,9 @@ Każdy push na `main` (gdy zmienią się pliki backendu) automatycznie synchroni
 Workflow `.github/workflows/deploy-huggingface-space.yml`:
 
 1. Kopiuje `deploy/huggingface/README.md` → `README.md` (wymagany YAML z `sdk: docker`).
-2. Uruchamia `hf upload` (przez `uvx` + `huggingface_hub>=1.2`) z retry przy limitach API HF — mirror plików na Space.
-3. HF buduje obraz z `Dockerfile` i uruchamia kontener.
-
+2. Sprawdza, czy Space istnieje (`hf repo info`); jeśli nie — kończy z instrukcją ręcznego utworzenia (bez `hf repos create` w CI).
+3. Uruchamia `hf upload` (przez `uvx` + `huggingface_hub>=1.2`) z retry przy limitach API HF — mirror plików na Space.
+4. HF buduje obraz z `Dockerfile` i uruchamia kontener.
 Ręczny deploy: **Actions** → **Deploy Hugging Face Space** → **Run workflow**.
 
 ### 3. Smoke test
@@ -110,7 +112,8 @@ git add . && git commit -m "Deploy" && git push
 | Problem | Rozwiązanie |
 |---------|-------------|
 | Workflow fail: brak `HF_TOKEN` / `HF_SPACE_REPO` | Uzupełnij oba sekrety w GitHub (Actions → Secrets) |
-| **403** przy sync | Token bez write lub brak dostępu do Space |
-| **502** na Space | Logi w HF → często brak `JWT_SECRET` lub Turso |
+| **402** przy deploy | Space nie istnieje — utwórz go ręcznie w [new-space](https://huggingface.co/new-space) (Docker). Auto-create z CI wymaga HF PRO. |
+| **Space not found** w logu CI | `HF_SPACE_REPO` musi być dokładnie `owner/nazwa` (np. `koliber/cks-slavia`), zgodnie z URL Space |
+| **403** przy sync | Token bez write lub brak dostępu do Space || **502** na Space | Logi w HF → często brak `JWT_SECRET` lub Turso |
 | CORS w przeglądarce | Dodaj origin do `CORS_ALLOWED_ORIGINS` w panelu Space |
 | Frontend na starym providerze | Ustaw `NUXT_PUBLIC_API_BASE_URL_HUGGINGFACE` + przełącz provider w developer tools |

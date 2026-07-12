@@ -61,8 +61,17 @@ jobs:
         run: |
           set -euo pipefail
 
-          # hub-sync@v0.1.0 nie retryuje 429 z HF API (repo create). huggingface_hub>=1.2 czyta RateLimit.
+          # huggingface_hub>=1.2 — `hf repos` (stare `hf repo` jest deprecated).
           HF_CLI=(uvx --with 'huggingface_hub>=1.2.0' hf)
+
+          is_retryable_hf_error() {
+            local code=$1
+            # 402/403/404 nie są przejściowe — retry tylko 429 i 5xx.
+            case "${code}" in
+              402|403|404|422) return 1 ;;
+              *) return 0 ;;
+            esac
+          }
 
           retry_hf() {
             local max_attempts=6
@@ -73,6 +82,9 @@ jobs:
                 return 0
               fi
               local exit_code=$?
+              if ! is_retryable_hf_error "${exit_code}"; then
+                return "${exit_code}"
+              fi
               if [[ ${attempt} -ge ${max_attempts} ]]; then
                 echo "::error::HF command failed after ${max_attempts} attempts (exit ${exit_code}): $*"
                 return "${exit_code}"
@@ -87,11 +99,14 @@ jobs:
             done
           }
 
-          echo "Ensuring Space exists: ${HF_SPACE_REPO}"
-          retry_hf "${HF_CLI[@]}" repo create "${HF_SPACE_REPO}" \
-            --repo-type space \
-            --space-sdk docker \
-            --exist-ok
+          echo "Checking Space exists: ${HF_SPACE_REPO}"
+          if ! "${HF_CLI[@]}" repo info "${HF_SPACE_REPO}" --repo-type space >/dev/null 2>&1; then
+            echo "::error::Space '${HF_SPACE_REPO}' not found on Hugging Face."
+            echo "::error::Create it once in the HF UI: https://huggingface.co/new-space → SDK: Docker (same owner/name as HF_SPACE_REPO)."
+            echo "::error::Docker Spaces cannot be auto-created from CI on free accounts (402 Payment Required without HF PRO). After creation, re-run this workflow."
+            exit 1
+          fi
+          echo "Space found — uploading files (no repo create from CI)."
 
           file_count=$(find . -type f ! -path './.git/*' ! -path './.github/*' | wc -l | tr -d ' ')
           if [[ "${file_count}" -eq 0 ]]; then
