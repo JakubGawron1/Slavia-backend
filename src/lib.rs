@@ -47,15 +47,13 @@ mod import_http_integration_test;
 use state::AppState;
 use state::Db;
 
-/// Skąd brać bazę: lokalny SQLite, Turso embedded replica (domyślnie) lub czysty HTTP.
+/// Skąd brać bazę: lokalny SQLite albo Turso (HTTP).
 #[derive(Debug, Clone)]
 pub enum DatabaseBackend {
     Local(PathBuf),
     Remote {
         url: String,
         auth_token: String,
-        /// Lokalna kopia zsynchronizowana z Turso — szybkie odczyty. `None` = sam HTTP.
-        replica_path: Option<PathBuf>,
     },
 }
 

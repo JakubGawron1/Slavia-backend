@@ -6,28 +6,55 @@ use libsql::Connection;
 
 use crate::DatabaseBackend;
 
-fn is_stream_not_found_error(e: &libsql::Error) -> bool {
+/// Błędy chwilowe libsql/SQLite (lock, zerwana sesja HTTP z Turso).
+fn is_transient_db_error(e: &libsql::Error) -> bool {
     let msg = e.to_string().to_ascii_lowercase();
     msg.contains("stream not found")
+        || msg.contains("database is locked")
+        || msg.contains("database table is locked")
+        || msg.contains("sqlite_busy")
+        || msg.contains("sqlite_locked")
+        || crate::db::sqlite_corrupt_message(&msg)
 }
 
-fn pool_size() -> usize {
-    std::env::var("DATABASE_POOL_SIZE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .filter(|&n| (1..=64).contains(&n))
-        .unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(|n| (n.get() * 2).clamp(4, 16))
-                .unwrap_or(8)
-        })
+const DB_TRANSIENT_MAX_ATTEMPTS: u32 = 4;
+
+async fn with_db_retry<T, F, Fut>(label: &str, mut op: F) -> Result<T, libsql::Error>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, libsql::Error>>,
+{
+    let mut last_err: Option<libsql::Error> = None;
+    for attempt in 1..=DB_TRANSIENT_MAX_ATTEMPTS {
+        match op().await {
+            Ok(v) => return Ok(v),
+            Err(e) if is_transient_db_error(&e) && attempt < DB_TRANSIENT_MAX_ATTEMPTS => {
+                tracing::warn!(error = %e, attempt, op = label, "transient db error — retry");
+                last_err = Some(e);
+                tokio::time::sleep(Duration::from_millis(30 * attempt as u64)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last_err.expect("retry loop exhausted without error"))
 }
 
-fn replica_sync_interval_secs() -> u64 {
-    std::env::var("TURSO_REPLICA_SYNC_SECS")
+fn pool_size(backend: &DatabaseBackend) -> usize {
+    let configured = std::env::var("DATABASE_POOL_SIZE")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(60)
+        .filter(|&n| (1..=64).contains(&n));
+    let base = configured.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| (n.get() * 2).clamp(4, 16))
+            .unwrap_or(8)
+    });
+    // Lokalny SQLite = jeden plik; zbyt duża pula = locki.
+    if configured.is_none() && matches!(backend, DatabaseBackend::Local(_)) {
+        base.min(6)
+    } else {
+        base
+    }
 }
 
 /// Połączenie z poola — zwraca się do puli po drop.
@@ -47,6 +74,34 @@ impl std::ops::Deref for PooledConn {
     }
 }
 
+impl PooledConn {
+    pub async fn query<P>(&self, sql: &str, params: P) -> Result<libsql::Rows, libsql::Error>
+    where
+        P: libsql::params::IntoParams + Clone + Send,
+    {
+        let sql = sql.to_string();
+        with_db_retry("query", || {
+            let sql = sql.clone();
+            let params = params.clone();
+            async move { Connection::query(self.as_ref(), &sql, params).await }
+        })
+        .await
+    }
+
+    pub async fn execute<P>(&self, sql: &str, params: P) -> Result<u64, libsql::Error>
+    where
+        P: libsql::params::IntoParams + Clone + Send,
+    {
+        let sql = sql.to_string();
+        with_db_retry("execute", || {
+            let sql = sql.clone();
+            let params = params.clone();
+            async move { Connection::execute(self.as_ref(), &sql, params).await }
+        })
+        .await
+    }
+}
+
 #[derive(Clone)]
 pub struct Db {
     pool: Pool,
@@ -54,7 +109,7 @@ pub struct Db {
 }
 
 impl Db {
-    /// Otwiera pulę, uruchamia `init_db`; przy uszkodzonej replice (malformed) jednorazowo kasuje pliki SQLite i ponawia.
+    /// Otwiera pulę, uruchamia `init_db`; przy uszkodzonym pliku SQLite jednorazowo kasuje pliki i ponawia.
     pub async fn open_with_migrations(
         backend: DatabaseBackend,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
@@ -73,9 +128,9 @@ impl Db {
                     tracing::warn!(
                         path = %path.display(),
                         error = %e,
-                        "init_db: uszkodzona replika SQLite — usuwam pliki i ponawiam start"
+                        "init_db: uszkodzony plik SQLite — usuwam pliki i ponawiam start"
                     );
-                    wipe_local_sqlite_replica(path);
+                    wipe_local_sqlite_files(path);
                     wiped_for_migrations = true;
                     continue;
                 }
@@ -103,9 +158,9 @@ impl Db {
                     tracing::warn!(
                         path = %path.display(),
                         error = %e,
-                        "build_database: uszkodzony plik SQLite — usuwam i ponawiam sync z Turso"
+                        "build_database: uszkodzony plik SQLite — usuwam i ponawiam"
                     );
-                    wipe_local_sqlite_replica(path);
+                    wipe_local_sqlite_files(path);
                     sqlite_wiped = true;
                     continue;
                 }
@@ -131,9 +186,9 @@ impl Db {
                             tracing::warn!(
                                 path = %path.display(),
                                 error = %err_hint,
-                                "SQLite integrity_check nie powiódł się — usuwam lokalną kopię i ponawiam sync z Turso"
+                                "SQLite integrity_check nie powiódł się — usuwam plik i ponawiam"
                             );
-                            wipe_local_sqlite_replica(path);
+                            wipe_local_sqlite_files(path);
                             sqlite_wiped = true;
                             continue;
                         }
@@ -151,9 +206,9 @@ impl Db {
                         tracing::warn!(
                             path = %path.display(),
                             error = %e,
-                            "connect: plik nie jest bazą SQLite — usuwam i ponawiam sync z Turso"
+                            "connect: plik nie jest bazą SQLite — usuwam i ponawiam"
                         );
-                        wipe_local_sqlite_replica(path);
+                        wipe_local_sqlite_files(path);
                         sqlite_wiped = true;
                         continue;
                     }
@@ -164,20 +219,21 @@ impl Db {
             }
         };
 
-        if backend.uses_local_sqlite_engine()
+        if matches!(backend, DatabaseBackend::Local(_))
             && let Ok(conn) = database.connect()
         {
             let _ = apply_connection_pragmas(&conn).await;
         }
 
+        let effective_pool_size = pool_size(&backend);
         let manager = Manager::from_libsql_database(database);
         let pool = Pool::builder(manager)
-            .max_size(pool_size())
+            .max_size(effective_pool_size)
             .runtime(Runtime::Tokio1)
             .build()?;
 
         tracing::info!(
-            pool_size = pool_size(),
+            pool_size = effective_pool_size,
             mode = backend.describe(),
             "database pool ready"
         );
@@ -214,15 +270,7 @@ impl Db {
         P: libsql::params::IntoParams + Clone + Send,
     {
         let conn = self.raw().await;
-        match conn.execute(sql, params.clone()).await {
-            Ok(v) => Ok(v),
-            Err(e) if is_stream_not_found_error(&e) => {
-                tracing::warn!(error = %e, "db execute: stream not found — retry");
-                let conn2 = self.raw().await;
-                conn2.execute(sql, params).await
-            }
-            Err(e) => Err(e),
-        }
+        conn.execute(sql, params).await
     }
 
     pub async fn query<P>(&self, sql: &str, params: P) -> Result<libsql::Rows, libsql::Error>
@@ -230,15 +278,7 @@ impl Db {
         P: libsql::params::IntoParams + Clone + Send,
     {
         let conn = self.raw().await;
-        match conn.query(sql, params.clone()).await {
-            Ok(v) => Ok(v),
-            Err(e) if is_stream_not_found_error(&e) => {
-                tracing::warn!(error = %e, "db query: stream not found — retry");
-                let conn2 = self.raw().await;
-                conn2.query(sql, params).await
-            }
-            Err(e) => Err(e),
-        }
+        conn.query(sql, params).await
     }
 }
 
@@ -251,7 +291,7 @@ async fn check_sqlite_integrity(conn: &Connection) -> Result<bool, libsql::Error
     Ok(status.eq_ignore_ascii_case("ok"))
 }
 
-/// Plik istnieje, ale nie zaczyna się od magicznego nagłówka SQLite (np. przerwany sync na Render).
+/// Plik istnieje, ale nie zaczyna się od magicznego nagłówka SQLite.
 fn local_sqlite_header_invalid(path: &Path) -> bool {
     use std::io::Read;
 
@@ -278,14 +318,14 @@ fn maybe_wipe_invalid_sqlite_header(path: &Path) {
     if path.exists() && local_sqlite_header_invalid(path) {
         tracing::warn!(
             path = %path.display(),
-            "Plik SQLite bez poprawnego nagłówka — usuwam przed otwarciem repliki"
+            "Plik SQLite bez poprawnego nagłówka — usuwam przed otwarciem"
         );
-        wipe_local_sqlite_replica(path);
+        wipe_local_sqlite_files(path);
     }
 }
 
-/// Usuwa plik SQLite i towarzyszące `-wal` / `-shm` (np. uszkodzona replika Turso na Render).
-pub(crate) fn wipe_local_sqlite_replica(path: &Path) {
+/// Usuwa plik SQLite i towarzyszące `-wal` / `-shm`.
+pub(crate) fn wipe_local_sqlite_files(path: &Path) {
     let base = path.to_string_lossy();
     for candidate in [
         base.to_string(),
@@ -310,34 +350,15 @@ async fn build_database(
             }
             Ok(libsql::Builder::new_local(path).build().await?)
         }
-        DatabaseBackend::Remote {
-            url,
-            auth_token,
-            replica_path,
-        } => {
-            if let Some(path) = replica_path {
-                if let Some(dir) = path.parent() {
-                    std::fs::create_dir_all(dir)?;
-                }
-                Ok(libsql::Builder::new_remote_replica(
-                    path,
-                    url.clone(),
-                    auth_token.clone(),
-                )
-                .sync_interval(Duration::from_secs(replica_sync_interval_secs()))
-                .read_your_writes(true)
+        DatabaseBackend::Remote { url, auth_token } => Ok(
+            libsql::Builder::new_remote(url.clone(), auth_token.clone())
                 .build()
-                .await?)
-            } else {
-                Ok(libsql::Builder::new_remote(url.clone(), auth_token.clone())
-                    .build()
-                    .await?)
-            }
-        }
+                .await?,
+        ),
     }
 }
 
-/// PRAGMA dla lokalnego SQLite / embedded replica — WAL + większy cache.
+/// PRAGMA dla lokalnego SQLite — WAL + większy cache.
 pub async fn apply_connection_pragmas(conn: &Connection) -> Result<(), libsql::Error> {
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;
@@ -355,30 +376,14 @@ impl DatabaseBackend {
     pub fn local_sqlite_path(&self) -> Option<&Path> {
         match self {
             DatabaseBackend::Local(path) => Some(path.as_path()),
-            DatabaseBackend::Remote {
-                replica_path: Some(path),
-                ..
-            } => Some(path.as_path()),
-            DatabaseBackend::Remote {
-                replica_path: None, ..
-            } => None,
+            DatabaseBackend::Remote { .. } => None,
         }
-    }
-
-    pub fn uses_local_sqlite_engine(&self) -> bool {
-        matches!(self, DatabaseBackend::Local(_) | DatabaseBackend::Remote { replica_path: Some(_), .. })
     }
 
     pub fn describe(&self) -> &'static str {
         match self {
             DatabaseBackend::Local(_) => "local",
-            DatabaseBackend::Remote {
-                replica_path: Some(_),
-                ..
-            } => "turso-replica",
-            DatabaseBackend::Remote {
-                replica_path: None, ..
-            } => "turso-remote",
+            DatabaseBackend::Remote { .. } => "turso",
         }
     }
 }

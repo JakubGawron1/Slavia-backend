@@ -31,19 +31,8 @@ async fn main() -> Result<(), AppError> {
         DatabaseBackend::Local(p) => {
             tracing::info!(path = %p.display(), "Baza lokalna (SQLite)");
         }
-        DatabaseBackend::Remote {
-            url,
-            replica_path: Some(path),
-            ..
-        } => {
-            tracing::info!(%url, replica = %path.display(), "Baza Turso (embedded replica)");
-        }
-        DatabaseBackend::Remote {
-            url,
-            replica_path: None,
-            ..
-        } => {
-            tracing::info!(%url, "Baza Turso (HTTP remote)");
+        DatabaseBackend::Remote { url, .. } => {
+            tracing::info!(%url, "Baza Turso (HTTP)");
         }
     }
 
@@ -132,24 +121,9 @@ fn load_database_backend(secrets: Option<&toml::Table>) -> Result<DatabaseBacken
 
     let token = pick_cfg(secrets, "TURSO_AUTH_TOKEN", "TURSO_AUTH_TOKEN").unwrap_or_default();
 
-    let use_replica = pick_cfg(secrets, "TURSO_USE_REPLICA", "TURSO_USE_REPLICA")
-        .unwrap_or_else(|| "true".to_string())
-        .to_lowercase();
-    let replica_enabled = !matches!(use_replica.as_str(), "0" | "false" | "no" | "off");
-
-    let replica_path = if replica_enabled {
-        Some(PathBuf::from(
-            pick_cfg(secrets, "TURSO_REPLICA_PATH", "TURSO_REPLICA_PATH")
-                .unwrap_or_else(|| ".local/slavia-replica.db".to_string()),
-        ))
-    } else {
-        None
-    };
-
     Ok(DatabaseBackend::Remote {
         url,
         auth_token: token,
-        replica_path,
     })
 }
 
