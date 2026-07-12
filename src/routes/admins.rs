@@ -363,7 +363,7 @@ pub async fn create_admin(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let actor = notifications::username_by_id(conn_arc.as_ref(), &auth.0.sub)
         .await
         .ok()
@@ -509,7 +509,7 @@ pub async fn update_user_account(
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
 
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let actor = notifications::username_by_id(conn_arc.as_ref(), &claims.sub)
         .await
         .ok()
@@ -579,7 +579,7 @@ pub async fn update_user_role(
         return Err(api_error(StatusCode::NOT_FOUND, "User not found"));
     }
 
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let actor = notifications::username_by_id(conn_arc.as_ref(), &claims.sub)
         .await
         .ok()
@@ -696,7 +696,7 @@ pub async fn reset_database(
             "Reset bazy jest wyłączony na zdalnej produkcyjnej bazie (Turso). Użyj lokalnego DATABASE_MODE=local.",
         ));
     }
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     db::reset_database(conn_arc.as_ref())
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -720,7 +720,7 @@ pub async fn delete_admin(
         .await?
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "User not found"))?;
 
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let deleted_username = notifications::username_by_id(conn_arc.as_ref(), &id)
         .await
         .ok()
@@ -758,7 +758,7 @@ pub async fn delete_admin(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let actor = notifications::username_by_id(conn_arc.as_ref(), &claims.sub)
         .await
         .ok()

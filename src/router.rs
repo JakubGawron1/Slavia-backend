@@ -14,8 +14,6 @@ use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
-use tracing::Level;
-
 use crate::{routes, state::AppState};
 
 async fn backend_root_page() -> Html<&'static str> {
@@ -636,24 +634,10 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
                         request_id = %request_id,
                     )
                 })
-                .on_request(|_request: &Request<_>, _span: &tracing::Span| {
-                    tracing::event!(Level::DEBUG, "request started");
-                })
-                .on_response(
-                    |response: &Response<_>, latency: Duration, _span: &tracing::Span| {
-                        let status = response.status();
-                        let latency_ms = latency.as_millis();
-                        if status.is_server_error() {
-                            tracing::error!(%status, latency_ms, "request failed");
-                        } else if status.is_client_error() {
-                            tracing::warn!(%status, latency_ms, "client error");
-                        } else if latency_ms >= 2000 {
-                            tracing::warn!(%status, latency_ms, "slow request");
-                        } else {
-                            tracing::info!(%status, latency_ms, "request completed");
-                        }
-                    },
-                ),
+                // Access log w `http_access` — tower-http domyślnie duplikuje 5xx („response failed”).
+                .on_request(|_request: &Request<_>, _span: &tracing::Span| {})
+                .on_response(|_response: &Response<_>, _latency: Duration, _span: &tracing::Span| {})
+                .on_failure(|_error: tower_http::classify::ServerErrorsFailureClass, _latency: Duration, _span: &tracing::Span| {}),
         )
         .layer(middleware::from_fn(
             crate::middleware::request_id::request_id_middleware,
@@ -667,5 +651,8 @@ pub fn build_router(state: AppState, cors: CorsLayer) -> Router {
         // Kompresja tylko odpowiedzi (gzip/br) — nie dotyka body żądań (multipart upload).
         // Domyślny predykat tower-http pomija m.in. text/event-stream (SSE /api/ai/coach/stream).
         .layer(CompressionLayer::new())
+        .layer(middleware::from_fn(
+            crate::middleware::http_access::http_access_log_middleware,
+        ))
         .with_state(state)
 }

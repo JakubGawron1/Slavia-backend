@@ -31,7 +31,7 @@ pub async fn login_handler(
 ) -> Result<Json<LoginResponse>, ApiError> {
     let username_trim = payload.username.trim().to_string();
     if let Err(()) = crate::login_throttle::record_login_attempt(&username_trim) {
-        tracing::warn!(username = %username_trim, "login throttled");
+        slavia_warn!("auth.rs", "login rate limit exceeded", "wait a few minutes before retrying", username = %username_trim);
         return Err(api_error(
             StatusCode::TOO_MANY_REQUESTS,
             "Zbyt wiele prób logowania. Spróbuj ponownie za kilka minut.",
@@ -45,17 +45,17 @@ pub async fn login_handler(
             [username_trim.clone()],
         )
         .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| crate::api_error::map_db_err(e, ""))?;
 
     let row = rows
         .next()
         .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| crate::api_error::map_db_err(e, ""))?;
 
     let row = match row {
         Some(r) => r,
         None => {
-            tracing::warn!(username = %username_trim, "login failed: unknown user");
+            slavia_warn!("auth.rs", "login failed for unknown username", "verify credentials or register account", username = %username_trim);
             return Err(api_error(
                 StatusCode::UNAUTHORIZED,
                 "Invalid username or password",
@@ -101,7 +101,7 @@ pub async fn login_handler(
         .verify_password(payload.password.as_bytes(), &parsed_hash)
         .is_err()
     {
-        tracing::warn!(username = %username_trim, "login failed: bad password");
+        slavia_warn!("auth.rs", "login failed due to wrong password", "verify password or reset via admin", username = %username_trim);
         return Err(api_error(
             StatusCode::UNAUTHORIZED,
             "Invalid username or password",
@@ -128,7 +128,7 @@ pub async fn login_handler(
             return Err(api_error(StatusCode::BAD_REQUEST, "totp_required"));
         };
         if !crate::routes::totp::totp_verify(&raw, code) {
-            tracing::warn!(username = %username_trim, user_id = %user_id, "login failed: invalid TOTP");
+            slavia_warn!("auth.rs", "login failed due to invalid TOTP", "sync device clock or reconfigure 2FA", username = %username_trim, user_id = %user_id);
             return Err(api_error(
                 StatusCode::UNAUTHORIZED,
                 "Invalid username or password",
@@ -137,7 +137,7 @@ pub async fn login_handler(
     }
 
     if is_banned != 0 && !roles.contains(&Role::SuperAdmin) {
-        tracing::warn!(username = %username_trim, user_id = %user_id, "login blocked: banned account");
+        slavia_warn!("auth.rs", "login blocked for banned account", "contact admin or use /banned flow", username = %username_trim, user_id = %user_id);
         return Err(crate::api_error::api_error_with_code(
             StatusCode::FORBIDDEN,
             "Account is banned",
@@ -171,12 +171,7 @@ pub async fn login_handler(
     )
     .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Error creating token"))?;
 
-    tracing::info!(
-        user_id = %user_id,
-        username = %username_trim,
-        roles = ?roles,
-        "login successful"
-    );
+    slavia_info!("auth.rs", "login succeeded", "no action needed", user_id = %user_id, username = %username_trim, roles = ?roles);
 
     Ok(Json(LoginResponse {
         token,
@@ -231,17 +226,17 @@ pub async fn me_handler(
             [claims.sub.clone()],
         )
         .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| crate::api_error::map_db_err(e, ""))?;
 
     let row = rows
         .next()
         .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| crate::api_error::map_db_err(e, ""))?;
     let row = row.ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "User not found"))?;
 
     let username: String = row
         .get(0)
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| crate::api_error::map_db_err(e, ""))?;
     let avatar_url: Option<String> = row.get(1).ok();
     let ui_theme_preset: Option<String> = row.get(2).ok();
     let ui_color_mode: Option<String> = row.get(3).ok();
@@ -289,7 +284,7 @@ pub async fn logout_all_devices_handler(
             [claims.sub],
         )
         .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| crate::api_error::map_db_err(e, ""))?;
 
     Ok(StatusCode::OK)
 }

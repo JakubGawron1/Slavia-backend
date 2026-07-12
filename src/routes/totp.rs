@@ -100,7 +100,7 @@ pub async fn totp_setup_handler(
         ));
     }
 
-    let conn = state.db.raw().await;
+    let conn = state.db_conn().await?;
     let mut rows = conn
         .query(
             "SELECT totp_enabled FROM users WHERE id = ?1",
@@ -174,7 +174,7 @@ pub async fn totp_enable_handler(
         ));
     }
 
-    let conn = state.db.raw().await;
+    let conn = state.db_conn().await?;
     let mut rows = conn
         .query(
             "SELECT totp_secret, totp_enabled FROM users WHERE id = ?1",
@@ -240,7 +240,7 @@ pub async fn totp_disable_handler(
         ));
     }
 
-    let conn = state.db.raw().await;
+    let conn = state.db_conn().await?;
     let mut rows = conn
         .query(
             "SELECT password_hash, totp_enabled FROM users WHERE id = ?1",

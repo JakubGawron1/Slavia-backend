@@ -248,7 +248,7 @@ pub async fn create_variable(
     )
     .await?;
 
-    let conn = state.db.raw().await;
+    let conn = state.db_conn().await?;
     let _ = write_audit_log(
         &conn,
         Some(&auth.0.sub),

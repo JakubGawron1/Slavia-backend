@@ -1,5 +1,7 @@
 //! Współdzielona logika HTTP — używana przez `main` (Axum/Tokio) i testy.
 
+include!("logging/macros.rs");
+
 use std::path::PathBuf;
 
 use axum::http::{HeaderValue, Method};
@@ -43,6 +45,10 @@ mod sql_util;
 mod athlete_dashboard_acl_integration_test;
 #[cfg(test)]
 mod import_http_integration_test;
+#[cfg(test)]
+mod integration_test_http;
+#[cfg(test)]
+mod integration_test_env;
 
 use state::AppState;
 use state::Db;
@@ -92,10 +98,12 @@ pub async fn create_app(
                         Some(format!("deleted_threads={n}")),
                     );
                     if n > 0 {
-                        tracing::info!(
+                        slavia_info!(
+                            "lib.rs",
+                            "chat pruner removed inactive threads on startup",
+                            "no action needed unless count is unexpectedly high",
                             deleted_threads = n,
-                            inactivity_days = chat_cleanup::CHAT_INACTIVITY_DAYS,
-                            "chat-pruner startup: usunięto nieaktywne wątki"
+                            inactivity_days = chat_cleanup::CHAT_INACTIVITY_DAYS
                         );
                     }
                 }
@@ -106,7 +114,7 @@ pub async fn create_app(
                         false,
                         Some(e.to_string()),
                     );
-                    tracing::error!(error = %e, "chat-pruner startup: błąd");
+                    slavia_error!("lib.rs", "chat pruner failed on startup", "check database connectivity and chat_threads schema", error = %e);
                 }
             }
         });
@@ -132,9 +140,11 @@ pub async fn create_app(
                         Some(format!("created_auto_payments={n}")),
                     );
                     if n > 0 {
-                        tracing::info!(
-                            created = n,
-                            "standing-order startup: utworzono auto-składki za bieżący miesiąc"
+                        slavia_info!(
+                            "lib.rs",
+                            "standing-order worker created auto payments on startup",
+                            "verify payment rows in admin panel if count looks wrong",
+                            created = n
                         );
                     }
                 }
@@ -145,7 +155,7 @@ pub async fn create_app(
                         false,
                         Some(e.to_string()),
                     );
-                    tracing::error!(error = %e, "standing-order startup: błąd");
+                    slavia_error!("lib.rs", "standing-order worker failed on startup", "check payments schema and DB pool", error = %e);
                 }
             }
         });
@@ -155,7 +165,7 @@ pub async fn create_app(
 
     let prometheus_metrics_enabled = http_metrics::prometheus_metrics_enabled();
     if prometheus_metrics_enabled {
-        tracing::info!("Prometheus: GET /metrics włączony (PROMETHEUS_METRICS)");
+        slavia_info!("lib.rs", "Prometheus metrics endpoint enabled", "scrape GET /metrics or disable PROMETHEUS_METRICS");
     }
 
     let state = AppState {

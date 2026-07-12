@@ -155,7 +155,7 @@ pub async fn create_gallery_photo(
         )
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         Some(&claims.sub),
@@ -248,7 +248,7 @@ pub async fn update_gallery_photo(
         .await;
         crate::cms_github::destroy_if_cms(&existing.image_url).await;
     }
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         None,
@@ -318,7 +318,7 @@ pub async fn delete_gallery_photo(
     )
     .await;
     crate::cms_github::destroy_if_cms(&existing.image_url).await;
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         None,

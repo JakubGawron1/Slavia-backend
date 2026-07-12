@@ -181,7 +181,7 @@ pub async fn sync_mobile_releases(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = crate::audit::write_audit_log(
         conn_arc.as_ref(),
         Some(&claims.sub),

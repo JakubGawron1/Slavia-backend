@@ -53,7 +53,7 @@ fn plain_summary(raw: &str, max_chars: usize) -> String {
 pub async fn list_club_feed(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ClubFeedItem>>, ApiError> {
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let conn = conn_arc.as_ref();
     let mut items: Vec<ClubFeedItem> = Vec::new();
 

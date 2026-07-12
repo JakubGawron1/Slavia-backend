@@ -98,7 +98,7 @@ pub async fn prune_inactive_chat_threads(
             })
             .to_string();
             // Audit zapisujemy „best-effort"; brak audytu nie powinien blokować czyszczenia.
-            let audit_conn = conn.raw().await;
+            let audit_conn = conn.raw().await.map_err(crate::state::pool_as_libsql_err)?;
             let _ = write_audit_log(
                 audit_conn.as_ref(),
                 None,
@@ -137,10 +137,12 @@ pub fn spawn_chat_pruner_task(db: Db, metrics: Arc<WorkerMetrics>) -> JoinHandle
                         Some(format!("deleted_threads={n}")),
                     );
                     if n > 0 {
-                        tracing::info!(
+                        slavia_info!(
+                            "chat_cleanup.rs",
+                            "chat pruner removed inactive threads",
+                            "no action needed unless deletion count spikes",
                             deleted_threads = n,
-                            inactivity_days = CHAT_INACTIVITY_DAYS,
-                            "chat-pruner scheduler: usunięto nieaktywne wątki"
+                            inactivity_days = CHAT_INACTIVITY_DAYS
                         );
                     }
                 }
@@ -151,7 +153,7 @@ pub fn spawn_chat_pruner_task(db: Db, metrics: Arc<WorkerMetrics>) -> JoinHandle
                         false,
                         Some(e.to_string()),
                     );
-                    tracing::error!(error = %e, "chat-pruner scheduler: błąd przebiegu");
+                    slavia_error!("chat_cleanup.rs", "chat pruner scheduler run failed", "check DB pool and chat_threads table", error = %e);
                 }
             }
             tokio::time::sleep(interval).await;

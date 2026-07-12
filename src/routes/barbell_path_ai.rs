@@ -497,17 +497,39 @@ pub async fn refine_barbell_path(
         }
         _ => {
             let key = groq_key(&state)?;
-            let model = if state.groq_model.trim().is_empty() {
-                "llama-3.3-70b-versatile".to_string()
-            } else {
-                state.groq_model.trim().to_string()
-            };
             let user = format!(
                 "Typ ruchu: {lift}.\nSurowe punkty toru (JSON):\n{raw_json}"
             );
-            let (text, used) = call_groq_text_json(key, &model, NUMERIC_SYSTEM, user)
-                .await
-                .map_err(|(c, m)| api_error(c, m))?;
+            let candidates = crate::routes::ai_coach::groq_model_candidates(&state.groq_model);
+            let mut last_err = String::new();
+            let mut text = String::new();
+            let mut used = String::new();
+            for candidate in candidates {
+                match call_groq_text_json(key, &candidate, NUMERIC_SYSTEM, user.clone()).await {
+                    Ok((t, m)) => {
+                        text = t;
+                        used = m;
+                        break;
+                    }
+                    Err((_c, msg)) => {
+                        last_err = msg.clone();
+                        if crate::routes::ai_coach::groq_error_is_decommissioned(&msg) {
+                            continue;
+                        }
+                        return Err(api_error(StatusCode::BAD_GATEWAY, msg));
+                    }
+                }
+            }
+            if text.is_empty() {
+                return Err(api_error(
+                    StatusCode::BAD_GATEWAY,
+                    if last_err.is_empty() {
+                        "Groq: brak dostępnego modelu tekstowego".to_string()
+                    } else {
+                        last_err
+                    },
+                ));
+            }
             (text, used, "groq_numeric")
         }
     };

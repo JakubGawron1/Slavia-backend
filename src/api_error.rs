@@ -35,6 +35,15 @@ pub fn map_db_err(e: impl std::fmt::Display, conflict_msg: &str) -> ApiError {
     }
 }
 
+/// Pula połączeń niedostępna (przeciążenie / timeout checkout).
+pub fn map_pool_err(e: impl std::fmt::Display) -> ApiError {
+    slavia_warn_here!("database pool unavailable", "retry request or increase DATABASE_POOL_SIZE", error = %e);
+    api_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Baza danych chwilowo niedostępna — spróbuj ponownie.",
+    )
+}
+
 /// Błąd z kodem maszynowym (`code`) dla frontendu + opcjonalny `detail` (np. walidacja).
 pub fn api_error_with_code(
     status: StatusCode,
@@ -96,6 +105,9 @@ fn polish_api_message(status: StatusCode, msg: &str) -> String {
         }
         (StatusCode::UNAUTHORIZED, "Invalid Token") => {
             "Sesja wygasła lub token jest nieprawidłowy — zaloguj się ponownie.".to_string()
+        }
+        (StatusCode::UNAUTHORIZED, "Token revoked (logged out from all devices)") => {
+            "Sesja unieważniona (wylogowano ze wszystkich urządzeń) — zaloguj się ponownie.".to_string()
         }
         (StatusCode::FORBIDDEN, "Requires Admin or SuperAdmin role") => {
             "Wymagana rola Administrator lub SuperAdmin.".to_string()

@@ -142,11 +142,11 @@ impl FromRequestParts<AppState> for Claims {
                 [token_data.claims.sub.clone()],
             )
             .await
-            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| crate::api_error::map_db_err(e, ""))?;
         let row = rows
             .next()
             .await
-            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| crate::api_error::map_db_err(e, ""))?;
         let Some(r) = row else {
             return Err(api_error(
                 StatusCode::UNAUTHORIZED,

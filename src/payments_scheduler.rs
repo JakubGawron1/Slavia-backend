@@ -105,11 +105,13 @@ pub async fn run_standing_orders_for_current_month(conn: &Db) -> Result<usize, l
     let mut created = 0usize;
     for ath in &pending {
         if let Err(e) = insert_auto_approved_payment(conn, &ath.id, &month).await {
-            tracing::error!(
+            slavia_error!(
+                "payments_scheduler.rs",
+                "failed to insert standing-order payment",
+                "inspect athlete payment row and UNIQUE constraints",
                 athlete_id = %ath.id,
                 athlete_name = %ath.full_name,
-                error = %e,
-                "standing-order: błąd insertu auto-składki"
+                error = %e
             );
             continue;
         }
@@ -122,7 +124,7 @@ pub async fn run_standing_orders_for_current_month(conn: &Db) -> Result<usize, l
             "reason": "standing_order_auto",
         })
         .to_string();
-        let audit_conn = conn.raw().await;
+        let audit_conn = conn.raw().await.map_err(crate::state::pool_as_libsql_err)?;
         let _ = write_audit_log(
             audit_conn.as_ref(),
             None,
@@ -159,9 +161,11 @@ pub fn spawn_standing_order_task(db: Db, metrics: Arc<WorkerMetrics>) -> JoinHan
                         Some(format!("created_auto_payments={n}")),
                     );
                     if n > 0 {
-                        tracing::info!(
-                            created = n,
-                            "standing-order scheduler: utworzono auto-składki"
+                        slavia_info!(
+                            "payments_scheduler.rs",
+                            "standing-order scheduler created auto payments",
+                            "verify amounts in admin składki panel",
+                            created = n
                         );
                     }
                 }
@@ -172,7 +176,7 @@ pub fn spawn_standing_order_task(db: Db, metrics: Arc<WorkerMetrics>) -> JoinHan
                         false,
                         Some(e.to_string()),
                     );
-                    tracing::error!(error = %e, "standing-order scheduler: błąd przebiegu");
+                    slavia_error!("payments_scheduler.rs", "standing-order scheduler run failed", "check DB connectivity and payments tables", error = %e);
                 }
             }
             tokio::time::sleep(interval).await;

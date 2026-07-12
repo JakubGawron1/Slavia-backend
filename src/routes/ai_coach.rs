@@ -60,7 +60,7 @@ Zasady odpowiedzi:
 - Gdy w kontekście są wpisy dziennika treningów, wyniki z zawodów, obecności lub aktywny plan klubowy — odwołuj się do nich w odpowiedzi (objętość, ostatnie starty, trendy).
 - Gdy użytkownik załączy zdjęcie, klatki wideo lub plik tekstowy — przeanalizuj je w kontekście dwuboju (technika, plan, regeneracja) i odnieś się konkretnie do tego, co widzisz lub czytasz."#;
 
-const DEFAULT_GROQ_MODEL: &str = "llama-3.1-70b-versatile";
+const DEFAULT_GROQ_MODEL: &str = "llama-3.3-70b-versatile";
 
 const MAX_USER_MESSAGE_LEN: usize = 3_500;
 const MAX_HISTORY_TURNS: usize = 8;
@@ -1191,25 +1191,31 @@ async fn invoke_llm_with_attachments(
     .map_err(|(code, msg)| api_error(code, msg))
 }
 
-fn configured_groq_model(state: &AppState) -> String {
-    if state.groq_model.trim().is_empty() {
-        DEFAULT_GROQ_MODEL.to_string()
-    } else {
-        state.groq_model.trim().to_string()
+/// Mapuje wycofane ID modeli Groq na aktualne (llama-3.1-70b → 3.3-70b).
+pub fn normalize_groq_text_model(configured: &str) -> String {
+    let t = configured.trim();
+    if t.is_empty() {
+        return DEFAULT_GROQ_MODEL.to_string();
     }
+    match t {
+        "llama-3.1-70b-versatile" | "llama-3.1-70b-specdec" => {
+            DEFAULT_GROQ_MODEL.to_string()
+        }
+        _ => t.to_string(),
+    }
+}
+
+fn configured_groq_model(state: &AppState) -> String {
+    normalize_groq_text_model(&state.groq_model)
 }
 
 fn groq_key_format_ok(key: &str) -> bool {
     key.trim().starts_with("gsk_")
 }
 
-fn groq_model_candidates(configured: &str) -> Vec<String> {
-    let primary = if configured.trim().is_empty() {
-        DEFAULT_GROQ_MODEL.to_string()
-    } else {
-        configured.trim().to_string()
-    };
-    let fallbacks = [DEFAULT_GROQ_MODEL, "llama-3.3-70b-versatile"];
+pub(crate) fn groq_model_candidates(configured: &str) -> Vec<String> {
+    let primary = normalize_groq_text_model(configured);
+    let fallbacks = [DEFAULT_GROQ_MODEL, "llama-3.1-8b-instant"];
     let mut out = vec![primary];
     for f in fallbacks {
         if !out.iter().any(|m| m == f) {
@@ -1217,6 +1223,11 @@ fn groq_model_candidates(configured: &str) -> Vec<String> {
         }
     }
     out
+}
+
+pub(crate) fn groq_error_is_decommissioned(raw: &str) -> bool {
+    let lower = raw.to_ascii_lowercase();
+    lower.contains("decommissioned") || lower.contains("no longer supported")
 }
 
 fn groq_error_user_message(raw: &str) -> (StatusCode, String) {
@@ -1728,7 +1739,7 @@ pub async fn coach_import_plan(
         "source": "ai_coach_import"
     })
     .to_string();
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         Some(&claims.sub),

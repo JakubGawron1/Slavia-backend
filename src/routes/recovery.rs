@@ -150,7 +150,7 @@ pub async fn upsert_my_recovery_log(
             "readiness_level": readiness
         })
         .to_string();
-        let conn_arc = state.db.raw().await;
+        let conn_arc = state.db_conn().await?;
         let _ = write_audit_log(
             conn_arc.as_ref(),
             Some(&claims.sub),
@@ -196,7 +196,7 @@ pub async fn upsert_my_recovery_log(
         .await
         .map_err(|e| map_db_err(e, "Masz już wpis regeneracji na ten dzień."))?;
 
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let athlete_label =
         crate::notifications::athlete_display_for_notification(conn_arc.as_ref(), &athlete_id)
             .await

@@ -29,7 +29,7 @@ where
         match op().await {
             Ok(v) => return Ok(v),
             Err(e) if is_transient_db_error(&e) && attempt < DB_TRANSIENT_MAX_ATTEMPTS => {
-                tracing::warn!(error = %e, attempt, op = label, "transient db error — retry");
+                slavia_warn!("state.rs", "transient database error", "automatic retry with backoff", error = %e, attempt, op = label);
                 last_err = Some(e);
                 tokio::time::sleep(Duration::from_millis(30 * attempt as u64)).await;
             }
@@ -116,7 +116,9 @@ impl Db {
         let mut wiped_for_migrations = false;
         loop {
             let db = Self::new(backend.clone()).await?;
-            let init_conn = db.raw().await;
+            let init_conn = db.raw().await.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                e.into()
+            })?;
             let _ = apply_connection_pragmas(&init_conn).await;
             match crate::db::init_db(init_conn.as_ref()).await {
                 Ok(()) => return Ok(db),
@@ -125,10 +127,12 @@ impl Db {
                         && !wiped_for_migrations
                         && let Some(path) = backend.local_sqlite_path() =>
                 {
-                    tracing::warn!(
+                    slavia_warn!(
+                        "state.rs",
+                        "SQLite file is corrupt during init_db",
+                        "local files were wiped and startup will retry",
                         path = %path.display(),
-                        error = %e,
-                        "init_db: uszkodzony plik SQLite — usuwam pliki i ponawiam start"
+                        error = %e
                     );
                     wipe_local_sqlite_files(path);
                     wiped_for_migrations = true;
@@ -155,10 +159,12 @@ impl Db {
                         && !sqlite_wiped
                         && let Some(path) = backend.local_sqlite_path() =>
                 {
-                    tracing::warn!(
+                    slavia_warn!(
+                        "state.rs",
+                        "SQLite file is corrupt during build_database",
+                        "local files were wiped and connection will retry",
                         path = %path.display(),
-                        error = %e,
-                        "build_database: uszkodzony plik SQLite — usuwam i ponawiam"
+                        error = %e
                     );
                     wipe_local_sqlite_files(path);
                     sqlite_wiped = true;
@@ -183,30 +189,36 @@ impl Db {
                             Ok(true) => String::new(),
                         };
                         if !sqlite_wiped {
-                            tracing::warn!(
+                            slavia_warn!(
+                                "state.rs",
+                                "SQLite integrity_check failed",
+                                "local database files were wiped and startup will retry",
                                 path = %path.display(),
-                                error = %err_hint,
-                                "SQLite integrity_check nie powiódł się — usuwam plik i ponawiam"
+                                error = %err_hint
                             );
                             wipe_local_sqlite_files(path);
                             sqlite_wiped = true;
                             continue;
                         }
 
-                        tracing::error!(
+                        slavia_error!(
+                            "state.rs",
+                            "SQLite still corrupt after wipe",
+                            "delete .local/slavia.db manually or set REBUILD_DB=true locally",
                             path = %path.display(),
-                            error = %err_hint,
-                            "SQLite nadal uszkodzony po wipe — kontynuuję start (migracje best-effort)"
+                            error = %err_hint
                         );
                         break database;
                     }
                     Err(e)
                         if crate::db::sqlite_corrupt_message(&e.to_string()) && !sqlite_wiped =>
                     {
-                        tracing::warn!(
+                        slavia_warn!(
+                            "state.rs",
+                            "file is not a valid SQLite database",
+                            "invalid local files were wiped and connection will retry",
                             path = %path.display(),
-                            error = %e,
-                            "connect: plik nie jest bazą SQLite — usuwam i ponawiam"
+                            error = %e
                         );
                         wipe_local_sqlite_files(path);
                         sqlite_wiped = true;
@@ -232,10 +244,12 @@ impl Db {
             .runtime(Runtime::Tokio1)
             .build()?;
 
-        tracing::info!(
+        slavia_info!(
+            "state.rs",
+            "database connection pool initialized",
+            "tune DATABASE_POOL_SIZE if you see pool busy warnings",
             pool_size = effective_pool_size,
-            mode = backend.describe(),
-            "database pool ready"
+            mode = backend.describe()
         );
 
         Ok(Self { pool, backend })
@@ -246,30 +260,38 @@ impl Db {
     }
 
     /// Pożyczka połączenia z puli (zwraca się automatycznie po drop).
-    pub async fn raw(&self) -> PooledConn {
+    pub async fn raw(&self) -> Result<PooledConn, deadpool_libsql::PoolError> {
         const MAX_ATTEMPTS: u32 = 5;
         let mut last_err: Option<deadpool_libsql::PoolError> = None;
         for attempt in 1..=MAX_ATTEMPTS {
             match self.pool.get().await {
-                Ok(c) => return PooledConn(c),
+                Ok(c) => return Ok(PooledConn(c)),
                 Err(e) => {
-                    tracing::warn!(error = %e, attempt, "database pool busy — retry");
+                    slavia_warn!("state.rs", "database pool checkout timed out", "increase DATABASE_POOL_SIZE or reduce concurrent load", error = %e, attempt);
                     last_err = Some(e);
                     tokio::time::sleep(Duration::from_millis(25 * attempt as u64)).await;
                 }
             }
         }
-        panic!(
-            "database pool unavailable after {MAX_ATTEMPTS} attempts: {:?}",
-            last_err
-        );
+        Err(last_err.expect("pool retry loop exhausted without error"))
+    }
+
+    /// Best-effort połączenie (np. powiadomienia w tle) — bez panic.
+    pub async fn raw_or_none(&self) -> Option<PooledConn> {
+        match self.raw().await {
+            Ok(c) => Some(c),
+            Err(e) => {
+                slavia_warn!("state.rs", "database pool unavailable", "retry later or check Turso/HF Space health", error = %e);
+                None
+            }
+        }
     }
 
     pub async fn execute<P>(&self, sql: &str, params: P) -> Result<u64, libsql::Error>
     where
         P: libsql::params::IntoParams + Clone + Send,
     {
-        let conn = self.raw().await;
+        let conn = self.raw().await.map_err(pool_as_libsql_err)?;
         conn.execute(sql, params).await
     }
 
@@ -277,9 +299,13 @@ impl Db {
     where
         P: libsql::params::IntoParams + Clone + Send,
     {
-        let conn = self.raw().await;
+        let conn = self.raw().await.map_err(pool_as_libsql_err)?;
         conn.query(sql, params).await
     }
+}
+
+pub(crate) fn pool_as_libsql_err(e: deadpool_libsql::PoolError) -> libsql::Error {
+    libsql::Error::SqliteFailure(0, format!("pool unavailable: {e}"))
 }
 
 async fn check_sqlite_integrity(conn: &Connection) -> Result<bool, libsql::Error> {
@@ -316,9 +342,11 @@ fn local_sqlite_header_invalid(path: &Path) -> bool {
 
 fn maybe_wipe_invalid_sqlite_header(path: &Path) {
     if path.exists() && local_sqlite_header_invalid(path) {
-        tracing::warn!(
-            path = %path.display(),
-            "Plik SQLite bez poprawnego nagłówka — usuwam przed otwarciem"
+        slavia_warn!(
+            "state.rs",
+            "SQLite file has invalid header",
+            "file was removed before open; fresh DB will be created",
+            path = %path.display()
         );
         wipe_local_sqlite_files(path);
     }
@@ -335,7 +363,7 @@ pub(crate) fn wipe_local_sqlite_files(path: &Path) {
         if let Err(e) = std::fs::remove_file(&candidate)
             && e.kind() != std::io::ErrorKind::NotFound
         {
-            tracing::warn!(file = %candidate, error = %e, "nie udało się usunąć pliku SQLite");
+            slavia_warn!("state.rs", "failed to delete SQLite sidecar file", "stop other backend processes and remove file manually", file = %candidate, error = %e);
         }
     }
 }
@@ -400,4 +428,10 @@ pub struct AppState {
     pub worker_metrics: std::sync::Arc<crate::worker_metrics::WorkerMetrics>,
     pub http_metrics: std::sync::Arc<crate::http_metrics::HttpMetrics>,
     pub prometheus_metrics_enabled: bool,
+}
+
+impl AppState {
+    pub async fn db_conn(&self) -> Result<PooledConn, crate::api_error::ApiError> {
+        self.db.raw().await.map_err(crate::api_error::map_pool_err)
+    }
 }

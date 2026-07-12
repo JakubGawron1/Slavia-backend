@@ -149,7 +149,7 @@ pub async fn create_post(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if published {
-        let conn_arc = state.db.raw().await;
+        let conn_arc = state.db_conn().await?;
         let author = notifications::username_by_id(conn_arc.as_ref(), &claims.sub)
             .await
             .ok()
@@ -228,7 +228,7 @@ pub async fn update_post(
         }
 
     let title_old = existing.title.clone();
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let editor = notifications::username_by_id(conn_arc.as_ref(), &claims.sub)
         .await
         .ok()

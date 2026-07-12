@@ -237,7 +237,7 @@ pub async fn create_training_log(
 
     let username = fetch_username(&state, &claims.sub).await?;
 
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let athlete_display = crate::notifications::athlete_full_name(conn_arc.as_ref(), &athlete_id)
         .await
         .ok()

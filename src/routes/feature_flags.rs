@@ -173,7 +173,7 @@ pub async fn upsert_feature_flag(
         "user_id": target_user
     })
     .to_string();
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         Some(&claims.sub),
@@ -251,7 +251,7 @@ pub async fn delete_feature_flag(
         "user_id": effective_user
     })
     .to_string();
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         Some(&claims.sub),

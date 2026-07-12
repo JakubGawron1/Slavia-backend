@@ -89,7 +89,7 @@ async fn try_attach_athlete_login_or_request(
         let uid = insert_athlete_user_account(state, proposed, password).await?;
         Ok(Some(uid))
     } else {
-        let conn_arc = state.db.raw().await;
+        let conn_arc = state.db_conn().await?;
         let trainer_name = notifications::username_by_id(conn_arc.as_ref(), &claims.sub)
             .await
             .ok()
@@ -1011,7 +1011,7 @@ pub async fn attach_existing_user_to_athlete(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let login = notifications::username_by_id(conn_arc.as_ref(), &user_id)
         .await
         .ok()

@@ -633,7 +633,7 @@ pub async fn send_message(
     } else {
         athlete_uid
     };
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let sender_login = notifications::username_by_id(conn_arc.as_ref(), &claims.sub)
         .await
         .ok()
@@ -789,7 +789,7 @@ pub async fn delete_thread(
         return Err(api_error(StatusCode::FORBIDDEN, "Brak dostępu do wątku"));
     }
 
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         Some(&claims.sub),
@@ -849,7 +849,7 @@ pub async fn admin_prune_threads(
         "reason": "manual_admin_prune",
     })
     .to_string();
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         Some(&auth.0.sub),

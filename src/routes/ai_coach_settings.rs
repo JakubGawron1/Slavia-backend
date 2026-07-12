@@ -377,7 +377,7 @@ pub async fn coach_update_settings(
 
     save_ai_coach_settings(&state, &settings).await?;
 
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let details = serde_json::json!({
         "has_customizations": has_customizations(&settings),
         "reset": is_reset,

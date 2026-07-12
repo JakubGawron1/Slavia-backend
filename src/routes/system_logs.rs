@@ -100,10 +100,7 @@ pub async fn ping_backend() -> Json<PingDto> {
     let instance = std::env::var("BACKEND_INSTANCE_LABEL")
         .ok()
         .filter(|s| !s.trim().is_empty());
-    tracing::debug!(
-        instance = instance.as_deref(),
-        "GET /api/system/ping"
-    );
+    slavia_debug!("system_logs.rs", "health ping requested", "no action needed", instance = ?instance);
     Json(PingDto { ok: true, instance })
 }
 
@@ -451,7 +448,7 @@ pub async fn db_backup_handler(
             "delivery": "authenticated"
         })
         .to_string();
-        let conn_arc = state.db.raw().await;
+        let conn_arc = state.db_conn().await?;
         let _ = write_audit_log(
             conn_arc.as_ref(),
             Some(&auth.0.sub),

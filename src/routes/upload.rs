@@ -129,7 +129,7 @@ async fn upload_to_cms(
 
     record_cms_upload(state, &path).await;
 
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         Some(&claims.sub),
@@ -436,7 +436,7 @@ pub async fn upload_handler(
     }
 
     if let Some(secure_url) = json.get("secure_url").and_then(|v| v.as_str()) {
-        let conn_arc = state.db.raw().await;
+        let conn_arc = state.db_conn().await?;
         let _ = write_audit_log(
             conn_arc.as_ref(),
             Some(&claims.sub),

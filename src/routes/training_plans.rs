@@ -318,7 +318,7 @@ pub async fn create_training_plan(
         "status": status
     })
     .to_string();
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         Some(&claims.sub),
@@ -408,7 +408,7 @@ pub async fn update_training_plan(
         "status": payload.status
     })
     .to_string();
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         Some(&claims.sub),
@@ -487,7 +487,7 @@ pub async fn update_my_plan_progress(
         "athlete_note": payload.athlete_note
     })
     .to_string();
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         Some(&claims.sub),
@@ -521,7 +521,7 @@ pub async fn delete_training_plan(
     if n == 0 {
         return Err(api_error(StatusCode::NOT_FOUND, "Plan not found"));
     }
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         Some(&claims.sub),
@@ -685,7 +685,7 @@ pub async fn update_plan_items(
         "items_count": items_count
     })
     .to_string();
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         Some(&claims.sub),

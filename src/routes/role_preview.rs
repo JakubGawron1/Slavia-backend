@@ -160,7 +160,7 @@ pub async fn role_preview_session(
         "role_preview_end"
     };
 
-    let conn = state.db.raw().await;
+    let conn = state.db_conn().await?;
     write_audit_log(
         conn.as_ref(),
         Some(&claims.sub),
@@ -344,7 +344,7 @@ pub async fn role_preview_notifications(
     let _ = username_by_id(&state, &user_id)
         .await
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "User not found"))?;
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let list = repos::notifications::list_for_user(conn_arc.as_ref(), &user_id)
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

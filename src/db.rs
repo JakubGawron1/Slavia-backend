@@ -78,8 +78,11 @@ async fn migrate_cms_schema(conn: &Connection) -> Result<(), String> {
         return Ok(());
     }
 
-    tracing::warn!(
-        "Migracja CMS: stary schemat (dev-cms) — usuwam cms_fields/cms_sections/cms_navigation (jeśli wisi: zamknij inne instancje trzymające slavia.db)"
+    slavia_warn!(
+        "db.rs",
+        "legacy CMS schema detected",
+        "close other backend instances holding slavia.db lock",
+        slavia_extra = "dropping cms_fields/cms_sections/cms_navigation"
     );
     let _ = conn.execute("PRAGMA busy_timeout = 3000", ()).await;
     exec0_retry_with_limit(conn, "PRAGMA foreign_keys = OFF", "cms foreign_keys off", 12).await?;
@@ -190,7 +193,7 @@ async fn create_cms_tables(conn: &Connection) -> Result<(), String> {
             .unwrap_or(0);
         drop(exists);
         if n > 0 {
-            tracing::warn!("Migracja CMS: cms_pages bez page_name — odtwarzam tabelę");
+            slavia_warn!("db.rs", "cms_pages table missing page_name column", "table will be recreated automatically");
             exec0_retry(conn, "DROP TABLE IF EXISTS cms_pages", "cms_pages drop stale").await?;
             exec0_retry(
                 conn,
@@ -258,9 +261,11 @@ async fn migrate_attendance_unique_index(conn: &Connection) -> Result<(), String
         .await
         .map_err(|e| format!("attendance dedupe: {e}"))?;
     if deduped > 0 {
-        tracing::info!(
-            deduped,
-            "Migracja: usunięto zduplikowane wpisy attendance_records (przed UNIQUE INDEX)"
+        slavia_info!(
+            "db.rs",
+            "removed duplicate attendance_records before UNIQUE index",
+            "no action needed",
+            deduped
         );
     }
 
@@ -378,7 +383,7 @@ async fn insert_default_exercises(
 async fn seed_default_exercises(conn: &Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let n = insert_default_exercises(conn).await?;
     if n > 0 {
-        tracing::info!(inserted = n, "Uzupełniono domyślny słownik ćwiczeń");
+        slavia_info!("db.rs", "default exercise dictionary seeded", "no action needed", inserted = n);
     }
     Ok(())
 }
@@ -471,7 +476,7 @@ async fn migrate_sanitize_exercises_utf8(conn: &Connection) -> Result<u64, Strin
     }
 
     if updated > 0 {
-        tracing::info!(updated, "Migracja: sanityzacja UTF-8 w tabeli exercises");
+        slavia_info!("db.rs", "exercises UTF-8 sanitized", "no action needed", updated);
     }
     Ok(updated)
 }
@@ -497,24 +502,30 @@ async fn try_migrate_sanitize_exercises_utf8(conn: &Connection) {
     match migrate_sanitize_exercises_utf8(conn).await {
         Ok(_) => {
             if let Err(e) = set_migration_flag(conn, MIGRATION_SANITIZE_EXERCISES_UTF8_KEY).await {
-                tracing::warn!(error = %e, "nie udało się zapisać flagi migrate_sanitize_exercises_utf8");
+                slavia_warn!("db.rs", "failed to persist migration flag", "migration may rerun on next startup", error = %e);
             }
         }
         Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "migrate_sanitize_exercises_utf8 pominięto (best-effort) — słownik dict-* naprawia migrate_refresh_corrupt_exercise_dictionary_seed lub reseed"
+            slavia_warn!(
+                "db.rs",
+                "exercises UTF-8 migration skipped",
+                "run migrate_refresh_corrupt_exercise_dictionary_seed or REBUILD_DB locally",
+                error = %e
             );
             if sqlite_corrupt_message(&e) {
                 match try_reseed_exercise_dictionary(conn).await {
-                    Ok(n) if n > 0 => tracing::info!(
-                        affected = n,
-                        "Odtworzono słownik dict-* po wykryciu uszkodzonej repliki exercises"
+                    Ok(n) if n > 0 => slavia_info!(
+                        "db.rs",
+                        "exercise dictionary reseeded after corrupt replica",
+                        "verify exercises list in admin panel",
+                        affected = n
                     ),
                     Ok(_) => {}
-                    Err(re) => tracing::warn!(
-                        error = %re,
-                        "reseed dict-* po malformed nie powiódł się"
+                    Err(re) => slavia_warn!(
+                        "db.rs",
+                        "exercise dictionary reseed failed",
+                        "set REBUILD_DB=true locally or fix exercises table manually",
+                        error = %re
                     ),
                 }
             }
@@ -544,9 +555,11 @@ async fn migrate_refresh_corrupt_exercise_dictionary_seed(
         updated += n;
     }
     if updated > 0 {
-        tracing::info!(
-            updated,
-            "Migracja: naprawiono polskie znaki w słowniku ćwiczeń (seed dict-*)"
+        slavia_info!(
+            "db.rs",
+            "exercise dictionary polish characters restored from seed",
+            "no action needed",
+            updated
         );
     }
     Ok(updated)
@@ -667,7 +680,12 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
     let rebuild = std::env::var("REBUILD_DB").unwrap_or_default() == "true";
 
     if rebuild {
-        tracing::warn!("REBUILD_DB=true: czyszczenie bazy danych");
+        if crate::production_guards::destructive_db_ops_blocked() {
+            return Err(
+                "REBUILD_DB=true is blocked when Turso/production database is configured".into(),
+            );
+        }
+        slavia_warn!("db.rs", "REBUILD_DB requested", "never set REBUILD_DB=true on Turso/production");
         reset_database(conn).await?;
         return Ok(());
     }
@@ -1302,9 +1320,11 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         let n = sync_all_athletes_bests_from_results(conn)
             .await
             .map_err(|e| format!("sync_all_athletes_bests_from_results: {e}"))?;
-        tracing::info!(
-            sqlite_changes = n,
-            "REBUILD_DB: zsynchronizowano athletes.best_* / total_kg z results"
+        slavia_info!(
+            "db.rs",
+            "athlete bests synced from results after REBUILD_DB",
+            "no action needed",
+            sqlite_changes = n
         );
     }
 
@@ -1371,11 +1391,11 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             migrated += 1;
         }
     }
-    tracing::info!(migrated, "Migracja: users.role → users.roles (JSON array)");
+    slavia_info!("db.rs", "migrated users.role column to roles JSON", "no action needed", migrated);
 
     // Usunięcie legacy kolumny `users.role` (SQLite nie wspiera DROP COLUMN -> rekonstrukcja tabeli)
     if role_column_exists > 0 {
-        tracing::info!("Migracja: usuwanie legacy kolumny users.role (rekonstrukcja tabeli users)");
+        slavia_info!("db.rs", "rebuilding users table without legacy role column", "wait for migration to finish");
         // Wyłącz FK na czas rekonstrukcji.
         let _ = conn.execute("PRAGMA foreign_keys = OFF", ()).await;
         // BEGIN IMMEDIATE — weź write-lock od razu (mniej szans na DROP/ALTER lock).
@@ -1448,15 +1468,17 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
 
         exec0_retry(conn, "COMMIT", "COMMIT drop users.role migration").await?;
         let _ = conn.execute("PRAGMA foreign_keys = ON", ()).await;
-        tracing::info!("Migracja: users.role usunięta");
+        slavia_info!("db.rs", "legacy users.role column removed", "no action needed");
     }
 
     let trainer_admin_fix = migrate_remove_trainer_admin_role(conn)
         .await
         .map_err(|e| format!("migrate_remove_trainer_admin_role: {e}"))?;
-    tracing::info!(
-        updated = trainer_admin_fix,
-        "Migracja: TrainerAdmin → Admin + Trainer w JSON roles"
+    slavia_info!(
+        "db.rs",
+        "TrainerAdmin role migrated to Admin+Trainer",
+        "no action needed",
+        updated = trainer_admin_fix
     );
 
     let _ = conn
@@ -1492,7 +1514,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         drop(pragma);
 
         if email_column_exists > 0 {
-            tracing::info!("Migracja: usuwanie users.email (rekonstrukcja tabeli users)");
+            slavia_info!("db.rs", "rebuilding users table without email column", "wait for migration to finish");
             let _ = conn.execute("PRAGMA foreign_keys = OFF", ()).await;
             exec0_retry(
                 conn,
@@ -1543,7 +1565,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
             .await?;
             exec0_retry(conn, "COMMIT", "COMMIT drop users.email migration").await?;
             let _ = conn.execute("PRAGMA foreign_keys = ON", ()).await;
-            tracing::info!("Migracja: users.email usunięta (pozostałe dane zachowane)");
+            slavia_info!("db.rs", "users.email column removed", "no action needed");
         }
     }
 
@@ -1567,7 +1589,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         drop(pragma);
 
         if email_column_exists == 0 {
-            tracing::info!("Migracja: dodawanie contact_messages.email");
+            slavia_info!("db.rs", "adding contact_messages.email column", "wait for migration to finish");
             let _ = conn
                 .execute("ALTER TABLE contact_messages ADD COLUMN email TEXT", ())
                 .await;
@@ -1583,9 +1605,11 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
     try_migrate_sanitize_exercises_utf8(conn).await;
 
     if let Err(e) = migrate_refresh_corrupt_exercise_dictionary_seed(conn).await {
-        tracing::warn!(
-            error = %e,
-            "migrate_refresh_corrupt_exercise_dictionary_seed pominięto (best-effort)"
+        slavia_warn!(
+            "db.rs",
+            "exercise dictionary refresh skipped",
+            "best-effort migration; verify exercises manually if needed",
+            error = %e
         );
     }
 
@@ -1593,7 +1617,7 @@ pub async fn init_db(conn: &Connection) -> Result<(), Box<dyn std::error::Error 
         if sqlite_corrupt_message(&e) {
             return Err(format!("replika SQLite uszkodzona (exercises): {e}").into());
         }
-        tracing::warn!(error = %e, "exercises_table_probe po migracjach — kontynuuję start");
+        slavia_warn!("db.rs", "exercises table probe failed after migrations", "continuing startup best-effort", error = %e);
     }
 
     Ok(())
@@ -2018,7 +2042,7 @@ pub async fn reset_database(
         .await;
 
     seed_data(conn).await?;
-    tracing::info!("Baza danych zrekonstruowana i zasilona danymi");
+    slavia_info!("db.rs", "database rebuilt and seeded", "unset REBUILD_DB after local dev reset");
     Ok(())
 }
 
@@ -2151,7 +2175,7 @@ async fn seed_data(conn: &Connection) -> Result<(), Box<dyn std::error::Error + 
     ).await?;
 
     let n = insert_default_exercises(conn).await?;
-    tracing::info!(inserted = n, "REBUILD_DB: zasiano domyślny słownik ćwiczeń");
+    slavia_info!("db.rs", "default exercise dictionary seeded during REBUILD_DB", "no action needed", inserted = n);
 
     Ok(())
 }

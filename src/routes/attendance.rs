@@ -272,7 +272,7 @@ pub async fn upsert_attendance(
         .await
         .map_err(|e| map_db_err(e, "Obecność na ten dzień jest już zapisana."))?;
 
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         Some(&claims.sub),
@@ -372,7 +372,7 @@ pub async fn verify_attendance_record(
     rec.verified_by = Some(claims.sub.clone());
     rec.updated_at = now.clone();
 
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let actor_role = actor_role_label(&claims);
     let _ = write_audit_log(
         conn_arc.as_ref(),

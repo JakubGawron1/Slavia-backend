@@ -209,7 +209,7 @@ pub async fn regenerate_attendance_qr_token(
     let token = Uuid::new_v4().to_string();
     write_setting_token(&state, &token).await?;
 
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         Some(&auth.0.sub),
@@ -330,7 +330,7 @@ pub async fn qr_checkin(
         .await?
         .ok_or_else(|| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Brak wpisu po zapisie"))?;
 
-    let conn_arc = state.db.raw().await;
+    let conn_arc = state.db_conn().await?;
     let _ = write_audit_log(
         conn_arc.as_ref(),
         Some(&claims.sub),

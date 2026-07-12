@@ -62,7 +62,7 @@ pub async fn apply_pending(conn: &Connection) -> Result<(), String> {
         if migration_applied(conn, version).await? {
             continue;
         }
-        tracing::info!(version, "Applying SQL migration");
+        slavia_info!("db_migrations.rs", "applying SQL migration", "wait for migration to finish", version);
         apply_sql_statements(conn, sql).await?;
         conn.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
@@ -70,7 +70,7 @@ pub async fn apply_pending(conn: &Connection) -> Result<(), String> {
         )
         .await
         .map_err(|e| format!("schema_migrations insert ({version}): {e}"))?;
-        tracing::info!(version, "SQL migration applied");
+        slavia_info!("db_migrations.rs", "SQL migration applied", "no action needed", version);
     }
     Ok(())
 }

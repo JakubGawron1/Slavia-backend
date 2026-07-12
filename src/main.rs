@@ -29,24 +29,18 @@ async fn main() -> Result<(), AppError> {
 
     match &database {
         DatabaseBackend::Local(p) => {
-            tracing::info!(path = %p.display(), "Baza lokalna (SQLite)");
+            slavia_backend::slavia_info!("main.rs", "using local SQLite database", "set DATABASE_MODE=local for file storage", path = %p.display());
         }
         DatabaseBackend::Remote { url, .. } => {
-            tracing::info!(%url, "Baza Turso (HTTP)");
+            slavia_backend::slavia_info!("main.rs", "using remote Turso database", "check TURSO_DATABASE_URL and TURSO_AUTH_TOKEN", url = %url);
         }
     }
 
     if groq_key.trim().is_empty() {
-        tracing::info!("Trener AI (Groq): wyłączony — brak GROQ_API_KEY");
+        slavia_backend::slavia_info!("main.rs", "AI coach disabled", "set GROQ_API_KEY to enable Groq trainer");
     } else {
-        tracing::info!(
-            model = if groq_model.trim().is_empty() {
-                "llama-3.1-70b-versatile"
-            } else {
-                groq_model.trim()
-            },
-            "Trener AI (Groq): włączony"
-        );
+        let model = slavia_backend::routes::ai_coach::normalize_groq_text_model(&groq_model);
+        slavia_backend::slavia_info!("main.rs", "AI coach enabled", "change GROQ_MODEL env to switch model", model = %model);
     }
 
     let app = slavia_backend::create_app(
@@ -67,7 +61,7 @@ async fn main() -> Result<(), AppError> {
         .expect("PORT must be a number");
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    tracing::info!(%addr, "Serwer Slavia-backend startuje");
+    slavia_backend::slavia_info!("main.rs", "HTTP server listening", "check PORT env and firewall rules", addr = %addr);
 
     let listener = TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;

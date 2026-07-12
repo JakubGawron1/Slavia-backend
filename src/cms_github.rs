@@ -333,7 +333,13 @@ pub async fn delete_path(cfg: &CmsConfig, path: &str) -> Result<(), String> {
     let sha = match fetch_file_sha(&client, cfg, path, token).await? {
         Some(s) => s,
         None => {
-            tracing::warn!(path = %path, repo = %cfg.repo, "cms delete skip: brak sha na GitHub");
+            slavia_warn!(
+                "cms_github.rs",
+                "CMS file missing on GitHub",
+                "verify path exists in repo or skip delete",
+                path = %path,
+                repo = %cfg.repo
+            );
             return Ok(());
         }
     };
@@ -504,28 +510,37 @@ pub async fn destroy_if_cms(path_or_url: &str) {
     }
     let Some(path) = normalize_cms_path(raw) else {
         if raw.contains("media/") || raw.contains("slavia-cms") {
-            tracing::warn!(raw = %raw, "cms delete skip: nie rozpoznano ścieżki CMS");
+            slavia_warn!(
+                "cms_github.rs",
+                "CMS path not recognized for delete",
+                "pass canonical cms storage path",
+                raw = %raw
+            );
         }
         return;
     };
     let cfg = cms_config();
     if cfg.token.is_none() {
-        tracing::warn!(
-            path = %path,
-            "cms delete skip: brak GITHUB_TOKEN — ustaw PAT ze scope `repo`"
+        slavia_warn!(
+            "cms_github.rs",
+            "GITHUB_TOKEN not configured",
+            "set PAT with repo scope in Secrets.toml or env",
+            path = %path
         );
         return;
     }
     if let Err(e) = delete_path(&cfg, &path).await {
-        tracing::error!(
+        slavia_error!(
+            "cms_github.rs",
+            "CMS delete failed on GitHub",
+            "check token scopes, branch name and repo access",
             path = %path,
             repo = %cfg.repo,
             branch = %cfg.branch,
-            error = %e,
-            "cms delete failed"
+            error = %e
         );
     } else {
-        tracing::info!(path = %path, "cms delete OK");
+        slavia_info!("cms_github.rs", "CMS asset deleted on GitHub", "no action needed", path = %path);
     }
 }
 
