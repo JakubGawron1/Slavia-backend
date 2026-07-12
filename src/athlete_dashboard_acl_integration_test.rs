@@ -40,6 +40,7 @@ fn jwt_for_roles(secret: &[u8], sub: &str, roles: Vec<Role>) -> String {
 }
 
 async fn seeded_app() -> (axum::Router, String) {
+    let _env_guard = crate::integration_test_env::integration_env_guard();
     unsafe {
         std::env::set_var("REBUILD_DB", "true");
     }
@@ -112,11 +113,12 @@ async fn get_me_dashboard_with_athlete_token_returns_200() {
     let _guard = test_guard();
     let (app, jwt_secret) = seeded_app().await;
 
-    let trainer_token = jwt_for_roles(
-        jwt_secret.as_bytes(),
-        "integration-test-trainer",
-        vec![Role::Trainer],
-    );
+    let trainer_token = crate::integration_test_http::login_token(
+        &app,
+        "Slavia",
+        "SLAVIA2026",
+    )
+    .await;
     let req_athletes = Request::builder()
         .method("GET")
         .uri("/api/athletes/admin")
@@ -127,19 +129,12 @@ async fn get_me_dashboard_with_athlete_token_returns_200() {
     assert_eq!(resp_athletes.status(), StatusCode::OK);
     let athletes_json = response_json(resp_athletes).await;
     let athletes = athletes_json.as_array().expect("athletes array");
-    let chosen = athletes
-        .iter()
-        .find(|x| x.get("user_id").and_then(|v| v.as_str()).is_some())
-        .expect("seed athlete with user_id");
-    let athlete_user_id = chosen
-        .get("user_id")
-        .and_then(|v| v.as_str())
-        .expect("athlete user_id")
-        .to_string();
+    assert!(!athletes.is_empty(), "seed athletes");
 
+    let login = crate::integration_test_http::login(&app, "JakubGawron", "Jakubzofia2030?").await;
     let athlete_token = jwt_for_roles(
         jwt_secret.as_bytes(),
-        &athlete_user_id,
+        &login.user_id,
         vec![Role::Athlete],
     );
     let req_dashboard = Request::builder()

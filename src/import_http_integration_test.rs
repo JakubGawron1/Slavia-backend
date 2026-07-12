@@ -23,38 +23,6 @@ fn test_guard() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn jwt_super(secret: &[u8]) -> String {
-    let exp = (Utc::now() + Duration::hours(1)).timestamp() as usize;
-    let claims = Claims {
-        sub: "integration-test-sub".into(),
-        roles: vec![Role::SuperAdmin],
-        exp,
-        token_version: 0,
-    };
-    encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(secret),
-    )
-    .expect("jwt encode")
-}
-
-fn jwt_trainer(secret: &[u8]) -> String {
-    let exp = (Utc::now() + Duration::hours(1)).timestamp() as usize;
-    let claims = Claims {
-        sub: "integration-test-trainer".into(),
-        roles: vec![Role::Trainer],
-        exp,
-        token_version: 0,
-    };
-    encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(secret),
-    )
-    .expect("jwt encode")
-}
-
 fn jwt_athlete(secret: &[u8], user_id: &str) -> String {
     let exp = (Utc::now() + Duration::hours(1)).timestamp() as usize;
     let claims = Claims {
@@ -100,6 +68,7 @@ async fn response_json(response: axum::response::Response) -> serde_json::Value 
 #[tokio::test]
 async fn post_import_data_returns_three_sources_json() {
     let _guard = test_guard();
+    let _env_guard = crate::integration_test_env::integration_env_guard();
 
     // SAFETY: test jednowątkowy pod mutexem — ustawiamy REBUILD_DB tylko tu.
     unsafe {
@@ -125,7 +94,7 @@ async fn post_import_data_returns_three_sources_json() {
         std::env::remove_var("REBUILD_DB");
     }
 
-    let token = jwt_super(jwt_secret.as_bytes());
+    let token = crate::integration_test_http::login_token(&app, "Slavia", "SLAVIA2026").await;
     let payload = serde_json::json!({ "dev_mode": false }).to_string();
     let req = Request::builder()
         .method("POST")
@@ -142,6 +111,7 @@ async fn post_import_data_returns_three_sources_json() {
 #[tokio::test]
 async fn trainer_can_read_system_metrics_and_event_feed() {
     let _guard = test_guard();
+    let _env_guard = crate::integration_test_env::integration_env_guard();
     // SAFETY: test jednowątkowy pod mutexem — ustawiamy REBUILD_DB tylko tu.
     unsafe {
         std::env::set_var("REBUILD_DB", "true");
@@ -166,7 +136,7 @@ async fn trainer_can_read_system_metrics_and_event_feed() {
         std::env::remove_var("REBUILD_DB");
     }
 
-    let token = jwt_trainer(jwt_secret.as_bytes());
+    let token = crate::integration_test_http::login_token(&app, "Slavia", "SLAVIA2026").await;
     let req_metrics = Request::builder()
         .method("GET")
         .uri("/api/system/metrics")
@@ -191,6 +161,7 @@ async fn trainer_can_read_system_metrics_and_event_feed() {
 #[tokio::test]
 async fn trainer_plan_and_athlete_recovery_flow_works() {
     let _guard = test_guard();
+    let _env_guard = crate::integration_test_env::integration_env_guard();
     // SAFETY: test jednowątkowy pod mutexem — ustawiamy REBUILD_DB tylko tu.
     unsafe {
         std::env::set_var("REBUILD_DB", "true");
@@ -215,7 +186,7 @@ async fn trainer_plan_and_athlete_recovery_flow_works() {
         std::env::remove_var("REBUILD_DB");
     }
 
-    let trainer_token = jwt_trainer(jwt_secret.as_bytes());
+    let trainer_token = crate::integration_test_http::login_token(&app, "Slavia", "SLAVIA2026").await;
 
     let req_athletes = Request::builder()
         .method("GET")
@@ -236,13 +207,9 @@ async fn trainer_plan_and_athlete_recovery_flow_works() {
         .and_then(|v| v.as_str())
         .expect("athlete id")
         .to_string();
-    let athlete_user_id = chosen
-        .get("user_id")
-        .and_then(|v| v.as_str())
-        .expect("athlete user_id")
-        .to_string();
-    let trainer_existing_user_token = jwt_trainer_for_sub(jwt_secret.as_bytes(), &athlete_user_id);
-    let athlete_token = jwt_athlete(jwt_secret.as_bytes(), &athlete_user_id);
+    let jakub = crate::integration_test_http::login(&app, "JakubGawron", "Jakubzofia2030?").await;
+    let trainer_existing_user_token = jwt_trainer_for_sub(jwt_secret.as_bytes(), &jakub.user_id);
+    let athlete_token = jwt_athlete(jwt_secret.as_bytes(), &jakub.user_id);
 
     let req_create_plan = Request::builder()
         .method("POST")
