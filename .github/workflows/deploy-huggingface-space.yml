@@ -99,11 +99,41 @@ jobs:
             done
           }
 
+          normalize_space_repo() {
+            local raw="${1}"
+            raw="${raw#"${raw%%[![:space:]]*}"}"
+            raw="${raw%"${raw##*[![:space:]]}"}"
+            raw="${raw#spaces/}"
+            raw="${raw#/}"
+            raw="${raw%/}"
+            if [[ ! "${raw}" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
+              echo "::error::HF_SPACE_REPO must be owner/space-name (e.g. koliber/cks-slavia), got: '${raw}'"
+              exit 1
+            fi
+            printf '%s' "${raw}"
+          }
+
+          HF_SPACE_REPO="$(normalize_space_repo "${HF_SPACE_REPO}")"
+          echo "HF Space target: ${HF_SPACE_REPO}"
+
+          space_exists() {
+            # `hf repo info` is deprecated for Spaces — use `hf spaces info` (huggingface_hub>=1.2).
+            if "${HF_CLI[@]}" spaces info "${HF_SPACE_REPO}" >/dev/null 2>&1; then
+              return 0
+            fi
+            # Fallback for older CLI builds in cache.
+            if "${HF_CLI[@]}" repo info "${HF_SPACE_REPO}" --repo-type space >/dev/null 2>&1; then
+              return 0
+            fi
+            return 1
+          }
+
           echo "Checking Space exists: ${HF_SPACE_REPO}"
-          if ! "${HF_CLI[@]}" repo info "${HF_SPACE_REPO}" --repo-type space >/dev/null 2>&1; then
-            echo "::error::Space '${HF_SPACE_REPO}' not found on Hugging Face."
-            echo "::error::Create it once in the HF UI: https://huggingface.co/new-space → SDK: Docker (same owner/name as HF_SPACE_REPO)."
-            echo "::error::Docker Spaces cannot be auto-created from CI on free accounts (402 Payment Required without HF PRO). After creation, re-run this workflow."
+          if ! space_exists; then
+            echo "::error::Space '${HF_SPACE_REPO}' not found (or HF_TOKEN cannot read it)."
+            echo "::error::Expected URL: https://huggingface.co/spaces/${HF_SPACE_REPO}"
+            echo "::error::Fix HF_SPACE_REPO secret to owner/name (no spaces/ prefix). Create once at https://huggingface.co/new-space if missing."
+            echo "::error::Token needs read access to this Space (fine-grained write or classic token with repo access)."
             exit 1
           fi
           echo "Space found — uploading files (no repo create from CI)."

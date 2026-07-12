@@ -113,7 +113,8 @@ git add . && git commit -m "Deploy" && git push
 |---------|-------------|
 | Workflow fail: brak `HF_TOKEN` / `HF_SPACE_REPO` | Uzupełnij oba sekrety w GitHub (Actions → Secrets) |
 | **402** przy deploy | Space nie istnieje — utwórz go ręcznie w [new-space](https://huggingface.co/new-space) (Docker). Auto-create z CI wymaga HF PRO. |
-| **Space not found** w logu CI | `HF_SPACE_REPO` musi być dokładnie `owner/nazwa` (np. `koliber/cks-slavia`), zgodnie z URL Space |
+| **Space not found** w logu CI | `HF_SPACE_REPO` = `owner/nazwa` (np. `koliber/cks-slavia`), **bez** prefiksu `spaces/`. Space produkcyjny: https://huggingface.co/spaces/koliber/cks-slavia |
+| **Space not found** mimo że istnieje | Token bez odczytu Space — wygeneruj nowy [HF token](https://huggingface.co/settings/tokens) z write do tego Space |
 | **403** przy sync | Token bez write lub brak dostępu do Space || **502** na Space | Logi w HF → często brak `JWT_SECRET` lub Turso |
 | CORS w przeglądarce | Dodaj origin do `CORS_ALLOWED_ORIGINS` w panelu Space |
 | Frontend na starym providerze | Ustaw `NUXT_PUBLIC_API_BASE_URL_HUGGINGFACE` + przełącz provider w developer tools |
