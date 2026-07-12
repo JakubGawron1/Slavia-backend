@@ -1,4 +1,6 @@
 # Synchronizuje repozytorium GitHub → Hugging Face Docker Space po pushu na main.
+# Deploy przez git push (nie `hf upload` — od 2026 HF zwraca 402 na repos/create dla Docker Space bez PRO).
+#
 # Wymagane w GitHub (Settings → Secrets and variables → Actions):
 #   Secret HF_TOKEN — token HF z uprawnieniem write
 #   Secret lub Variable HF_SPACE_REPO — np. koliber/cks-slavia (owner/nazwa-space)
@@ -48,56 +50,12 @@ jobs:
       - name: Prepare Space README (YAML frontmatter dla Docker SDK)
         run: cp deploy/huggingface/README.md README.md
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: 'deploy/huggingface/**'
-
-      - name: Sync to Hugging Face Space
+      - name: Sync to Hugging Face Space (git push)
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_SPACE_REPO: ${{ secrets.HF_SPACE_REPO || vars.HF_SPACE_REPO }}
         run: |
           set -euo pipefail
-
-          # huggingface_hub>=1.2 — `hf repos` (stare `hf repo` jest deprecated).
-          HF_CLI=(uvx --with 'huggingface_hub>=1.2.0' hf)
-
-          is_retryable_hf_error() {
-            local code=$1
-            # 402/403/404 nie są przejściowe — retry tylko 429 i 5xx.
-            case "${code}" in
-              402|403|404|422) return 1 ;;
-              *) return 0 ;;
-            esac
-          }
-
-          retry_hf() {
-            local max_attempts=6
-            local attempt=1
-            local wait_s=45
-            while true; do
-              if "${@}"; then
-                return 0
-              fi
-              local exit_code=$?
-              if ! is_retryable_hf_error "${exit_code}"; then
-                return "${exit_code}"
-              fi
-              if [[ ${attempt} -ge ${max_attempts} ]]; then
-                echo "::error::HF command failed after ${max_attempts} attempts (exit ${exit_code}): $*"
-                return "${exit_code}"
-              fi
-              echo "HF rate limit or transient error — retry ${attempt}/${max_attempts} in ${wait_s}s..."
-              sleep "${wait_s}"
-              attempt=$((attempt + 1))
-              wait_s=$((wait_s + 30))
-              if [[ ${wait_s} -gt 300 ]]; then
-                wait_s=300
-              fi
-            done
-          }
 
           normalize_space_repo() {
             local raw="${1}"
@@ -114,43 +72,38 @@ jobs:
           }
 
           HF_SPACE_REPO="$(normalize_space_repo "${HF_SPACE_REPO}")"
+          HF_OWNER="${HF_SPACE_REPO%%/*}"
           echo "HF Space target: ${HF_SPACE_REPO}"
 
-          space_exists() {
-            # `hf repo info` is deprecated for Spaces — use `hf spaces info` (huggingface_hub>=1.2).
-            if "${HF_CLI[@]}" spaces info "${HF_SPACE_REPO}" >/dev/null 2>&1; then
-              return 0
-            fi
-            # Fallback for older CLI builds in cache.
-            if "${HF_CLI[@]}" repo info "${HF_SPACE_REPO}" --repo-type space >/dev/null 2>&1; then
-              return 0
-            fi
-            return 1
-          }
+          HF_GIT_URL="https://${HF_OWNER}:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE_REPO}"
 
-          echo "Checking Space exists: ${HF_SPACE_REPO}"
-          if ! space_exists; then
-            echo "::error::Space '${HF_SPACE_REPO}' not found (or HF_TOKEN cannot read it)."
-            echo "::error::Expected URL: https://huggingface.co/spaces/${HF_SPACE_REPO}"
-            echo "::error::Fix HF_SPACE_REPO secret to owner/name (no spaces/ prefix). Create once at https://huggingface.co/new-space if missing."
-            echo "::error::Token needs read access to this Space (fine-grained write or classic token with repo access)."
-            exit 1
-          fi
-          echo "Space found — uploading files (no repo create from CI)."
-
-          file_count=$(find . -type f ! -path './.git/*' ! -path './.github/*' | wc -l | tr -d ' ')
-          if [[ "${file_count}" -eq 0 ]]; then
-            echo "::error::No files to upload"
+          echo "Checking Space git remote..."
+          if ! git ls-remote "${HF_GIT_URL}" HEAD >/dev/null 2>&1; then
+            echo "::error::Cannot access Space git repo for '${HF_SPACE_REPO}'."
+            echo "::error::Create it once: https://huggingface.co/new-space → SDK Docker → owner/name matching HF_SPACE_REPO."
+            echo "::error::Ensure HF_TOKEN has write access to this Space."
             exit 1
           fi
 
-          echo "Uploading ${file_count} files to ${HF_SPACE_REPO}..."
-          retry_hf "${HF_CLI[@]}" upload "${HF_SPACE_REPO}" . \
-            --repo-type space \
-            --exclude=".git*" \
-            --exclude=".github*" \
-            --delete="*" \
-            --commit-message="Sync from GitHub (${GITHUB_SHA::7})"
+          WORK="$(mktemp -d)"
+          git clone "${HF_GIT_URL}" "${WORK}/space"
+
+          rsync -a --delete \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            "${GITHUB_WORKSPACE}/" "${WORK}/space/"
+
+          cd "${WORK}/space"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No file changes — skipping commit."
+          else
+            git commit -m "Sync from GitHub (${GITHUB_SHA::7})"
+            git push origin HEAD:main
+          fi
 
           echo "Space: https://huggingface.co/spaces/${HF_SPACE_REPO}"
 

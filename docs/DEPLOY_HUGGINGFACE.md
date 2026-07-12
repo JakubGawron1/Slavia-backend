@@ -36,9 +36,8 @@ Każdy push na `main` (gdy zmienią się pliki backendu) automatycznie synchroni
 Workflow `.github/workflows/deploy-huggingface-space.yml`:
 
 1. Kopiuje `deploy/huggingface/README.md` → `README.md` (wymagany YAML z `sdk: docker`).
-2. Sprawdza, czy Space istnieje (`hf repo info`); jeśli nie — kończy z instrukcją ręcznego utworzenia (bez `hf repos create` w CI).
-3. Uruchamia `hf upload` (przez `uvx` + `huggingface_hub>=1.2`) z retry przy limitach API HF — mirror plików na Space.
-4. HF buduje obraz z `Dockerfile` i uruchamia kontener.
+2. Klonuje git Space (`git clone` + `rsync` + `git push`) — **bez** `hf upload` / `repos/create` (HF zwraca 402 dla Docker Space bez PRO przy upload API).
+3. HF buduje obraz z `Dockerfile` i uruchamia kontener.
 Ręczny deploy: **Actions** → **Deploy Hugging Face Space** → **Run workflow**.
 
 ### 3. Smoke test
@@ -112,9 +111,9 @@ git add . && git commit -m "Deploy" && git push
 | Problem | Rozwiązanie |
 |---------|-------------|
 | Workflow fail: brak `HF_TOKEN` / `HF_SPACE_REPO` | Uzupełnij oba sekrety w GitHub (Actions → Secrets) |
-| **402** przy deploy | Space nie istnieje — utwórz go ręcznie w [new-space](https://huggingface.co/new-space) (Docker). Auto-create z CI wymaga HF PRO. |
-| **Space not found** w logu CI | `HF_SPACE_REPO` = `owner/nazwa` (np. `koliber/cks-slavia`), **bez** prefiksu `spaces/`. Space produkcyjny: https://huggingface.co/spaces/koliber/cks-slavia |
-| **Space not found** mimo że istnieje | Token bez odczytu Space — wygeneruj nowy [HF token](https://huggingface.co/settings/tokens) z write do tego Space |
+| **402** przy deploy | Nowe API `hf upload` woła `repos/create` — workflow używa **git push**. Upewnij się, że masz najnowszy workflow z main. |
+| **Space not found** w logu CI | `HF_SPACE_REPO` = `owner/nazwa` (np. `koliber/cks-slavia`), **bez** prefiksu `spaces/`. Space: https://huggingface.co/spaces/koliber/cks-slavia |
+| **Cannot access Space git repo** | Token bez write — nowy [HF token](https://huggingface.co/settings/tokens) z dostępem do Space |
 | **403** przy sync | Token bez write lub brak dostępu do Space || **502** na Space | Logi w HF → często brak `JWT_SECRET` lub Turso |
 | CORS w przeglądarce | Dodaj origin do `CORS_ALLOWED_ORIGINS` w panelu Space |
 | Frontend na starym providerze | Ustaw `NUXT_PUBLIC_API_BASE_URL_HUGGINGFACE` + przełącz provider w developer tools |
